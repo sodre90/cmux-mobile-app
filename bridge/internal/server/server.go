@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -12,14 +13,24 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/config"
 )
 
+// Pusher delivers an agent-attention notification to a single device token.
+// push.Sender satisfies this interface.
+type Pusher interface {
+	Send(ctx context.Context, fcmToken, title, body string, data map[string]string) error
+}
+
 // Server holds the dependencies shared by all handlers.
 type Server struct {
 	cfg          config.Config
 	cmux         *cmux.Client
 	store        *auth.Store
 	hub          *hub
+	push         Pusher
 	terminalPoll time.Duration // how often WS /terminal re-replays for output
 }
+
+// SetPusher wires an optional push backend used when agent attention is needed.
+func (s *Server) SetPusher(p Pusher) { s.push = p }
 
 // New constructs a Server.
 func New(cfg config.Config, c *cmux.Client, s *auth.Store) *Server {
@@ -40,5 +51,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /events", auth.Require(s.store, http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /terminal/{id}", auth.Require(s.store, http.HandlerFunc(s.handleTerminal)))
 	mux.Handle("POST /feed/{id}/reply", auth.Require(s.store, http.HandlerFunc(s.handleFeedReply)))
+	mux.Handle("POST /devices/register", auth.Require(s.store, http.HandlerFunc(s.handleDeviceRegister)))
 	return mux
 }

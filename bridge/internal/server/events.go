@@ -94,6 +94,9 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		}
 		if f, ok := classify(m); ok {
 			s.hub.broadcast(f)
+			if f.NeedsAttention {
+				go s.notifyPush(f)
+			}
 		}
 	}
 }
