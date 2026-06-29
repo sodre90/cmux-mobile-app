@@ -28,6 +28,14 @@ data class Session(
     @SerialName("needs_attention") val needsAttention: Boolean = false,
 )
 
+/** Envelope returned by `GET /sessions`. */
+@Serializable
+data class SessionsResponse(val sessions: List<Session> = emptyList())
+
+/** Body of `POST /devices/register`. */
+@Serializable
+data class RegisterDeviceRequest(@SerialName("fcm_token") val fcmToken: String)
+
 /** A simplified event the bridge fans out over the events WebSocket. */
 @Serializable
 data class EventFrame(

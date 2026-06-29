@@ -1,0 +1,66 @@
+package com.sodre90.cmuxremote.data
+
+import com.sodre90.cmuxremote.model.BridgeJson
+import com.sodre90.cmuxremote.model.FeedReply
+import com.sodre90.cmuxremote.model.RegisterDeviceRequest
+import com.sodre90.cmuxremote.model.Session
+import com.sodre90.cmuxremote.model.SessionsResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+
+/** A non-2xx response from the bridge (e.g. Mac/cmux unavailable). */
+class BridgeException(val code: Int, val bodyText: String) :
+    IOException("bridge HTTP $code: $bodyText")
+
+/**
+ * REST calls against the bridge. The supplied [http] is expected to already
+ * carry mTLS + the bearer token (see [Mtls.client]); this class only knows the
+ * endpoint shapes. All calls run on [Dispatchers.IO].
+ */
+class BridgeClient(
+    private val http: OkHttpClient,
+    baseUrl: String,
+) {
+    private val root = baseUrl.trimEnd('/')
+
+    suspend fun sessions(): List<Session> = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$root/sessions").get().build()
+        http.newCall(request).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw BridgeException(resp.code, body)
+            BridgeJson.decodeFromString(SessionsResponse.serializer(), body).sessions
+        }
+    }
+
+    suspend fun registerDevice(fcmToken: String) {
+        val payload = BridgeJson.encodeToString(
+            RegisterDeviceRequest.serializer(),
+            RegisterDeviceRequest(fcmToken),
+        )
+        post("$root/devices/register", payload)
+    }
+
+    suspend fun replyFeed(feedId: String, reply: FeedReply) {
+        val payload = BridgeJson.encodeToString(FeedReply.serializer(), reply)
+        post("$root/feed/$feedId/reply", payload)
+    }
+
+    private suspend fun post(url: String, json: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url)
+            .post(json.toRequestBody(JSON_MEDIA))
+            .build()
+        http.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) throw BridgeException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    private companion object {
+        val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
+    }
+}
