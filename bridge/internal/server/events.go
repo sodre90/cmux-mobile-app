@@ -101,10 +101,10 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 	}
 }
 
-// runEvents keeps a `cmux events --reconnect` stream flowing into the hub. It is
+// RunEvents keeps a `cmux events --reconnect` stream flowing into the hub. It is
 // started once by `serve`. When push is configured, attention frames also fan
 // out to FCM.
-func (s *Server) runEvents(ctx context.Context) {
+func (s *Server) RunEvents(ctx context.Context) {
 	for ctx.Err() == nil {
 		cmd, pipe, err := s.cmux.Events(ctx,
 			"--category", "feed", "--category", "notification", "--reconnect")

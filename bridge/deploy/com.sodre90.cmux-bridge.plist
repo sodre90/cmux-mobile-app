@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  cmux-bridge LaunchAgent.
+
+  Install (per-user; the bridge must run in your GUI login session to reach the
+  per-user cmux socket):
+
+    1. Edit the two REPLACE_ME paths below (binary path + your home dir).
+    2. cp com.sodre90.cmux-bridge.plist ~/Library/LaunchAgents/
+    3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sodre90.cmux-bridge.plist
+    4. launchctl kickstart -k gui/$(id -u)/com.sodre90.cmux-bridge
+
+  Logs: ~/Library/Logs/cmux-bridge.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sodre90.cmux-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPLACE_ME/cmux-bridge</string>
+        <string>serve</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Ensure the cmux CLI is on PATH for the daemon. -->
+        <key>PATH</key>
+        <string>/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.log</string>
+</dict>
+</plist>

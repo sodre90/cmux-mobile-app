@@ -28,22 +28,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <serve|pair|devices|version>")
-}
-
-// The following are stubs replaced in later tasks.
-
-func runServe(args []string) int {
-	fmt.Fprintln(os.Stderr, "serve: not implemented")
-	return 1
-}
-
-func runPair(args []string) int {
-	fmt.Fprintln(os.Stderr, "pair: not implemented")
-	return 1
-}
-
-func runDevices(args []string) int {
-	fmt.Fprintln(os.Stderr, "devices: not implemented")
-	return 1
+	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <serve|pair|devices|version> [flags]")
 }
