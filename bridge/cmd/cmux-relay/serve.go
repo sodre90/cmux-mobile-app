@@ -35,6 +35,7 @@ func runServe(args []string) int {
 	}
 
 	rl := relay.New(store, cfg.AgentCN, cfg.RelayToken)
+	rl.SetEdgeToken(cfg.EdgeToken)
 
 	var pusher relay.Pusher
 	if cfg.FCMCredentials != "" && cfg.FCMProjectID != "" {

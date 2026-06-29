@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"net/http/httputil"
@@ -20,6 +21,7 @@ type Relay struct {
 	reg        *Registry
 	agentCN    string
 	relayToken string
+	edgeToken  string
 	proxy      *httputil.ReverseProxy
 	onSession  func(context.Context, *yamux.Session)
 }
@@ -39,6 +41,11 @@ func New(store *auth.Store, agentCN, relayToken string) *Relay {
 // SetSessionHook registers a callback invoked (in its own goroutine) for each
 // accepted agent session; its context is cancelled when the session ends.
 func (r *Relay) SetSessionHook(f func(context.Context, *yamux.Session)) { r.onSession = f }
+
+// SetEdgeToken sets a shared secret the trusted edge (nginx) must present in
+// X-Edge-Token on every request except /healthz. Empty disables the check (used
+// when nginx runs on the same host and the relay is loopback-only).
+func (r *Relay) SetEdgeToken(t string) { r.edgeToken = t }
 
 // Current exposes the active agent session (nil if offline) — used in tests.
 func (r *Relay) Current() *yamux.Session { return r.reg.Current() }
@@ -68,7 +75,26 @@ func (r *Relay) Handler() http.Handler {
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.proxy)))
-	return mux
+	if r.edgeToken == "" {
+		return mux
+	}
+	return r.requireEdge(mux)
+}
+
+// requireEdge gates every route except /healthz on a shared secret the trusted
+// edge (nginx) injects. With the relay's port reachable on the LAN, this ensures
+// only the edge — not a direct LAN client spoofing X-Client-Cert-CN — can drive
+// it. Constant-time compare so the secret can't be probed by timing.
+func (r *Relay) requireEdge(next http.Handler) http.Handler {
+	want := []byte(r.edgeToken)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/healthz" &&
+			subtle.ConstantTimeCompare([]byte(req.Header.Get("X-Edge-Token")), want) != 1 {
+			writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
 }
 
 // notAgent rejects requests bearing the agent CN on non-tunnel routes.

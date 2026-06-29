@@ -121,6 +121,49 @@ func TestRelayHealthz(t *testing.T) {
 	}
 }
 
+func TestRelayEdgeTokenGate(t *testing.T) {
+	rl := New(nil, "mac-agent", "tok")
+	rl.SetEdgeToken("edge-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	// /healthz stays open even with the gate on (local container healthcheck).
+	h, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Body.Close()
+	if h.StatusCode != http.StatusOK {
+		t.Fatalf("healthz should stay open, got %d", h.StatusCode)
+	}
+
+	// No edge token: stopped at the gate (401) before any CN logic, even though
+	// the wrong CN would otherwise yield 403 on the tunnel route.
+	req1, _ := http.NewRequest("GET", srv.URL+"/agent/tunnel", nil)
+	req1.Header.Set("X-Client-Cert-Cn", "CN=phone")
+	r1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.Body.Close()
+	if r1.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing edge token → want 401, got %d", r1.StatusCode)
+	}
+
+	// Correct edge token: passes the gate, then hits the CN check → 403.
+	req2, _ := http.NewRequest("GET", srv.URL+"/agent/tunnel", nil)
+	req2.Header.Set("X-Edge-Token", "edge-secret")
+	req2.Header.Set("X-Client-Cert-Cn", "CN=phone")
+	r2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusForbidden {
+		t.Fatalf("with edge token, wrong CN → want 403, got %d", r2.StatusCode)
+	}
+}
+
 func TestRelayTunnelRejectsWrongCN(t *testing.T) {
 	rl := New(nil, "mac-agent", "tok")
 	srv := httptest.NewServer(rl.Handler())

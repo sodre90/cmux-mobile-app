@@ -31,6 +31,9 @@ type Config struct {
 	AgentCN string `toml:"agent_cn"`
 	// RelayToken is the shared secret the relay injects and the agent checks.
 	RelayToken string `toml:"relay_token"`
+	// EdgeToken is the shared secret the trusted edge (nginx) must present on
+	// every relay request. Empty disables the check (loopback-only relay).
+	EdgeToken string `toml:"edge_token"`
 }
 
 func defaults() Config {
