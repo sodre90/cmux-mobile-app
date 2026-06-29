@@ -123,8 +123,10 @@ openssl x509 -req -in agent.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out agent.crt -days 825 -sha256
 ```
 
-Place `agent.crt` / `agent.key` where `agent.toml` points, and put the CA that
-signed the **nginx server** cert at `ca_cert`.
+Place `agent.crt` / `agent.key` where `agent.toml` points. For `ca_cert`: leave
+it **empty** when nginx uses a publicly-trusted server cert (Let's Encrypt) — the
+agent then verifies the relay against the system roots; set it to a CA file only
+when nginx presents a private server cert.
 
 ## Pair a device
 

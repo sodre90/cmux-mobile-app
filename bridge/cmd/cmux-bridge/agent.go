@@ -29,19 +29,25 @@ func loadTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, err
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, errors.New("ca_cert: no certificates found")
-	}
-	return &tls.Config{
+	cfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
 		MinVersion:   tls.VersionTLS12,
-	}, nil
+	}
+	// An empty ca_cert means the relay's nginx presents a publicly-trusted
+	// server cert (e.g. Let's Encrypt): leave RootCAs nil so Go uses the system
+	// roots. A non-empty ca_cert pins a private CA instead.
+	if caPath != "" {
+		caPEM, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, err
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, errors.New("ca_cert: no certificates found")
+		}
+		cfg.RootCAs = pool
+	}
+	return cfg, nil
 }
 
 func nextBackoff(d time.Duration) time.Duration {

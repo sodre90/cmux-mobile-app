@@ -68,6 +68,22 @@ func TestLoadTLS(t *testing.T) {
 	}
 }
 
+func TestLoadTLSEmptyCAUsesSystemRoots(t *testing.T) {
+	// A Let's Encrypt server cert is publicly trusted, so an empty ca_cert must
+	// not error and must leave RootCAs nil (Go falls back to the system roots).
+	cert, key := writeSelfSigned(t)
+	cfg, err := loadTLS(cert, key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RootCAs != nil {
+		t.Fatal("empty ca_cert should leave RootCAs nil (system roots)")
+	}
+	if len(cfg.Certificates) != 1 {
+		t.Fatalf("want 1 client cert, got %d", len(cfg.Certificates))
+	}
+}
+
 func TestLoadTLSMissingFileErrors(t *testing.T) {
 	if _, err := loadTLS("/no/cert", "/no/key", "/no/ca"); err == nil {
 		t.Fatal("want error for missing cert files")
