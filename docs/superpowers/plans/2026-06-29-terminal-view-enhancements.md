@@ -54,11 +54,13 @@ cd /Users/perdos/prj/cmux-app/android
 **Files:**
 - Create: `app/src/main/java/com/sodre90/cmuxremote/ui/terminal/TerminalColors.kt`
 - Create: `app/src/main/java/com/sodre90/cmuxremote/ui/terminal/TerminalStyle.kt`
+- Modify: `app/src/main/java/com/sodre90/cmuxremote/ui/terminal/RenderGridView.kt` (delete its now-duplicate `parseColor`)
 - Test: `app/src/test/java/com/sodre90/cmuxremote/ui/terminal/TerminalStyleTest.kt`
 
 **Interfaces:**
 - Produces: `data class TerminalColors(background: Color, foreground: Color, cursor: Color, selection: Color, faintAlpha: Float = 0.6f)`; `val DefaultTerminalColors`; `fun parseColor(value: String?): Color?`; `data class ResolvedSpan(fg: Color, bg: Color, bold: Boolean, italic: Boolean, underline: Boolean, strikethrough: Boolean)`; `fun resolveSpan(style: Style?, colors: TerminalColors): ResolvedSpan`.
 - Consumes: `com.sodre90.cmuxremote.model.Style` (fields `foregroundString`, `backgroundString`, `bold`, `faint`, `italic`, `underline`, `inverse`, `strikethrough`).
+- **Move, not duplicate:** `parseColor` currently lives as an `internal fun` in `RenderGridView.kt`. This task moves it to `TerminalStyle.kt` as a public `fun`. Two top-level `parseColor` in the same package would be a conflicting-declarations error, so Step 4b deletes the old one. The old `buildLine` in `RenderGridView.kt` keeps compiling — its `parseColor(...)` calls resolve to the moved public function (same package, identical behavior).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -125,7 +127,7 @@ class TerminalStyleTest {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "*TerminalStyleTest"`
-Expected: FAIL — `TerminalColors` / `resolveSpan` / `parseColor` unresolved (compilation error).
+Expected: FAIL — `TerminalColors` / `resolveSpan` unresolved (compilation error). (`parseColor` still exists as the old `internal` fun at this point; it's moved in Step 4/4b.)
 
 - [ ] **Step 3: Write `TerminalColors.kt`**
 
@@ -201,16 +203,35 @@ fun resolveSpan(style: Style?, colors: TerminalColors): ResolvedSpan {
 }
 ```
 
+- [ ] **Step 4b: Delete the old `parseColor` from `RenderGridView.kt`**
+
+`RenderGridView.kt` currently ends with an `internal fun parseColor` (the last function in the file). Delete exactly that block so only the moved `TerminalStyle.parseColor` remains:
+
+```kotlin
+/** Parses `#rrggbb` / `#aarrggbb` to a [Color]; returns null for other forms. */
+internal fun parseColor(value: String?): Color? {
+    val hex = value?.removePrefix("#") ?: return null
+    return when (hex.length) {
+        6 -> runCatching { Color("FF$hex".toLong(16)) }.getOrNull()
+        8 -> runCatching { Color(hex.toLong(16)) }.getOrNull()
+        else -> null
+    }
+}
+```
+
+Leave the rest of `RenderGridView.kt` untouched — its `buildLine` still calls `parseColor(...)`, now resolving to the moved public function. Do not remove the `import androidx.compose.ui.graphics.Color` (still used by `buildLine`).
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "*TerminalStyleTest"`
-Expected: PASS (6 tests).
+Expected: PASS (6 tests). The whole `:app` module compiles (no duplicate `parseColor`).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add app/src/main/java/com/sodre90/cmuxremote/ui/terminal/TerminalColors.kt \
         app/src/main/java/com/sodre90/cmuxremote/ui/terminal/TerminalStyle.kt \
+        app/src/main/java/com/sodre90/cmuxremote/ui/terminal/RenderGridView.kt \
         app/src/test/java/com/sodre90/cmuxremote/ui/terminal/TerminalStyleTest.kt
 git commit -m "Add terminal color palette and style resolver"
 ```
@@ -554,7 +575,8 @@ git commit -m "Bundle JetBrainsMono Nerd Font for the terminal"
 
 **Interfaces:**
 - Consumes: `DecodedGrid` (+`scrollbackLines`, `cursor`), `Style`, `resolveSpan`, `ResolvedSpan`, `TerminalColors`, `DefaultTerminalColors`, `R.font.*`.
-- Produces: `val TerminalFont: FontFamily`; `@Composable fun RenderGridView(grid: DecodedGrid, styles: List<Style>, fontSizeSp: Float, colors: TerminalColors = DefaultTerminalColors, modifier: Modifier = Modifier)`; `internal fun buildLine(line: DecodedLine, styles: Map<Int, Style>, colors: TerminalColors, cursorColumn: Int?): AnnotatedString` (consumed by the test only).
+- Produces: `val TerminalFont: FontFamily`; `@Composable fun RenderGridView(grid: DecodedGrid, styles: List<Style>, fontSizeSp: Float = 13f, colors: TerminalColors = DefaultTerminalColors, modifier: Modifier = Modifier)`; `internal fun buildLine(line: DecodedLine, styles: Map<Int, Style>, colors: TerminalColors, cursorColumn: Int?): AnnotatedString` (consumed by the test only).
+- **Why `fontSizeSp` has a default:** the only caller, `TerminalScreen`, is not updated until Task 8. Without a default, the still-3-arg call site (`RenderGridView(grid=…, styles=…, modifier=…)`) would fail to compile, and `testDebugUnitTest` compiles the whole `:app` main source set — so this task's own test step would not compile. The default keeps the module green now; Task 8 always passes `fontSizeSp` explicitly.
 
 - [ ] **Step 1: Write the failing test** (`RenderGridViewTest.kt`)
 
@@ -654,7 +676,7 @@ val TerminalFont = FontFamily(
 fun RenderGridView(
     grid: DecodedGrid,
     styles: List<Style>,
-    fontSizeSp: Float,
+    fontSizeSp: Float = 13f, // caller (TerminalScreen, Task 8) always passes the live zoom size; default only keeps the pre-Task-8 call site compiling
     colors: TerminalColors = DefaultTerminalColors,
     modifier: Modifier = Modifier,
 ) {
@@ -753,7 +775,7 @@ private fun decorationOf(r: ResolvedSpan): TextDecoration? = when {
 - [ ] **Step 4: Run the unit test to verify pass**
 
 Run: `./gradlew :app:testDebugUnitTest --tests "*RenderGridViewTest"`
-Expected: PASS (2 tests). (Note: this step also requires Task 8's caller to compile; if `TerminalScreen` still calls the old 3-arg `RenderGridView`, the *app* won't compile but the **test** module compiles the changed files. If the test task fails to compile due to `TerminalScreen`, do Task 8 Step 3 first, then return here. Tasks 6 and 8 form one compile unit — commit them together if needed.)
+Expected: PASS (2 tests). The whole `:app` module compiles: `TerminalScreen` still uses the 3-arg call, which is valid because `fontSizeSp` now defaults. Task 8 replaces that call with an explicit `fontSizeSp`.
 
 - [ ] **Step 5: Commit**
 
@@ -1086,7 +1108,7 @@ git commit -m "Wire terminal screen: measured fit-to-width, pinch-zoom, keys, pa
 
 ## Notes for the implementer
 
-- **Tasks 6 and 8 are one compile unit** (the `RenderGridView` signature change and its `TerminalScreen` caller). If the app fails to compile after Task 6 alone, proceed to Task 8 Step 1 before building, then run both commits.
+- **`RenderGridView`'s `fontSizeSp` defaults (Task 6)** specifically so the module compiles before Task 8 updates the `TerminalScreen` call site. Don't remove that default until Task 8 passes the argument explicitly. Task 8's `assembleDebug` is still the integration gate that proves the new screen wiring compiles.
 - **Unit tests run on plain JVM** (no Robolectric). `androidx.compose.ui.graphics.Color`, `buildAnnotatedString`, `SpanStyle`, `FontWeight/Style`, `TextDecoration` are all JVM-safe. Only `android.util.Log` (Task 7) may need `unitTests.isReturnDefaultValues = true`.
 - **Scrollback indexing is the one unconfirmed assumption.** It's isolated to `RenderGridDecoder.layout()`; Task 8 Step 4 is where you confirm it against real history.
 - **Deliberate spec divergence:** the spec's `shouldStickToBottom(wasAtBottom)` "trivial unit test" is intentionally omitted. Stick-to-bottom is the `prevMax` logic inside `RenderGridView` (Task 6) and is verified on the emulator (Task 8 Step 4) — a pure identity helper would test nothing. Follow logic is the most likely UI to need on-device tuning.
