@@ -14,10 +14,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
+import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.settings.SettingsScreen
 import com.sodre90.cmuxremote.ui.settings.SettingsViewModel
 
@@ -40,23 +44,53 @@ fun CmuxNavHost(container: AppContainer) {
                 },
             )
         }
+
         composable(Routes.SESSIONS) {
-            SessionsPlaceholder(onSettings = { navController.navigate(Routes.SETTINGS) })
+            val vm: SessionsViewModel = viewModel(
+                factory = viewModelFactory { initializer { SessionsViewModel(container) } },
+            )
+            SessionsScreen(
+                vm = vm,
+                // The session id is passed through to /terminal/{id} as the cmux
+                // surface id (see bridge handleTerminal).
+                onOpenTerminal = { navController.navigate(Routes.terminal(it.id)) },
+                onOpenInbox = { navController.navigate(Routes.INBOX) },
+                onSettings = { navController.navigate(Routes.SETTINGS) },
+            )
+        }
+
+        composable(
+            route = "${Routes.TERMINAL}/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { entry ->
+            val id = entry.arguments?.getString("id").orEmpty()
+            TerminalPlaceholder(id = id, onBack = { navController.popBackStack() })
+        }
+
+        composable(Routes.INBOX) {
+            InboxPlaceholder(onBack = { navController.popBackStack() })
         }
     }
 }
 
-// Replaced by the real sessions screen in Task 7.
+// Replaced by the real terminal screen in Task 8.
 @Composable
-private fun SessionsPlaceholder(onSettings: () -> Unit) {
+private fun TerminalPlaceholder(id: String, onBack: () -> Unit) = Placeholder("Terminal: $id", onBack)
+
+// Replaced by the real inbox screen in Task 9.
+@Composable
+private fun InboxPlaceholder(onBack: () -> Unit) = Placeholder("Inbox", onBack)
+
+@Composable
+private fun Placeholder(label: String, onBack: () -> Unit) {
     Scaffold { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Connected. Sessions coming next.")
-            Button(onClick = onSettings) { Text("Settings") }
+            Text(label)
+            Button(onClick = onBack) { Text("Back") }
         }
     }
 }
