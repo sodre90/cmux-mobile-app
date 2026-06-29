@@ -27,6 +27,10 @@ type Config struct {
 	// FCMCredentials is the path to a Google service-account JSON key. Empty
 	// disables push.
 	FCMCredentials string `toml:"fcm_credentials"`
+	// AgentCN is the client-cert CN the relay trusts as the Mac agent.
+	AgentCN string `toml:"agent_cn"`
+	// RelayToken is the shared secret the relay injects and the agent checks.
+	RelayToken string `toml:"relay_token"`
 }
 
 func defaults() Config {
