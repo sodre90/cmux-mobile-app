@@ -24,6 +24,8 @@ import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.settings.SettingsScreen
 import com.sodre90.cmuxremote.ui.settings.SettingsViewModel
+import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
+import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
 @Composable
 fun CmuxNavHost(container: AppContainer) {
@@ -64,7 +66,10 @@ fun CmuxNavHost(container: AppContainer) {
             arguments = listOf(navArgument("id") { type = NavType.StringType }),
         ) { entry ->
             val id = entry.arguments?.getString("id").orEmpty()
-            TerminalPlaceholder(id = id, onBack = { navController.popBackStack() })
+            val vm: TerminalViewModel = viewModel(
+                factory = viewModelFactory { initializer { TerminalViewModel(container, id) } },
+            )
+            TerminalScreen(vm = vm, onBack = { navController.popBackStack() })
         }
 
         composable(Routes.INBOX) {
@@ -72,10 +77,6 @@ fun CmuxNavHost(container: AppContainer) {
         }
     }
 }
-
-// Replaced by the real terminal screen in Task 8.
-@Composable
-private fun TerminalPlaceholder(id: String, onBack: () -> Unit) = Placeholder("Terminal: $id", onBack)
 
 // Replaced by the real inbox screen in Task 9.
 @Composable
