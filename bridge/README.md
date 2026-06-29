@@ -71,6 +71,23 @@ The relay binds `127.0.0.1:8765`; nginx is the only public surface. nginx must
 **set** `X-Client-Cert-CN $ssl_client_s_dn` (never trust an inbound value) so
 the relay can route by CN.
 
+### Run in a container (podman)
+
+`docker-compose.yml` + `deploy/Containerfile` build and run the relay in a
+rootless container. Copy this tree to the host, drop a `config.toml` beside the
+compose file (from `deploy/relay.example.toml`, with a real `relay_token` and
+`token_store = "/data/devices.json"`), then:
+
+```bash
+podman-compose up -d --build
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/healthz   # 200
+```
+
+The image builds on the host (don't ship it across architectures). The port is
+published on loopback only; the device store persists in the `relay-data`
+volume. Pair devices with `podman exec cmux-relay cmux-relay pair --config
+/etc/cmux-relay/config.toml --name phone`.
+
 ## Agent (Mac)
 
 The agent must run **in your GUI login session** to reach the per-user cmux

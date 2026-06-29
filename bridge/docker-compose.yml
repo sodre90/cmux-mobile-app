@@ -1,0 +1,31 @@
+# cmux-relay — the home-server rendezvous for remote cmux access.
+#
+# SECURITY: the relay trusts nginx to terminate mutual TLS and pass the client
+# cert CN in X-Client-Cert-CN. On its own it is unauthenticated at the network
+# layer, so until the nginx mTLS edge is in place the port is published on
+# loopback ONLY (127.0.0.1) — never expose it to the LAN or internet.
+#
+# The image builds for the host's architecture, so build on each machine (this
+# Linux server); do not copy the image across architectures.
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: deploy/Containerfile
+    image: localhost/cmux-relay:latest
+    container_name: cmux-relay
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RELAY_PORT:-8765}:8765"
+    volumes:
+      - ./config.toml:/etc/cmux-relay/config.toml:ro,Z
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8765/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  relay-data:

@@ -1,0 +1,9 @@
+# Keep the build context to the Go module, and never bake secrets or local
+# state into the image.
+.git
+.gitignore
+*.md
+config.toml
+devices.json
+*-service-account.json
+/cmux-bridge
