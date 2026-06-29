@@ -16,13 +16,13 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cmux-relay ./cmd/c
 
 # ---- runtime -----------------------------------------------------------------
 FROM alpine:3.20
-# /data is created here so a fresh named volume inherits app ownership via
-# podman's copy-up; the device-token store is written there at runtime.
-RUN apk add --no-cache ca-certificates \
-    && adduser -D -u 10001 app \
-    && mkdir -p /data && chown app:app /data
+# Runs as container-root: under rootless podman that maps to the unprivileged
+# host user, which owns both the bind-mounted 0600 config.toml and the /data
+# volume — so the relay can read its secret config and persist the device store
+# without any in-container user juggling. /data is created so a fresh named
+# volume has a mountpoint and the store is written there at runtime.
+RUN apk add --no-cache ca-certificates && mkdir -p /data
 COPY --from=build /out/cmux-relay /usr/local/bin/cmux-relay
-USER app
 EXPOSE 8765
 # config.toml is bind-mounted at /etc/cmux-relay/config.toml (see compose).
 ENTRYPOINT ["/usr/local/bin/cmux-relay"]
