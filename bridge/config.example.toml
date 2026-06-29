@@ -1,0 +1,18 @@
+# cmux-bridge configuration. Copy to ~/.config/cmux-bridge/config.toml and edit.
+# Every field is optional; the values below are the defaults.
+
+# Address the bridge binds. Keep it on loopback/LAN — the public edge is your
+# mTLS nginx, which reverse-proxies to this address. Never bind 0.0.0.0 to the
+# open internet.
+listen = "127.0.0.1:8765"
+
+# Path to the cmux CLI. "cmux" resolves via PATH. On macOS the bundled binary is
+# /Applications/cmux.app/Contents/Resources/bin/cmux
+cmux_bin = "cmux"
+
+# Where device tokens are persisted (created on first `cmux-bridge pair`).
+token_store = "~/.config/cmux-bridge/devices.json"
+
+# Firebase Cloud Messaging (optional). Leave both empty to disable push.
+# fcm_project_id  = "your-firebase-project-id"
+# fcm_credentials = "~/.config/cmux-bridge/fcm-service-account.json"
