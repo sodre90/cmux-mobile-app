@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -20,9 +21,18 @@ import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
 @Composable
-fun CmuxNavHost(container: AppContainer) {
+fun CmuxNavHost(container: AppContainer, initialRoute: String? = null) {
     val navController = rememberNavController()
-    val start = if (container.settings.bridgeConfig() == null) Routes.SETTINGS else Routes.SESSIONS
+    val configured = container.settings.bridgeConfig() != null
+    val start = if (!configured) Routes.SETTINGS else Routes.SESSIONS
+
+    // A notification deep link (e.g. EXTRA_NAV=inbox) navigates once after launch,
+    // but only when the bridge is configured — otherwise onboarding must come first.
+    LaunchedEffect(initialRoute, configured) {
+        if (initialRoute != null && configured) {
+            navController.navigate(initialRoute)
+        }
+    }
 
     NavHost(navController = navController, startDestination = start) {
         composable(Routes.SETTINGS) {

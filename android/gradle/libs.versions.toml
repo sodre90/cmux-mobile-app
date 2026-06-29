@@ -12,6 +12,7 @@ coroutines = "1.8.1"
 datastore = "1.1.1"
 securityCrypto = "1.1.0-alpha06"
 firebaseBom = "33.5.1"
+googleServices = "4.4.2"
 junit = "4.13.2"
 
 [libraries]
@@ -43,3 +44,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
