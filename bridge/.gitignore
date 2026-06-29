@@ -5,3 +5,4 @@
 config.toml
 devices.json
 *-service-account.json
+.env
