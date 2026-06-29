@@ -43,14 +43,8 @@ func New(cfg config.Config, c *cmux.Client, s *auth.Store) *Server {
 	}
 }
 
-// Handler returns the fully-wired HTTP handler.
+// Handler returns the fully-wired HTTP handler (device-bearer auth on every
+// route; the public edge adds mTLS in front).
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	// Authenticated routes.
-	mux.Handle("GET /sessions", auth.Require(s.store, http.HandlerFunc(s.handleSessions)))
-	mux.Handle("GET /events", auth.Require(s.store, http.HandlerFunc(s.handleEvents)))
-	mux.Handle("GET /terminal/{id}", auth.Require(s.store, http.HandlerFunc(s.handleTerminal)))
-	mux.Handle("POST /feed/{id}/reply", auth.Require(s.store, http.HandlerFunc(s.handleFeedReply)))
-	mux.Handle("POST /devices/register", auth.Require(s.store, http.HandlerFunc(s.handleDeviceRegister)))
-	return mux
+	return s.routes(s.authWrap, true)
 }
