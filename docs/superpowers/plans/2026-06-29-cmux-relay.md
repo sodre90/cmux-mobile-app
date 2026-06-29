@@ -518,7 +518,7 @@ func (s *Server) Handler() http.Handler {
 	return s.routes(s.authWrap, true)
 }
 ```
-Then remove the now-unused `auth` import from `server.go` **only if** `go build` complains (it will, since `auth.Require` moved to `trusted.go`; delete the `"github.com/sodre90/cmux-bridge/internal/auth"` import line from `server.go`).
+Keep the `auth` import in `server.go` — the `store *auth.Store` field still needs it, even though the `auth.Require` *call* now lives in `trusted.go`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
