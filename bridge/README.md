@@ -1,32 +1,45 @@
 # cmux-bridge
 
-A small Go daemon that runs on your Mac next to [cmux](https://github.com/manaflow-ai/cmux)
-and exposes its sessions, terminals, and agent feed over a simple authenticated
-HTTP/WebSocket API — so a remote client (e.g. an Android app) can list sessions,
-drive a terminal, and answer agent prompts from anywhere.
+Remote access to your Mac's [cmux](https://github.com/manaflow-ai/cmux) sessions
+from anywhere, via two small Go binaries:
 
-It speaks to cmux **only through the documented `cmux` CLI** (`cmux rpc` and
-`cmux events`). It stores no cmux socket password and copies no cmux source — it
-is an independent work that consumes cmux's IPC contract.
+- **`cmux-relay`** — a rendezvous daemon on your home server, behind nginx mTLS
+  on a public DNS name. It owns device auth, pairing, and FCM push.
+- **`cmux-bridge agent`** — runs on your Mac next to cmux. It **dials out** to
+  the relay (so the Mac needs no inbound ports / port-forwarding) and serves the
+  same HTTP/WebSocket API over the tunnel.
 
-## Architecture
+Both speak to cmux **only through the documented `cmux` CLI** (`cmux rpc` and
+`cmux events`). They store no cmux socket password and copy no cmux source — an
+independent work that consumes cmux's IPC contract.
+
+## Architecture (v2 relay topology)
 
 ```
-Android app
-  │  HTTPS / WSS  (presents an mTLS client certificate)
-  ▼
-nginx on Home Assistant   (terminates mutual TLS; dedicated DNS name)
-  │  HTTP / WS  (your LAN)
-  ▼
-cmux-bridge  (this daemon, a launchd LaunchAgent on the Mac)
-  │  cmux rpc / cmux events  (local CLI; socket auto-resolved)
-  ▼
-cmux.app  (unchanged)
+Android app ────────────┐                 ┌──────────── Mac (cmux-bridge agent)
+  HTTPS / WSS            │                 │  WSS dial-out (one persistent tunnel)
+  (device client cert)   ▼                 ▼  (mac-agent client cert)
+            nginx on the home server (mutual TLS, public DNS name)
+                         │  HTTP / WS (loopback)
+                         ▼
+                    cmux-relay  ── routes by client-cert CN:
+                         │          • CN=mac-agent + /agent/tunnel → accept tunnel
+                         │          • device CN + Bearer token     → reverse-proxy
+                         │  yamux stream over the tunnel
+                         ▼
+            cmux-bridge agent ── cmux rpc / cmux events ──▶ cmux.app (unchanged)
 ```
 
-Security is layered: **mutual TLS at the nginx edge** + a **per-device bearer
-token** checked by the bridge. The bridge binds loopback/LAN only and is never
-exposed directly to the internet.
+The relay multiplexes every app request as a fresh [yamux](https://github.com/hashicorp/yamux)
+stream over the single agent tunnel (a WebSocket, so it traverses nginx on 443).
+The agent serves its existing handler verbatim. When the Mac is not connected,
+the relay returns `503 {"error":"agent_offline"}`.
+
+Security is layered: **mutual TLS at the nginx edge** (both the agent and devices
+present client certs signed by one CA) + **client-cert CN routing** at the relay
++ a **per-device bearer token** checked by the relay + an `X-Relay-Token` shared
+secret the relay injects so the agent only honors relay-originated requests. The
+relay binds loopback only; the agent has no listening port at all.
 
 ## Build
 
@@ -34,75 +47,102 @@ Requires Go 1.26+.
 
 ```bash
 cd bridge
-go build -o cmux-bridge ./cmd/cmux-bridge
+go build -o cmux-relay  ./cmd/cmux-relay     # for the home server
+go build -o cmux-bridge ./cmd/cmux-bridge    # for the Mac (agent mode)
 go test ./...        # all tests run with no network and no real cmux
 ```
 
-## Configure
+## Relay (home server)
 
-Copy `config.example.toml` to `~/.config/cmux-bridge/config.toml` and edit. All
-fields are optional; defaults shown:
+1. Copy the binary to `/usr/local/bin/cmux-relay`.
+2. Copy `deploy/relay.example.toml` to `/etc/cmux-relay/config.toml` and set
+   `relay_token` (a long random secret), `agent_cn` (the Mac's client-cert CN,
+   e.g. `mac-agent`), and optionally the FCM fields.
+3. Install the systemd unit and nginx vhost:
 
-```toml
-listen      = "127.0.0.1:8765"   # keep on loopback/LAN; nginx is the public edge
-cmux_bin    = "cmux"             # or /Applications/cmux.app/Contents/Resources/bin/cmux
-token_store = "~/.config/cmux-bridge/devices.json"
-# fcm_project_id  = "your-firebase-project-id"
-# fcm_credentials = "~/.config/cmux-bridge/fcm-service-account.json"
-```
+   ```bash
+   cp deploy/cmux-relay.service /etc/systemd/system/
+   systemctl enable --now cmux-relay
+   cp deploy/nginx-cmux-relay.conf /etc/nginx/sites-available/cmux
+   # enable the site + add the `map $http_upgrade $connection_upgrade` block, reload nginx
+   ```
 
-## Run as a LaunchAgent
+The relay binds `127.0.0.1:8765`; nginx is the only public surface. nginx must
+**set** `X-Client-Cert-CN $ssl_client_s_dn` (never trust an inbound value) so
+the relay can route by CN.
 
-The bridge must run **in your GUI login session** to reach the per-user cmux
-socket. See `deploy/com.sodre90.cmux-bridge.plist` (edit the two `REPLACE_ME`
-paths), then:
+## Agent (Mac)
 
-```bash
-cp deploy/com.sodre90.cmux-bridge.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sodre90.cmux-bridge.plist
-launchctl kickstart -k gui/$(id -u)/com.sodre90.cmux-bridge
-tail -f ~/Library/Logs/cmux-bridge.log
-```
+The agent must run **in your GUI login session** to reach the per-user cmux
+socket. Configure and install:
+
+1. Copy `deploy/agent.example.toml` to `~/.config/cmux-bridge/agent.toml`; set
+   `relay_url` (`wss://<your-domain>/agent/tunnel`), the client-cert paths, the
+   server CA, and the same `relay_token` as the relay.
+2. Install the LaunchAgent (it runs `cmux-bridge agent`):
+
+   ```bash
+   cp deploy/com.sodre90.cmux-bridge.plist ~/Library/LaunchAgents/   # edit REPLACE_ME paths
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sodre90.cmux-bridge.plist
+   launchctl kickstart -k gui/$(id -u)/com.sodre90.cmux-bridge
+   tail -f ~/Library/Logs/cmux-bridge.log
+   ```
+
+The agent reconnects automatically (exponential backoff, capped at 30s) if the
+relay or network drops.
 
 > **S5 note:** validate that the agent survives logout/login and sleep/wake — it
-> should, because it lives in the GUI session and `KeepAlive` restarts it, but
-> confirm on your machine after install.
+> lives in the GUI session and `KeepAlive` restarts it, but confirm on your
+> machine after install.
+
+## Agent client certificate
+
+The Mac authenticates to nginx with its own client cert, signed by the **same
+client CA** as device certs, with a CN matching the relay's `agent_cn`:
+
+```bash
+openssl req -newkey rsa:2048 -nodes -keyout agent.key -out agent.csr -subj "/CN=mac-agent"
+openssl x509 -req -in agent.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out agent.crt -days 825 -sha256
+```
+
+Place `agent.crt` / `agent.key` where `agent.toml` points, and put the CA that
+signed the **nginx server** cert at `ca_cert`.
 
 ## Pair a device
 
+Run on the **home server** (the relay owns the device token store):
+
 ```bash
-cmux-bridge pair --name phone
+cmux-relay pair --name phone
 ```
 
 This prints a long-lived **device token**. Paste it into the app once; the app
 sends it as `Authorization: Bearer <token>` on every request. List and revoke:
 
 ```bash
-cmux-bridge devices            # list (tokens redacted)
-cmux-bridge devices revoke <token>
+cmux-relay devices            # list (tokens redacted)
+cmux-relay devices revoke <token>
 ```
-
-(A short numeric pairing-code exchange over `POST /pair` is a planned
-enhancement; v1 uses direct token paste, which needs no shared state between the
-`pair` and `serve` processes.)
 
 ## Edge: nginx mutual TLS
 
-See `deploy/nginx-cmux-bridge.conf`. Point a dedicated DNS name at your Home
-Assistant nginx, require a client certificate (`ssl_verify_client on`), and
-`proxy_pass` to `http://<mac-lan-ip>:8765`. The `map $http_upgrade
-$connection_upgrade` block (http context) is required for the terminal/event
-WebSockets.
+See `deploy/nginx-cmux-relay.conf`. Point your home-server DNS name at nginx,
+require a client certificate (`ssl_verify_client on`), and `proxy_pass` to
+`http://127.0.0.1:8765`. The `map $http_upgrade $connection_upgrade` block (http
+context) is required for the agent tunnel and the terminal/event WebSockets.
 
 ## Push (optional)
 
 To get "agent needs you" notifications:
 
 1. Create a Firebase project and a service-account JSON key.
-2. Put the key on the Mac and set `fcm_project_id` + `fcm_credentials` in the
-   config.
-3. The app registers its FCM token via `POST /devices/register`; when an agent
-   raises a blocking prompt the bridge sends a high-priority FCM data message.
+2. Put the key on the **home server** and set `fcm_project_id` +
+   `fcm_credentials` in the relay config.
+3. The app registers its FCM token via `POST /devices/register`. The relay opens
+   its own `/events` subscription over the agent tunnel; when an agent raises a
+   blocking prompt it sends a high-priority FCM data message to every paired
+   device.
 
 Notification text is **redacted in cmux's event stream**, so push is driven off
 structured feed items (a pending `permissionRequest` / `question` / `exitPlan`),
@@ -110,7 +150,9 @@ not notification bodies.
 
 ## API
 
-All routes require `Authorization: Bearer <device-token>`.
+The app's base URL is the relay's public domain (`https://<your-domain>`). All
+routes require `Authorization: Bearer <device-token>`. A `503 {"error":
+"agent_offline"}` means the Mac agent is not currently connected to the relay.
 
 | Method | Path | Purpose |
 |---|---|---|

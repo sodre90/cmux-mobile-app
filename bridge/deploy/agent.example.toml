@@ -1,0 +1,7 @@
+# cmux-bridge agent config (Mac). Copy to ~/.config/cmux-bridge/agent.toml.
+relay_url   = "wss://cmux.example.com/agent/tunnel"
+client_cert = "~/.config/cmux-bridge/agent.crt"     # CN=mac-agent, signed by client CA
+client_key  = "~/.config/cmux-bridge/agent.key"
+ca_cert     = "~/.config/cmux-bridge/server-ca.crt" # CA that signed the nginx server cert
+relay_token = "CHANGE_ME_long_random_secret"        # must match the relay
+cmux_bin    = "cmux"

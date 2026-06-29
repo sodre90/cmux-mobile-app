@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  cmux-bridge LaunchAgent.
+  cmux-bridge agent LaunchAgent (v2 relay topology). The Mac runs in "agent"
+  mode: it dials the relay and serves cmux over the tunnel. Reads
+  ~/.config/cmux-bridge/agent.toml (see deploy/agent.example.toml).
 
-  Install (per-user; the bridge must run in your GUI login session to reach the
+  (Legacy LAN-direct mode: replace the "agent" argument with "serve" to expose
+  the bridge directly behind your own nginx, without a relay.)
+
+  Install (per-user; the agent must run in your GUI login session to reach the
   per-user cmux socket):
 
     1. Edit the two REPLACE_ME paths below (binary path + your home dir).
@@ -21,7 +26,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>REPLACE_ME/cmux-bridge</string>
-        <string>serve</string>
+        <string>agent</string>
     </array>
 
     <key>RunAtLoad</key>

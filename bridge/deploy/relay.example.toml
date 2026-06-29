@@ -1,0 +1,9 @@
+# cmux-relay config (home server). Copy to /etc/cmux-relay/config.toml.
+listen      = "127.0.0.1:8765"                 # loopback; nginx is the edge
+token_store = "/var/lib/cmux-relay/devices.json"
+agent_cn    = "mac-agent"                       # client-cert CN trusted as the Mac
+relay_token = "CHANGE_ME_long_random_secret"    # shared with the Mac agent
+
+# Push (optional): leave both empty to disable.
+# fcm_project_id  = "your-firebase-project-id"
+# fcm_credentials = "/etc/cmux-relay/fcm-service-account.json"
