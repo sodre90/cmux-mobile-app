@@ -4,45 +4,22 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/hashicorp/yamux"
-	"golang.org/x/oauth2/google"
 
-	"github.com/sodre90/cmux-bridge/internal/auth"
-	"github.com/sodre90/cmux-bridge/internal/config"
+	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/relay"
 )
 
-// fcmScope is the OAuth scope required to send FCM HTTP v1 messages.
-const fcmScope = "https://www.googleapis.com/auth/firebase.messaging"
-
 func defaultConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "config.toml"
-	}
-	return filepath.Join(home, ".config", "cmux-relay", "config.toml")
-}
-
-func loadStore(cfgPath string) (config.Config, *auth.Store, error) {
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return cfg, nil, err
-	}
-	store, err := auth.Open(cfg.TokenStore)
-	if err != nil {
-		return cfg, nil, err
-	}
-	return cfg, store, nil
+	return cli.ConfigPath("cmux-relay", "config.toml")
 }
 
 func runServe(args []string) int {
@@ -51,7 +28,7 @@ func runServe(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	cfg, store, err := loadStore(*cfgPath)
+	cfg, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
 		log.Printf("serve: %v", err)
 		return 1
@@ -61,7 +38,7 @@ func runServe(args []string) int {
 
 	var pusher relay.Pusher
 	if cfg.FCMCredentials != "" && cfg.FCMProjectID != "" {
-		if p, err := newPusher(cfg); err != nil {
+		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
 			log.Printf("serve: push disabled: %v", err)
 		} else {
 			pusher = p
@@ -91,25 +68,4 @@ func runServe(args []string) int {
 		return 1
 	}
 	return 0
-}
-
-func newPusher(cfg config.Config) (*push.Sender, error) {
-	key, err := os.ReadFile(cfg.FCMCredentials)
-	if err != nil {
-		return nil, fmt.Errorf("read fcm credentials: %w", err)
-	}
-	creds, err := google.CredentialsFromJSON(context.Background(), key, fcmScope)
-	if err != nil {
-		return nil, fmt.Errorf("parse fcm credentials: %w", err)
-	}
-	return &push.Sender{
-		ProjectID: cfg.FCMProjectID,
-		Token: func(context.Context) (string, error) {
-			tok, err := creds.TokenSource.Token()
-			if err != nil {
-				return "", err
-			}
-			return tok.AccessToken, nil
-		},
-	}, nil
 }

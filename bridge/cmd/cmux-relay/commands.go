@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"time"
+
+	"github.com/sodre90/cmux-bridge/internal/cli"
 )
 
 func runPair(args []string) int {
@@ -15,7 +17,7 @@ func runPair(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_, store, err := loadStore(*cfgPath)
+	_, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
 		log.Printf("pair: %v", err)
 		return 1
@@ -36,7 +38,7 @@ func runDevices(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_, store, err := loadStore(*cfgPath)
+	_, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
 		log.Printf("devices: %v", err)
 		return 1

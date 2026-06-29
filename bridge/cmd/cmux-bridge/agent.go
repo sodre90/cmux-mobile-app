@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/server"
@@ -21,11 +21,7 @@ import (
 )
 
 func defaultAgentConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "agent.toml"
-	}
-	return filepath.Join(home, ".config", "cmux-bridge", "agent.toml")
+	return cli.ConfigPath("cmux-bridge", "agent.toml")
 }
 
 func loadTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
