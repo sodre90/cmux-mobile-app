@@ -39,5 +39,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /sessions", auth.Require(s.store, http.HandlerFunc(s.handleSessions)))
 	mux.Handle("GET /events", auth.Require(s.store, http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /terminal/{id}", auth.Require(s.store, http.HandlerFunc(s.handleTerminal)))
+	mux.Handle("POST /feed/{id}/reply", auth.Require(s.store, http.HandlerFunc(s.handleFeedReply)))
 	return mux
 }
