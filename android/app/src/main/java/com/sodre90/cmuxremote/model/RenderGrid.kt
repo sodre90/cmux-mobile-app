@@ -17,7 +17,10 @@ data class RenderGrid(
     val columns: Int = 0,
     val rows: Int = 0,
     val cursor: Cursor? = null,
-    val modes: List<String> = emptyList(),
+    // cmux sends modes as objects ({"ansi":bool,"code":int,"on":bool}); kept as
+    // raw JSON since rendering never reads them. A wrong value type here aborts
+    // the whole frame parse, so stay tolerant.
+    val modes: List<JsonElement> = emptyList(),
     @SerialName("row_spans") val rowSpans: List<RowSpan> = emptyList(),
     val styles: List<Style> = emptyList(),
     @SerialName("scrollback_rows") val scrollbackRows: Int = 0,
