@@ -106,6 +106,21 @@ func TestRelayEndToEndSessions(t *testing.T) {
 	}
 }
 
+func TestRelayHealthz(t *testing.T) {
+	// /healthz is liveness only: no client cert, no bearer, no agent required.
+	rl := New(nil, "mac-agent", "tok")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 from /healthz, got %d", resp.StatusCode)
+	}
+}
+
 func TestRelayTunnelRejectsWrongCN(t *testing.T) {
 	rl := New(nil, "mac-agent", "tok")
 	srv := httptest.NewServer(rl.Handler())

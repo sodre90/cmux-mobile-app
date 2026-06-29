@@ -61,6 +61,10 @@ func (r *Relay) clientCN(req *http.Request) string {
 
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.proxy)))
