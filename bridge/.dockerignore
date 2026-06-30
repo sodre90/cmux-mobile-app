@@ -8,3 +8,4 @@ devices.json
 *-service-account.json
 .env
 /cmux-bridge
+/cmux-relay

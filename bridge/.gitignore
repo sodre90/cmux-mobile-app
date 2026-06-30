@@ -1,5 +1,6 @@
-# Built binary
+# Built binaries
 /cmux-bridge
+/cmux-relay
 
 # Local config / secrets (never commit)
 config.toml
