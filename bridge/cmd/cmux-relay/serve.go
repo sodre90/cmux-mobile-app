@@ -55,6 +55,21 @@ func runServe(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// SIGHUP re-reads the device store so a phone paired via `cmux-relay pair`
+	// (a separate process appending to devices.json) takes effect without a
+	// relay restart. Trigger with `podman kill --signal HUP cmux-relay`.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			if n, err := store.Reload(); err != nil {
+				log.Printf("serve: SIGHUP device-store reload failed: %v", err)
+			} else {
+				log.Printf("serve: SIGHUP reloaded device store (%d devices)", n)
+			}
+		}
+	}()
+
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: rl.Handler()}
 	go func() {
 		<-ctx.Done()

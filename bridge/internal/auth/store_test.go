@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -77,6 +79,71 @@ func TestPersistenceReload(t *testing.T) {
 	}
 	if _, ok := s2.Verify(tok); !ok {
 		t.Fatal("token must survive reload")
+	}
+}
+
+func TestReloadPicksUpExternalChanges(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "d.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok1, _ := s.Issue("phone-1")
+
+	// Simulate an external `cmux-relay pair` process that appended a device:
+	// it read the current file (preserving phone-1) and wrote both back.
+	external := []Device{
+		{Token: tok1, Name: "phone-1"},
+		{Token: "TOK2", Name: "phone-2"},
+	}
+	writeStore(t, p, external)
+
+	// The new device is unknown until we reload.
+	if _, ok := s.Verify("TOK2"); ok {
+		t.Fatal("TOK2 should be unknown before reload")
+	}
+	n, err := s.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("want 2 devices after reload, got %d", n)
+	}
+	if _, ok := s.Verify("TOK2"); !ok {
+		t.Fatal("TOK2 should be known after reload")
+	}
+	if _, ok := s.Verify(tok1); !ok {
+		t.Fatal("phone-1 should still be known after reload")
+	}
+}
+
+func TestReloadKeepsDevicesOnError(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "d.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := s.Issue("phone")
+
+	if err := os.WriteFile(p, []byte("{ not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reload(); err == nil {
+		t.Fatal("reload of a corrupt file must return an error")
+	}
+	if _, ok := s.Verify(tok); !ok {
+		t.Fatal("devices must be preserved when reload fails")
+	}
+}
+
+func writeStore(t *testing.T, path string, devs []Device) {
+	t.Helper()
+	data, err := json.MarshalIndent(devs, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

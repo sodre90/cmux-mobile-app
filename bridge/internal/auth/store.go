@@ -67,6 +67,34 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// Reload re-reads the device file from disk and atomically replaces the
+// in-memory device map, returning the new device count. Pending in-memory
+// pairing codes are left untouched. On a read or parse error the current
+// devices are kept and the error is returned, so a missing or corrupt file
+// never wipes a running relay's devices. This lets a newly paired device
+// (written by a separate `cmux-relay pair` process) take effect on SIGHUP
+// without restarting the relay.
+func (s *Store) Reload() (int, error) {
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return 0, fmt.Errorf("reload token store: %w", err)
+	}
+	var list []Device
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &list); err != nil {
+			return 0, fmt.Errorf("parse token store: %w", err)
+		}
+	}
+	next := make(map[string]Device, len(list))
+	for _, d := range list {
+		next[d.Token] = d
+	}
+	s.mu.Lock()
+	s.devs = next
+	s.mu.Unlock()
+	return len(next), nil
+}
+
 // Issue creates and persists a new device token.
 func (s *Store) Issue(name string) (string, error) {
 	tok, err := randomHex(32)
