@@ -13,22 +13,27 @@ import (
 )
 
 func TestNeedsAttention(t *testing.T) {
+	// cmux feed items carry the Claude Code hook event in payload.hook_event_name
+	// and fire twice: phase "received" then "completed". We alert once, on
+	// "received", and only for the events that block on the user.
 	cases := []struct {
-		kind, status string
-		want         bool
+		hook, phase string
+		want        bool
 	}{
-		{"permissionRequest", "pending", true},
-		{"question", "pending", true},
-		{"exitPlan", "pending", true},
-		{"permissionRequest", "answered", false},
-		{"question", "resolved", false},
-		{"toolUse", "telemetry", false},
-		{"toolResult", "telemetry", false},
-		{"sessionStart", "pending", false},
+		{"Notification", "received", true},
+		{"AskUserQuestion", "received", true},
+		{"Notification", "completed", false},
+		{"AskUserQuestion", "completed", false},
+		{"PreToolUse", "received", false},
+		{"Stop", "received", false},
+		{"SubagentStop", "received", false},
+		{"UserPromptSubmit", "received", false},
+		{"SessionStart", "received", false},
+		{"", "", false},
 	}
 	for _, c := range cases {
-		if got := needsAttention(c.kind, c.status); got != c.want {
-			t.Errorf("needsAttention(%q,%q)=%v want %v", c.kind, c.status, got, c.want)
+		if got := needsAttention(c.hook, c.phase); got != c.want {
+			t.Errorf("needsAttention(%q,%q)=%v want %v", c.hook, c.phase, got, c.want)
 		}
 	}
 }
@@ -46,20 +51,47 @@ func TestClassifyDropsNoise(t *testing.T) {
 	}
 }
 
-func TestClassifyFeedPendingPrompt(t *testing.T) {
-	raw := `{"type":"event","name":"feed.item.received","category":"feed","workspace_id":"W1",
-		"payload":{"id":"F1","kind":"permissionRequest","status":"pending","title":"Run rm -rf?","workstream_id":"WS1"}}`
+func TestClassifyFeedAttentionPrompt(t *testing.T) {
+	// A real cmux feed frame: the blocking signal is payload.hook_event_name,
+	// the feed id is the top-level id, and the only human label available
+	// (cmux redacts the prompt) is the cwd basename.
+	raw := `{"type":"event","name":"feed.item.received","category":"feed",
+		"id":"BOOT-168","workspace_id":"W1",
+		"payload":{"hook_event_name":"Notification","phase":"received",
+			"session_id":"claude-abc","cwd":"/Users/perdos/prj/cmux-app","workspace_id":"W1"}}`
 	var m map[string]any
 	_ = json.Unmarshal([]byte(raw), &m)
 	f, ok := classify(m)
 	if !ok {
 		t.Fatal("feed prompt should be forwarded")
 	}
-	if f.Type != "feed" || !f.NeedsAttention || f.FeedID != "F1" || f.Kind != "permissionRequest" {
+	if f.Type != "feed" || !f.NeedsAttention || f.FeedID != "BOOT-168" || f.Kind != "Notification" {
 		t.Fatalf("unexpected frame: %+v", f)
 	}
-	if f.WorkspaceID != "WS1" { // workstream_id preferred
+	if f.WorkspaceID != "W1" {
 		t.Fatalf("workspace id wrong: %+v", f)
+	}
+	if f.Title != "cmux-app" { // cwd basename, used as the "which agent" label
+		t.Fatalf("title (cwd basename) wrong: %+v", f)
+	}
+}
+
+func TestClassifyFeedNonBlocking(t *testing.T) {
+	// PreToolUse fires constantly and must never alert; the "completed" phase of
+	// an attention event must not re-alert either.
+	for _, raw := range []string{
+		`{"type":"event","category":"feed","id":"BOOT-1","payload":{"hook_event_name":"PreToolUse","phase":"received","cwd":"/x/y","tool_name":"Bash"}}`,
+		`{"type":"event","category":"feed","id":"BOOT-2","payload":{"hook_event_name":"Notification","phase":"completed","cwd":"/x/y"}}`,
+	} {
+		var m map[string]any
+		_ = json.Unmarshal([]byte(raw), &m)
+		f, ok := classify(m)
+		if !ok {
+			t.Fatalf("feed frame should be forwarded: %s", raw)
+		}
+		if f.NeedsAttention {
+			t.Fatalf("frame must not set attention: %+v", f)
+		}
 	}
 }
 
@@ -140,7 +172,7 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 	defer c.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	feed := `{"type":"event","name":"feed.item.received","category":"feed","payload":{"id":"F9","kind":"question","status":"pending","title":"Which option?"}}`
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-9","payload":{"hook_event_name":"AskUserQuestion","phase":"received","cwd":"/Users/perdos/prj/cmux-app"}}`
 	noise := `{"type":"event","name":"pane.focused","category":"pane","payload":{}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(noise+"\n"+feed+"\n"))
 
@@ -149,7 +181,7 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.FeedID != "F9" || got.Kind != "question" || !got.NeedsAttention {
+	if got.FeedID != "BOOT-9" || got.Kind != "AskUserQuestion" || !got.NeedsAttention {
 		t.Fatalf("expected the classified feed frame, got %+v", got)
 	}
 }

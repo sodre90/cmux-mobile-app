@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -40,17 +41,16 @@ func classify(m map[string]any) (EventFrame, bool) {
 
 	switch str(m, "category") {
 	case "feed":
-		kind := str(payload, "kind")
-		status := str(payload, "status")
+		hookEvent := str(payload, "hook_event_name")
 		return EventFrame{
 			Type:           "feed",
 			Name:           name,
-			Kind:           kind,
-			FeedID:         str(payload, "id"),
-			WorkspaceID:    firstNonEmpty(str(payload, "workstream_id"), wsID),
+			Kind:           hookEvent,
+			FeedID:         firstNonEmpty(str(m, "id"), str(payload, "id")),
+			WorkspaceID:    firstNonEmpty(str(payload, "workspace_id"), wsID),
 			SurfaceID:      surfID,
-			Title:          str(payload, "title"),
-			NeedsAttention: needsAttention(kind, status),
+			Title:          attentionLabel(payload),
+			NeedsAttention: needsAttention(hookEvent, str(payload, "phase")),
 		}, true
 	case "notification":
 		// Note: cmux redacts notification title/body in the event stream, so we
@@ -66,17 +66,33 @@ func classify(m map[string]any) (EventFrame, bool) {
 	return EventFrame{}, false
 }
 
-// needsAttention reports whether a feed item represents a blocking agent prompt
-// awaiting the user.
-func needsAttention(kind, status string) bool {
-	if status != "pending" {
+// needsAttention reports whether a cmux feed item is a blocking agent prompt
+// awaiting the user. cmux carries the Claude Code hook in payload.hook_event_name
+// and emits each item twice (phase "received" then "completed"); we alert once,
+// on "received". Notification covers permission prompts and idle "waiting for
+// input"; AskUserQuestion is an explicit blocking choice.
+func needsAttention(hookEvent, phase string) bool {
+	if phase != "received" {
 		return false
 	}
-	switch kind {
-	case "permissionRequest", "question", "exitPlan":
+	switch hookEvent {
+	case "Notification", "AskUserQuestion":
 		return true
 	}
 	return false
+}
+
+// attentionLabel returns the best human label for a feed item. cmux redacts the
+// prompt text, so the cwd basename ("cmux-app") tells the user which agent is
+// waiting; a real payload title is preferred if cmux ever provides one.
+func attentionLabel(payload map[string]any) string {
+	if t := str(payload, "title"); t != "" {
+		return t
+	}
+	if cwd := str(payload, "cwd"); cwd != "" {
+		return filepath.Base(cwd)
+	}
+	return ""
 }
 
 // ingestEvents reads NDJSON cmux event frames from r, classifies each, and

@@ -82,7 +82,7 @@ func TestAttentionEventTriggersPush(t *testing.T) {
 	s.SetPusher(fp)
 	s.store.SetFCMToken(tok, "fcm-xyz")
 
-	feed := `{"type":"event","name":"feed.item.received","category":"feed","payload":{"id":"F1","kind":"permissionRequest","status":"pending","title":"Run rm -rf?"}}`
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-1","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/Users/perdos/prj/cmux-app"}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -96,7 +96,7 @@ func TestAttentionEventTriggersPush(t *testing.T) {
 		t.Fatalf("expected exactly one push, got %d", fp.count())
 	}
 	call := fp.first()
-	if call.token != "fcm-xyz" || call.data["feed_id"] != "F1" || call.data["kind"] != "permissionRequest" {
+	if call.token != "fcm-xyz" || call.data["feed_id"] != "BOOT-1" || call.data["kind"] != "Notification" {
 		t.Fatalf("push call wrong: %+v", call)
 	}
 }
@@ -106,12 +106,12 @@ func TestNonAttentionEventNoPush(t *testing.T) {
 	fp := &fakePusher{}
 	s.SetPusher(fp)
 
-	// telemetry feed item -> no attention -> no push
-	feed := `{"type":"event","name":"feed.item.received","category":"feed","payload":{"id":"F2","kind":"toolUse","status":"telemetry"}}`
+	// ordinary tool-call feed item -> no attention -> no push
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-2","payload":{"hook_event_name":"PreToolUse","phase":"received","tool_name":"Bash","cwd":"/x"}}`
 	s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	time.Sleep(100 * time.Millisecond)
 	if fp.count() != 0 {
-		t.Fatalf("expected no push for telemetry, got %d", fp.count())
+		t.Fatalf("expected no push for an ordinary tool call, got %d", fp.count())
 	}
 }

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -75,7 +76,14 @@ func fanout(store *auth.Store, push Pusher, f server.EventFrame) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	sent, failed := 0, 0
 	for _, tok := range tokens {
-		_ = push.Send(ctx, tok, "Agent needs your attention", body, data)
+		if err := push.Send(ctx, tok, "Agent needs your attention", body, data); err != nil {
+			failed++
+			log.Printf("relay: attention push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
+			continue
+		}
+		sent++
 	}
+	log.Printf("relay: attention push (kind=%s label=%q ws=%s) sent=%d failed=%d", f.Kind, body, f.WorkspaceID, sent, failed)
 }

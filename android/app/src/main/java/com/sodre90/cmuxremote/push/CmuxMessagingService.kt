@@ -41,7 +41,11 @@ class CmuxMessagingService : FirebaseMessagingService() {
         if (message.data["type"] != "attention") return
         val title = message.data["title"]?.takeIf { it.isNotBlank() }
             ?: "Agent needs your attention"
-        val body = message.data["kind"]?.takeIf { it.isNotBlank() } ?: "Open inbox to reply"
+        // body carries the agent label (cwd basename) so the user knows *which*
+        // agent is waiting; fall back to the raw kind, then a generic prompt.
+        val body = message.data["body"]?.takeIf { it.isNotBlank() }
+            ?: message.data["kind"]?.takeIf { it.isNotBlank() }
+            ?: "Open inbox to reply"
         showNotification(title, body)
     }
 
