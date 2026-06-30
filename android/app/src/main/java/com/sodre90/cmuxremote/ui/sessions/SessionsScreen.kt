@@ -24,18 +24,21 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.sodre90.cmuxremote.model.Session
+import com.sodre90.cmuxremote.model.TerminalPane
+import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
     vm: SessionsViewModel,
-    onOpenTerminal: (Session) -> Unit,
+    onOpenTerminal: (String) -> Unit,
     onOpenInbox: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -61,57 +64,118 @@ fun SessionsScreen(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
-                is UiState.Ready -> SessionList(s.data, onOpenTerminal)
+                is UiState.Ready -> WorkspaceList(s.data, onOpenTerminal)
             }
         }
     }
 }
 
 @Composable
-private fun SessionList(sessions: List<Session>, onOpen: (Session) -> Unit) {
-    if (sessions.isEmpty()) {
+private fun WorkspaceList(workspaces: List<Workspace>, onOpen: (String) -> Unit) {
+    if (workspaces.isEmpty()) {
         Box(Modifier.fillMaxSize()) { Text("No sessions", Modifier.align(Alignment.Center)) }
         return
     }
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(sessions, key = { it.id }) { session -> SessionRow(session, onOpen) }
+        items(workspaces, key = { it.id }) { ws ->
+            WorkspaceCard(
+                ws = ws,
+                expanded = expanded[ws.id] == true,
+                onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
+                onOpen = onOpen,
+            )
+        }
     }
 }
 
 @Composable
-private fun SessionRow(session: Session, onOpen: (Session) -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().clickable { onOpen(session) }) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
+private fun WorkspaceCard(
+    ws: Workspace,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(enabled = ws.terminals.isNotEmpty()) {
+                        val direct = singlePaneTarget(ws)
+                        if (direct != null) onOpen(direct) else onToggle()
+                    }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = ws.preview.ifBlank { ws.title.ifBlank { ws.cwd } },
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = ws.cwd,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (ws.hasUnread) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.error,
+                        shape = CircleShape,
+                        modifier = Modifier.size(10.dp),
+                    ) {}
+                }
                 Text(
-                    text = session.title.ifBlank { session.cwd },
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = session.cwd,
-                    style = MaterialTheme.typography.bodySmall,
+                    text = paneCountLabel(ws.terminals.size),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            KindBadge(session.kind)
-            if (session.needsAttention) {
-                Surface(
-                    color = MaterialTheme.colorScheme.error,
-                    shape = CircleShape,
-                    modifier = Modifier.size(10.dp),
-                ) {}
+            if (expanded) {
+                ws.terminals.forEach { pane -> PaneRow(pane, onOpen) }
             }
+        }
+    }
+}
+
+@Composable
+private fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .clickable { onOpen(pane.id) }
+            .padding(start = 28.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = pane.title.ifBlank { pane.cwd },
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (!pane.ready) {
+            Text(
+                text = "starting…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        KindBadge(pane.kind)
+        if (pane.focused) {
+            Text(
+                text = "focus",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
         }
     }
 }

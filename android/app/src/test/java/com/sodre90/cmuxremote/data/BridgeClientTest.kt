@@ -37,7 +37,8 @@ class BridgeClientTest {
     fun sessionsDecodesEnvelopeAndSendsBearer() {
         server.enqueue(
             MockResponse().setBody(
-                """{"sessions":[{"id":"a","cwd":"/x","title":"build","kind":"agent","needs_attention":true}]}""",
+                """{"workspaces":[{"id":"a","cwd":"/x","title":"build","preview":"Claude is waiting","has_unread":true,
+                "terminals":[{"id":"t-a","cwd":"/x","title":"build","focused":true,"ready":true,"kind":"agent"}]}]}""",
             ),
         )
 
@@ -45,8 +46,9 @@ class BridgeClientTest {
 
         assertEquals(1, list.size)
         assertEquals("a", list[0].id)
-        assertEquals("agent", list[0].kind)
-        assertTrue(list[0].needsAttention)
+        assertTrue(list[0].hasUnread)
+        assertEquals(1, list[0].terminals.size)
+        assertEquals("t-a", list[0].terminals[0].id)
 
         val req = server.takeRequest()
         assertEquals("GET", req.method)

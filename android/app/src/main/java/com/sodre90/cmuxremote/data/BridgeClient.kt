@@ -3,8 +3,8 @@ package com.sodre90.cmuxremote.data
 import com.sodre90.cmuxremote.model.BridgeJson
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.RegisterDeviceRequest
-import com.sodre90.cmuxremote.model.Session
-import com.sodre90.cmuxremote.model.SessionsResponse
+import com.sodre90.cmuxremote.model.Workspace
+import com.sodre90.cmuxremote.model.WorkspacesResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -28,12 +28,12 @@ class BridgeClient(
 ) {
     private val root = baseUrl.trimEnd('/')
 
-    suspend fun sessions(): List<Session> = withContext(Dispatchers.IO) {
+    suspend fun sessions(): List<Workspace> = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("$root/sessions").get().build()
         http.newCall(request).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw BridgeException(resp.code, body)
-            BridgeJson.decodeFromString(SessionsResponse.serializer(), body).sessions
+            BridgeJson.decodeFromString(WorkspacesResponse.serializer(), body).workspaces
         }
     }
 

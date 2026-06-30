@@ -55,9 +55,9 @@ fun CmuxNavHost(container: AppContainer, initialRoute: String? = null) {
             )
             SessionsScreen(
                 vm = vm,
-                // The session id is passed through to /terminal/{id} as the cmux
-                // surface id (see bridge handleTerminal).
-                onOpenTerminal = { navController.navigate(Routes.terminal(it.id)) },
+                // The pane's surface id is passed through to /terminal/{id} as
+                // the cmux terminal-surface id (see bridge handleTerminal).
+                onOpenTerminal = { surfaceId -> navController.navigate(Routes.terminal(surfaceId)) },
                 onOpenInbox = { navController.navigate(Routes.INBOX) },
                 onSettings = { navController.navigate(Routes.SETTINGS) },
             )

@@ -18,19 +18,31 @@ val BridgeJson: Json = Json {
     explicitNulls = false
 }
 
-/** A cmux session as surfaced by the bridge `GET /sessions` endpoint. */
+/** A cmux workspace as surfaced by the bridge `GET /sessions` endpoint. */
 @Serializable
-data class Session(
+data class Workspace(
     val id: String = "",
     val cwd: String = "",
     val title: String = "",
+    val preview: String = "",
+    @SerialName("has_unread") val hasUnread: Boolean = false,
+    val terminals: List<TerminalPane> = emptyList(),
+)
+
+/** One terminal surface (pane) within a [Workspace]; [id] opens via /terminal/{id}. */
+@Serializable
+data class TerminalPane(
+    val id: String = "",
+    val cwd: String = "",
+    val title: String = "",
+    val focused: Boolean = false,
+    val ready: Boolean = false,
     val kind: String = "",
-    @SerialName("needs_attention") val needsAttention: Boolean = false,
 )
 
 /** Envelope returned by `GET /sessions`. */
 @Serializable
-data class SessionsResponse(val sessions: List<Session> = emptyList())
+data class WorkspacesResponse(val workspaces: List<Workspace> = emptyList())
 
 /** Body of `POST /devices/register`. */
 @Serializable

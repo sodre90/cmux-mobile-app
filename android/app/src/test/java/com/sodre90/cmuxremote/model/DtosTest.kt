@@ -11,16 +11,33 @@ import org.junit.Test
 class DtosTest {
 
     @Test
-    fun parsesSessionWithSnakeCaseAndUnknownKeys() {
+    fun parsesWorkspaceWithInlinePanesAndUnknownKeys() {
         val js = """
-            {"id":"ws-1","cwd":"/Users/p/proj","title":"build","kind":"agent",
-             "needs_attention":true,"extra_future_field":42}
+            {"id":"ws-1","cwd":"/Users/p/proj","title":"build","preview":"Claude is waiting",
+             "has_unread":true,"future_field":42,
+             "terminals":[
+               {"id":"t-1","cwd":"/Users/p/proj","title":"build","focused":true,"ready":true,"kind":"agent"},
+               {"id":"t-2","cwd":"/Users/p/proj","title":"~/proj","focused":false,"ready":false,"kind":"terminal"}
+             ]}
         """.trimIndent()
-        val s = BridgeJson.decodeFromString(Session.serializer(), js)
-        assertEquals("ws-1", s.id)
-        assertEquals("/Users/p/proj", s.cwd)
-        assertEquals("agent", s.kind)
-        assertTrue(s.needsAttention)
+        val w = BridgeJson.decodeFromString(Workspace.serializer(), js)
+        assertEquals("ws-1", w.id)
+        assertEquals("/Users/p/proj", w.cwd)
+        assertEquals("Claude is waiting", w.preview)
+        assertTrue(w.hasUnread)
+        assertEquals(2, w.terminals.size)
+        assertEquals("t-1", w.terminals[0].id)
+        assertTrue(w.terminals[0].focused)
+        assertEquals("terminal", w.terminals[1].kind)
+    }
+
+    @Test
+    fun parsesWorkspaceWithMissingOptionalFields() {
+        val w = BridgeJson.decodeFromString(Workspace.serializer(), """{"id":"ws-2"}""")
+        assertEquals("ws-2", w.id)
+        assertEquals("", w.preview)
+        assertFalse(w.hasUnread)
+        assertTrue(w.terminals.isEmpty())
     }
 
     @Test

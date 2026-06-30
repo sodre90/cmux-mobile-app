@@ -3,7 +3,7 @@ package com.sodre90.cmuxremote.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
-import com.sodre90.cmuxremote.model.Session
+import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,8 +12,8 @@ import kotlinx.coroutines.launch
 
 class SessionsViewModel(private val container: AppContainer) : ViewModel() {
 
-    private val _state = MutableStateFlow<UiState<List<Session>>>(UiState.Loading)
-    val state: StateFlow<UiState<List<Session>>> = _state.asStateFlow()
+    private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
+    val state: StateFlow<UiState<List<Workspace>>> = _state.asStateFlow()
 
     init {
         refresh()
