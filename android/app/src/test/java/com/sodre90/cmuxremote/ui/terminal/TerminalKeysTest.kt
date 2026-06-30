@@ -18,9 +18,11 @@ class TerminalKeysTest {
 
     // Cursor keys: CSI when DECCKM is reset, SS3 when it is set.
     @Test fun arrowUpIsCsiWhenNormal() =
-        assertEquals(esc + "[A", key("↑").sequence(applicationCursorKeys = false))
+        assertEquals(esc + "[A", ArrowUp.sequence(applicationCursorKeys = false))
     @Test fun arrowUpIsSs3WhenApplication() =
-        assertEquals(esc + "OA", key("↑").sequence(applicationCursorKeys = true))
+        assertEquals(esc + "OA", ArrowUp.sequence(applicationCursorKeys = true))
+    @Test fun arrowLeftIsSs3WhenApplication() =
+        assertEquals(esc + "OD", ArrowLeft.sequence(applicationCursorKeys = true))
     @Test fun homeIsCsiWhenNormal() =
         assertEquals(esc + "[H", key("Home").sequence(applicationCursorKeys = false))
     @Test fun homeIsSs3WhenApplication() =
@@ -29,4 +31,8 @@ class TerminalKeysTest {
         assertEquals(esc + "OF", key("End").sequence(applicationCursorKeys = true))
 
     @Test fun enterKeyIsPresent() = assertTrue(TerminalKeys.any { it.label == "⏎" })
+
+    // Arrows are surfaced via the D-pad, not the scrollable bar.
+    @Test fun arrowsNotInScrollableBar() =
+        assertTrue(TerminalKeys.none { it.label == "↑" || it.label == "→" })
 }

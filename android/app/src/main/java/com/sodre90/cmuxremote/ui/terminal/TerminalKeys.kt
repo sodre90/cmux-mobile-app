@@ -32,7 +32,15 @@ data class CursorKey(override val label: String, private val finalChar: Char) : 
         ESC + (if (applicationCursorKeys) "O" else "[") + finalChar
 }
 
-/** Ordered key bar: fixed control keys, the DECCKM-aware cursor keys, then paging. */
+// The directional arrows, surfaced as an always-visible D-pad (see ArrowPad in
+// TerminalScreen) rather than buried in the scrollable bar. DECCKM-aware like any
+// CursorKey. The final chars D/C (not C/D) match the ANSI codes for left/right.
+val ArrowUp = CursorKey("↑", 'A')
+val ArrowDown = CursorKey("↓", 'B')
+val ArrowLeft = CursorKey("←", 'D')
+val ArrowRight = CursorKey("→", 'C')
+
+/** The horizontally-scrolling key bar. The arrows live in the D-pad instead. */
 val TerminalKeys: List<TerminalKey> = listOf(
     StaticKey("Esc", ESC),
     StaticKey("Tab", "\t"),
@@ -40,10 +48,6 @@ val TerminalKeys: List<TerminalKey> = listOf(
     StaticKey("^C", CTRL_C),
     StaticKey("^D", CTRL_D),
     StaticKey("^Z", CTRL_Z),
-    CursorKey("↑", 'A'),
-    CursorKey("↓", 'B'),
-    CursorKey("←", 'D'),
-    CursorKey("→", 'C'),
     CursorKey("Home", 'H'),
     CursorKey("End", 'F'),
     // Page keys use the `~` (keypad) form and are unaffected by DECCKM.

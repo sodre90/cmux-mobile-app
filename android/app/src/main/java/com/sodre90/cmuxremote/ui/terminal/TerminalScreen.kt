@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.union
@@ -101,10 +102,9 @@ fun TerminalScreen(
                     WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom),
                 ),
             ) {
-                KeyBar(
-                    applicationCursorKeys = state.grid?.applicationCursorKeys ?: false,
-                    onKey = vm::sendText,
-                )
+                val appCursorKeys = state.grid?.applicationCursorKeys ?: false
+                ArrowPad(applicationCursorKeys = appCursorKeys, onKey = vm::sendText)
+                KeyBar(applicationCursorKeys = appCursorKeys, onKey = vm::sendText)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -211,6 +211,35 @@ fun TerminalScreen(
             }
         }
     }
+}
+
+/**
+ * An always-visible arrow D-pad (cross layout) above the scrollable key bar, so
+ * menu navigation never requires scrolling to find the arrows. Each arrow resolves
+ * SS3 vs CSI against [applicationCursorKeys] like any cursor key.
+ */
+@Composable
+private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ArrowButton(ArrowUp, applicationCursorKeys, onKey)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ArrowButton(ArrowLeft, applicationCursorKeys, onKey)
+            ArrowButton(ArrowDown, applicationCursorKeys, onKey)
+            ArrowButton(ArrowRight, applicationCursorKeys, onKey)
+        }
+    }
+}
+
+@Composable
+private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
+    OutlinedButton(
+        onClick = { onKey(key.sequence(applicationCursorKeys)) },
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+    ) { Text(key.label) }
 }
 
 @Composable
