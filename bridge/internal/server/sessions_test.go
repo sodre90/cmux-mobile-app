@@ -12,17 +12,26 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 )
 
-// realistic-shaped mobile.workspace.list payload: duplicates + nested groups +
-// a shell-prompt terminal surface.
+// realistic-shaped mobile.workspace.list payload: a workspace duplicated across
+// groups + top-level, a multi-pane workspace, and an empty-pane workspace.
+// Each pane object also has id + current_directory but NO terminals array, so
+// only the workspaces must be collected.
 const fakeWorkspaceList = `{
   "groups": [
     {"workspaces": [
-      {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system"}
+      {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,
+       "terminals":[{"id":"T1","current_directory":"/Users/u/prj/trading","title":"✳ Build options","is_focused":true,"is_ready":true}]}
     ]}
   ],
   "workspaces": [
-    {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system"},
-    {"id":"E43BBF04","current_directory":"/Users/u/prj/trading","preview":"u@host:~/prj/trading"}
+    {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,
+     "terminals":[{"id":"T1","current_directory":"/Users/u/prj/trading","title":"✳ Build options","is_focused":true,"is_ready":true}]},
+    {"id":"E43BBF04","current_directory":"/Users/u/prj/trading","preview":"shell","title":"~/prj/trading","has_unread":false,
+     "terminals":[
+       {"id":"T2","current_directory":"/Users/u/prj/trading","title":"~/prj/trading","is_focused":true,"is_ready":true},
+       {"id":"T3","current_directory":"/Users/u/prj/trading","title":"✳ Review PR","is_focused":false,"is_ready":false}
+     ]},
+    {"id":"EMPTY01","current_directory":"/Users/u/prj/x","preview":"empty","title":"~/prj/x","terminals":[]}
   ]
 }`
 
@@ -69,28 +78,51 @@ func TestSessionsDedupAndShape(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	var body struct {
-		Sessions []Session `json:"sessions"`
+		Workspaces []Workspace `json:"workspaces"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Sessions) != 2 {
-		t.Fatalf("want 2 deduped sessions, got %d: %+v", len(body.Sessions), body.Sessions)
+	if len(body.Workspaces) != 3 {
+		t.Fatalf("want 3 deduped workspaces, got %d: %+v", len(body.Workspaces), body.Workspaces)
 	}
-	byID := map[string]Session{}
-	for _, s := range body.Sessions {
-		byID[s.ID] = s
+	byID := map[string]Workspace{}
+	for _, w := range body.Workspaces {
+		byID[w.ID] = w
 	}
-	agent, ok := byID["882CA6F0"]
-	if !ok || agent.Kind != "agent" || agent.CWD != "/Users/u/prj/trading" {
-		t.Fatalf("agent session wrong: %+v", agent)
+	// Panes must NOT leak as top-level workspaces.
+	for _, leaked := range []string{"T1", "T2", "T3"} {
+		if _, bad := byID[leaked]; bad {
+			t.Fatalf("pane %q leaked as a workspace", leaked)
+		}
 	}
-	if agent.Title != "Build options trading system" {
-		t.Fatalf("agent title wrong: %q", agent.Title)
+	ws, ok := byID["882CA6F0"]
+	if !ok {
+		t.Fatal("missing workspace 882CA6F0")
 	}
-	term, ok := byID["E43BBF04"]
-	if !ok || term.Kind != "terminal" {
-		t.Fatalf("terminal session wrong: %+v", term)
+	if ws.CWD != "/Users/u/prj/trading" || ws.Title != "Build options" ||
+		ws.Preview != "Build options trading system" || !ws.HasUnread {
+		t.Fatalf("workspace 882CA6F0 fields wrong: %+v", ws)
+	}
+	if len(ws.Terminals) != 1 {
+		t.Fatalf("882CA6F0 want 1 pane, got %d", len(ws.Terminals))
+	}
+	p := ws.Terminals[0]
+	if p.ID != "T1" || !p.Focused || !p.Ready || p.Kind != "agent" || p.Title != "Build options" {
+		t.Fatalf("882CA6F0 pane wrong: %+v", p)
+	}
+	multi := byID["E43BBF04"]
+	if len(multi.Terminals) != 2 {
+		t.Fatalf("E43BBF04 want 2 panes, got %d", len(multi.Terminals))
+	}
+	if multi.Terminals[0].Kind != "terminal" || multi.Terminals[1].Kind != "agent" {
+		t.Fatalf("E43BBF04 pane kinds wrong: %+v", multi.Terminals)
+	}
+	if multi.Terminals[1].Focused || multi.Terminals[1].Ready {
+		t.Fatalf("E43BBF04 second pane should be unfocused+not-ready: %+v", multi.Terminals[1])
+	}
+	if empty := byID["EMPTY01"]; len(empty.Terminals) != 0 {
+		t.Fatalf("EMPTY01 want 0 panes, got %d", len(empty.Terminals))
 	}
 }
 

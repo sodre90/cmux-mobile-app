@@ -7,13 +7,27 @@ import (
 	"unicode"
 )
 
-// Session is the stable, app-facing representation of a cmux workspace/terminal.
-type Session struct {
-	ID             string `json:"id"`
-	CWD            string `json:"cwd"`
-	Title          string `json:"title"`
-	Kind           string `json:"kind"` // "agent" or "terminal"
-	NeedsAttention bool   `json:"needs_attention"`
+// Workspace is the app-facing representation of a cmux workspace and its
+// terminal surfaces (panes). Each pane's ID is a streamable terminal-surface id
+// the app opens via /terminal/{id}.
+type Workspace struct {
+	ID        string         `json:"id"`
+	CWD       string         `json:"cwd"`
+	Title     string         `json:"title"`
+	Preview   string         `json:"preview"`
+	HasUnread bool           `json:"has_unread"`
+	Terminals []TerminalPane `json:"terminals"`
+}
+
+// TerminalPane is one terminal surface within a workspace. ID is the cmux
+// terminal-surface id; Kind is a cosmetic badge derived from the title.
+type TerminalPane struct {
+	ID      string `json:"id"`
+	CWD     string `json:"cwd"`
+	Title   string `json:"title"`
+	Focused bool   `json:"focused"`
+	Ready   bool   `json:"ready"`
+	Kind    string `json:"kind"`
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -22,42 +36,44 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux unavailable"})
 		return
 	}
-	sessions, err := parseSessions(raw)
+	workspaces, err := parseWorkspaces(raw)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux parse error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces})
 }
 
-// parseSessions normalizes a mobile.workspace.list payload into deduped
-// Sessions. The payload nests workspace objects under several keys, so we walk
-// the whole tree and collect any object that carries both an "id" and a
-// "current_directory", deduping by id (first occurrence wins).
-func parseSessions(raw []byte) ([]Session, error) {
+// parseWorkspaces normalizes a mobile.workspace.list payload into Workspaces.
+// cmux nests workspace objects under several keys (top-level "workspaces" and
+// inside "groups"), so we walk the whole tree and collect any object that
+// carries a "terminals" array — that array is what distinguishes a workspace
+// from its nested terminal surfaces, which fixes the old flattening that swept
+// panes in as their own (unstreamable) entries. Deduped by id (first wins).
+func parseWorkspaces(raw []byte) ([]Workspace, error) {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := []Session{}
+	out := []Workspace{}
 	var walk func(any)
 	walk = func(node any) {
 		switch v := node.(type) {
 		case map[string]any:
 			id, hasID := stringField(v, "id")
-			cwd, hasCWD := stringField(v, "current_directory")
-			if hasID && hasCWD && !seen[id] {
+			terms, hasTerms := v["terminals"].([]any)
+			if hasID && hasTerms && !seen[id] {
 				seen[id] = true
-				title := cleanTitle(firstString(v, "preview", "title"))
-				if title == "" {
-					title = cwd
-				}
-				out = append(out, Session{
-					ID:    id,
-					CWD:   cwd,
-					Title: title,
-					Kind:  classifyKind(title),
+				cwd, _ := stringField(v, "current_directory")
+				hasUnread, _ := v["has_unread"].(bool)
+				out = append(out, Workspace{
+					ID:        id,
+					CWD:       cwd,
+					Title:     cleanTitle(firstString(v, "title")),
+					Preview:   firstString(v, "preview"),
+					HasUnread: hasUnread,
+					Terminals: parsePanes(terms),
 				})
 			}
 			for _, child := range v {
@@ -71,6 +87,35 @@ func parseSessions(raw []byte) ([]Session, error) {
 	}
 	walk(root)
 	return out, nil
+}
+
+// parsePanes maps a workspace's "terminals" array into TerminalPanes. Panes
+// without an id are skipped; an empty array yields an empty (non-nil) slice.
+func parsePanes(terms []any) []TerminalPane {
+	panes := []TerminalPane{}
+	for _, t := range terms {
+		m, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, hasID := stringField(m, "id")
+		if !hasID {
+			continue
+		}
+		cwd, _ := stringField(m, "current_directory")
+		title := cleanTitle(firstString(m, "title"))
+		focused, _ := m["is_focused"].(bool)
+		ready, _ := m["is_ready"].(bool)
+		panes = append(panes, TerminalPane{
+			ID:      id,
+			CWD:     cwd,
+			Title:   title,
+			Focused: focused,
+			Ready:   ready,
+			Kind:    classifyKind(title),
+		})
+	}
+	return panes
 }
 
 func stringField(m map[string]any, key string) (string, bool) {
