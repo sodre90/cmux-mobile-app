@@ -342,6 +342,8 @@ git commit -m "Add terminal geometry and zoom math"
 
 - [ ] **Step 1: Write the failing test**
 
+> IMPORTANT: write escape sequences with explicit unicode escapes (`\u001b` for ESC, `\u0003` for Ctrl-C). Never paste raw control bytes into source — they are invisible and get silently stripped, producing wrong assertions (a stripped ESC makes a broken arrow key).
+
 `TerminalKeysTest.kt`:
 
 ```kotlin
@@ -353,11 +355,11 @@ import org.junit.Test
 class TerminalKeysTest {
     private val map = TerminalKeys.toMap()
 
-    @Test fun arrowUpIsCsiA() = assertEquals("[A", map["↑"])
-    @Test fun pageUpIsCsi5Tilde() = assertEquals("[5~", map["PgUp"])
-    @Test fun ctrlCIsEtx() = assertEquals("", map["^C"])
-    @Test fun homeIsCsiH() = assertEquals("[H", map["Home"])
-    @Test fun endIsCsiF() = assertEquals("[F", map["End"])
+    @Test fun arrowUpIsCsiA() = assertEquals("\u001b[A", map["↑"])
+    @Test fun pageUpIsCsi5Tilde() = assertEquals("\u001b[5~", map["PgUp"])
+    @Test fun ctrlCIsEtx() = assertEquals("\u0003", map["^C"])
+    @Test fun homeIsCsiH() = assertEquals("\u001b[H", map["Home"])
+    @Test fun endIsCsiF() = assertEquals("\u001b[F", map["End"])
 }
 ```
 
