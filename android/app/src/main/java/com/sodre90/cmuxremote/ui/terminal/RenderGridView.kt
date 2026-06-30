@@ -4,13 +4,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -61,6 +65,7 @@ fun RenderGridView(
     styles: List<Style>,
     fontSizeSp: Float = 13f, // caller (TerminalScreen, Task 8) always passes the live zoom size; default only keeps the pre-Task-8 call site compiling
     colors: TerminalColors = DefaultTerminalColors,
+    wrap: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val styleMap = remember(styles) { styles.associateBy { it.id } }
@@ -84,24 +89,39 @@ fun RenderGridView(
     // The user has scrolled up from the live screen → show the jump-to-bottom FAB.
     val showJump by remember { derivedStateOf { scroll.value < scroll.maxValue - 4 } }
 
+    // High-contrast selection on the dark canvas: the bright blue highlight plus an
+    // opaque handle (Compose's default primary highlight was nearly invisible here).
+    val selectionColors = remember(colors.selection) {
+        TextSelectionColors(
+            handleColor = colors.selection.copy(alpha = 1f),
+            backgroundColor = colors.selection,
+        )
+    }
     Box(modifier = modifier.background(colors.background)) {
-        SelectionContainer {
-            // Lines are drawn at the surface's native width (softWrap=false). When the
-            // fit-to-width font is at its legibility floor — or the user has pinched in
-            // past fit — the content is wider than the viewport, so add horizontal pan
-            // alongside the vertical scroll. The Column wraps its content width (no
-            // fillMaxSize) so horizontalScroll has a range to pan over.
-            Column(modifier = Modifier.verticalScroll(scroll).horizontalScroll(hScroll)) {
-                buffer.forEachIndexed { index, line ->
-                    val cur = if (index == cursorRow) cursorCol else null
-                    Text(
-                        text = buildLine(line, styleMap, colors, cur),
-                        fontFamily = TerminalFont,
-                        fontSize = fontSizeSp.sp,
-                        lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
-                        softWrap = false,
-                        maxLines = 1,
-                    )
+        CompositionLocalProvider(LocalTextSelectionColors provides selectionColors) {
+            SelectionContainer {
+                // wrap=false: draw each row at the surface's native width (no wrap) and
+                // allow horizontal pan for the overflow when zoomed in past fit or at the
+                // legibility floor. wrap=true: reflow long rows onto extra display lines so
+                // zooming in wraps instead of sliding — the Column fills the viewport width
+                // to give Text a wrap boundary, and no horizontalScroll is attached.
+                val columnModifier = if (wrap) {
+                    Modifier.fillMaxWidth().verticalScroll(scroll)
+                } else {
+                    Modifier.verticalScroll(scroll).horizontalScroll(hScroll)
+                }
+                Column(modifier = columnModifier) {
+                    buffer.forEachIndexed { index, line ->
+                        val cur = if (index == cursorRow) cursorCol else null
+                        Text(
+                            text = buildLine(line, styleMap, colors, cur),
+                            fontFamily = TerminalFont,
+                            fontSize = fontSizeSp.sp,
+                            lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
+                            softWrap = wrap,
+                            maxLines = if (wrap) Int.MAX_VALUE else 1,
+                        )
+                    }
                 }
             }
         }

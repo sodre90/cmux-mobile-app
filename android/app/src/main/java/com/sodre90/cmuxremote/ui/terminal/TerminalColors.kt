@@ -16,5 +16,7 @@ val DefaultTerminalColors = TerminalColors(
     background = Color(0xFF1E1E2E),
     foreground = Color(0xFFCDD6F4),
     cursor = Color(0xFFF5E0DC),
-    selection = Color(0x553B4261),
+    // Translucent Catppuccin blue — clearly visible on the dark canvas while
+    // leaving the selected glyphs readable (the old slate at 33% was invisible).
+    selection = Color(0x6689B4FA),
 )

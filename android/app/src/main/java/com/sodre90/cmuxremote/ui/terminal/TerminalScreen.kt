@@ -75,12 +75,20 @@ fun TerminalScreen(
 
     // Pinch-to-zoom factor over the fit-to-width baseline (1f = exact fit).
     var userZoom by remember { mutableFloatStateOf(1f) }
+    // Word-wrap: on → zooming in reflows long rows onto extra lines; off → it stays
+    // one row per line with horizontal panning (keeps tables/TUI layouts aligned).
+    var wrap by remember { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Terminal") },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                actions = {
+                    TextButton(onClick = { wrap = !wrap }) {
+                        Text(if (wrap) "Wrap: on" else "Wrap: off")
+                    }
+                },
             )
         },
         bottomBar = {
@@ -192,6 +200,7 @@ fun TerminalScreen(
                             grid = s.grid,
                             styles = s.styles,
                             fontSizeSp = fontSizeSp,
+                            wrap = wrap,
                             modifier = Modifier.fillMaxSize().padding(8.dp),
                         )
                     }
