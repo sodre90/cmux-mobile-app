@@ -542,7 +542,7 @@ curl -sL -o /tmp/JBM.zip https://github.com/ryanoasis/nerd-fonts/releases/downlo
 mkdir -p app/src/main/res/font /Users/perdos/prj/cmux-app/THIRD_PARTY_LICENSES
 unzip -p /tmp/JBM.zip JetBrainsMonoNerdFontMono-Regular.ttf > app/src/main/res/font/jetbrains_mono_nerd_regular.ttf
 unzip -p /tmp/JBM.zip JetBrainsMonoNerdFontMono-Bold.ttf    > app/src/main/res/font/jetbrains_mono_nerd_bold.ttf
-unzip -p /tmp/JBM.zip LICENSE > /Users/perdos/prj/cmux-app/THIRD_PARTY_LICENSES/JetBrainsMono-OFL.txt
+unzip -p /tmp/JBM.zip OFL.txt > /Users/perdos/prj/cmux-app/THIRD_PARTY_LICENSES/JetBrainsMono-OFL.txt   # the v3.3.0 zip's license entry is OFL.txt, not LICENSE
 ```
 
 - [ ] **Step 2: Verify the files are valid TrueType and non-empty**
