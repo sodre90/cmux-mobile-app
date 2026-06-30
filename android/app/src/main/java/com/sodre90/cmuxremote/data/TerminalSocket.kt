@@ -31,6 +31,7 @@ class TerminalSocket(
         val ws = http.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 runCatching { BridgeJson.decodeFromString(TerminalDown.serializer(), text) }
+                    .onFailure { android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}") }
                     .getOrNull()
                     ?.let { trySend(it) }
             }

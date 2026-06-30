@@ -10,6 +10,7 @@ import com.sodre90.cmuxremote.model.TerminalUp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class TerminalUiState(
@@ -24,27 +25,34 @@ class TerminalViewModel(
 ) : ViewModel() {
 
     private val socket = container.terminalSocket(surfaceId)
-
     private val _state = MutableStateFlow(TerminalUiState())
     val state: StateFlow<TerminalUiState> = _state.asStateFlow()
+    private var job: Job? = null
 
-    init {
+    init { connect() }
+
+    /** (Re)subscribe to the terminal stream, resetting to the loading state. */
+    fun reconnect() = connect()
+
+    private fun connect() {
         val s = socket
         if (s == null) {
             _state.value = TerminalUiState(error = "Bridge not configured")
-        } else {
-            viewModelScope.launch {
-                try {
-                    s.connect().collect { frame ->
-                        val rg = frame.grid ?: return@collect
-                        _state.value = TerminalUiState(
-                            grid = RenderGridDecoder.decode(rg),
-                            styles = rg.styles,
-                        )
-                    }
-                } catch (e: Exception) {
-                    _state.value = _state.value.copy(error = e.message ?: "Terminal disconnected")
+            return
+        }
+        job?.cancel()
+        _state.value = TerminalUiState() // loading (grid == null, error == null)
+        job = viewModelScope.launch {
+            try {
+                s.connect().collect { frame ->
+                    val rg = frame.grid ?: return@collect
+                    _state.value = TerminalUiState(
+                        grid = RenderGridDecoder.decode(rg),
+                        styles = rg.styles,
+                    )
                 }
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = e.message ?: "Terminal disconnected")
             }
         }
     }
