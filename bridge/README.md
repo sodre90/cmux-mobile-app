@@ -16,18 +16,29 @@ independent work that consumes cmux's IPC contract.
 ## Architecture (v2 relay topology)
 
 ```
-Android app ────────────┐                 ┌──────────── Mac (cmux-bridge agent)
-  HTTPS / WSS            │                 │  WSS dial-out (one persistent tunnel)
-  (device client cert)   ▼                 ▼  (mac-agent client cert)
-            nginx on the home server (mutual TLS, public DNS name)
-                         │  HTTP / WS (loopback)
-                         ▼
-                    cmux-relay  ── routes by client-cert CN:
-                         │          • CN=mac-agent + /agent/tunnel → accept tunnel
-                         │          • device CN + Bearer token     → reverse-proxy
-                         │  yamux stream over the tunnel
-                         ▼
-            cmux-bridge agent ── cmux rpc / cmux events ──▶ cmux.app (unchanged)
+    ┌────────────────────────────┐
+    │        Android app         │
+    └────────────────────────────┘
+                   │  HTTPS / WSS — device client cert
+                   ▼
+    ┌────────────────────────────┐
+    │  nginx (mutual TLS edge)   │
+    │      public DNS name       │
+    └────────────────────────────┘
+                   │  HTTP / WS — loopback only
+                   ▼
+    ┌────────────────────────────┐
+    │         cmux-relay         │
+    │       (home server)        │
+    └────────────────────────────┘
+                   │  yamux stream — routed by client-cert CN
+                   ▲  (the Mac dials OUT — mac-agent client cert)
+    ┌────────────────────────────┐
+    │  cmux-bridge agent (Mac)   │
+    └────────────────────────────┘
+                   │  cmux rpc / cmux events
+                   ▼
+                   cmux.app  (unchanged)
 ```
 
 The relay multiplexes every app request as a fresh [yamux](https://github.com/hashicorp/yamux)

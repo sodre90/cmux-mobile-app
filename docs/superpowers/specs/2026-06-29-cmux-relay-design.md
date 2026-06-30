@@ -52,19 +52,19 @@ Mac dials out to is reachable from outside the home network.
 
 ```
                          home server 192.168.1.160
-                    ┌────────────────────────────────────────┐
+                    ┌─────────────────────────────────────────┐
   Android app ─────►│ nginx :443  (mTLS, your domain)         │
   (device cert      │   /agent/tunnel  ─► relay agent acceptor│
    + Bearer token)  │   /*             ─► relay app API       │
-                    │                                          │
-                    │  cmux-relay  (NEW, binds loopback)       │
-                    │   • device auth: Bearer vs token store   │
-                    │   • pairing (pair/devices) + token store │
-                    │   • ONE yamux session to the Mac         │
-                    │   • reverse-proxy each app req → stream  │
-                    │   • FCM push (own /events monitor)       │
-                    │   • 503 agent_offline when no session    │
-                    └────────────────────────────────────────┘
+                    │                                         │
+                    │  cmux-relay  (NEW, binds loopback)      │
+                    │   • device auth: Bearer vs token store  │
+                    │   • pairing (pair/devices) + token store│
+                    │   • ONE yamux session to the Mac        │
+                    │   • reverse-proxy each app req → stream │
+                    │   • FCM push (own /events monitor)      │
+                    │   • 503 agent_offline when no session   │
+                    └─────────────────────────────────────────┘
             ▲
             │ one persistent WSS  →  yamux session  (keepalive)
             ▼

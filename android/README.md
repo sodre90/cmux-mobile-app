@@ -66,14 +66,15 @@ stored in EncryptedSharedPreferences and never logged.
 
 ### 3. Device token
 
-On the Mac, pair the device to mint a long-lived bearer token:
+On the **home server** (the relay owns the device token store), pair the device
+to mint a long-lived bearer token:
 
 ```bash
-cmux-bridge pair --name phone
+cmux-relay pair --name phone
 ```
 
 Copy the printed token and paste it into the **Device token** field. Revoke later
-with `cmux-bridge devices revoke <token>`.
+with `cmux-relay devices revoke <token>`.
 
 ### Optional: server CA
 
