@@ -5,14 +5,21 @@ import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
+
+// Events-socket reconnect backoff: 1s, doubling to a 5s cap.
+private const val INITIAL_BACKOFF_MS = 1_000L
+private const val MAX_BACKOFF_MS = 5_000L
 
 /**
  * Backs the agent inbox. Pending blocking prompts come from `GET /feed/pending`
@@ -35,15 +42,28 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
     init {
         refresh()
         // Re-fetch when an agent newly needs attention. Telemetry feed events
-        // (PreToolUse, etc.) are ignored so we don't hammer feed.list.
+        // (PreToolUse, etc.) are ignored so we don't hammer feed.list. The
+        // socket is dropped when the app is backgrounded, so reconnect with
+        // backoff and re-sync pending items after each gap instead of dying on
+        // the first disconnect.
         events?.let { e ->
             viewModelScope.launch {
-                try {
-                    e.connect().collect { frame ->
-                        if (frame.type == "feed" && frame.needsAttention) refresh()
+                var backoff = INITIAL_BACKOFF_MS
+                while (isActive) {
+                    try {
+                        e.connect().collect { frame ->
+                            backoff = INITIAL_BACKOFF_MS
+                            if (frame.type == "feed" && frame.needsAttention) refresh()
+                        }
+                    } catch (ex: CancellationException) {
+                        throw ex
+                    } catch (_: Exception) {
+                        // Transient drop; reconnect below.
                     }
-                } catch (ex: Exception) {
-                    _error.value = ex.message ?: "Events disconnected"
+                    if (!isActive) break
+                    delay(backoff)
+                    backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
+                    refresh() // catch anything that changed while disconnected
                 }
             }
         }
