@@ -30,6 +30,21 @@ func feedMethod(kind string) (string, bool) {
 	return "", false
 }
 
+// handleFeedPending returns the agent's pending blocking prompts by forwarding
+// cmux's feed.list with pending_only. The result is passed through verbatim so
+// the app receives the full question structure (request_id, questions[].options[],
+// question_multi_select) it needs to render choices and reply.
+func (s *Server) handleFeedPending(w http.ResponseWriter, r *http.Request) {
+	raw, err := s.cmux.Rpc(r.Context(), "feed.list", map[string]any{"pending_only": true})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux feed.list failed"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
 func (s *Server) handleFeedReply(w http.ResponseWriter, r *http.Request) {
 	var fr FeedReply
 	if err := json.NewDecoder(r.Body).Decode(&fr); err != nil {

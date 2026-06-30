@@ -30,6 +30,7 @@ func (s *Server) routes(wrap func(http.Handler) http.Handler, includeRegister bo
 	mux.Handle("GET /sessions", wrap(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("GET /events", wrap(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /terminal/{id}", wrap(http.HandlerFunc(s.handleTerminal)))
+	mux.Handle("GET /feed/pending", wrap(http.HandlerFunc(s.handleFeedPending)))
 	mux.Handle("POST /feed/{id}/reply", wrap(http.HandlerFunc(s.handleFeedReply)))
 	if includeRegister {
 		mux.Handle("POST /devices/register", wrap(http.HandlerFunc(s.handleDeviceRegister)))

@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.inbox
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,10 +12,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -22,12 +23,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.sodre90.cmuxremote.model.FeedOption
+import com.sodre90.cmuxremote.model.FeedQuestion
+import com.sodre90.cmuxremote.model.PendingFeedItem
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,6 +46,7 @@ fun InboxScreen(
             TopAppBar(
                 title = { Text("Agent inbox") },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                actions = { TextButton(onClick = vm::refresh) { Text("Refresh") } },
             )
         },
     ) { inner ->
@@ -57,7 +61,9 @@ fun InboxScreen(
                     }
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(items, key = { it.feedId }) { item -> InboxRow(item, vm::reply) }
+                        items(items, key = { it.id }) { item ->
+                            InboxRow(item) { labels -> vm.reply(item, labels) }
+                        }
                     }
                 }
             }
@@ -67,38 +73,87 @@ fun InboxScreen(
 
 @Composable
 private fun InboxRow(
-    item: AttentionItem,
-    onReply: (AttentionItem, ReplyDecision, String) -> Unit,
+    item: PendingFeedItem,
+    onSend: (List<String>) -> Unit,
 ) {
+    // cmux usually populates questions[]; fall back to the flat question_options.
+    val questions = remember(item.id) {
+        item.questions.ifEmpty {
+            if (item.questionOptions.isNotEmpty()) {
+                listOf(FeedQuestion(id = "q0", multiSelect = item.questionMultiSelect, options = item.questionOptions))
+            } else {
+                emptyList()
+            }
+        }
+    }
+    // Selection state per option, keyed "<questionId>|<optionId>".
+    val selected = remember(item.id) { mutableStateMapOf<String, Boolean>() }
+    fun key(q: FeedQuestion, o: FeedOption) = "${q.id}|${o.id}"
+    fun toggle(q: FeedQuestion, o: FeedOption) {
+        if (q.multiSelect) {
+            selected[key(q, o)] = !(selected[key(q, o)] ?: false)
+        } else {
+            q.options.forEach { selected[key(q, it)] = (it.id == o.id) }
+        }
+    }
+
+    val ready = questions.all { q -> q.options.isEmpty() || q.options.any { selected[key(q, it)] == true } }
+    val agent = item.cwd.substringAfterLast('/').ifBlank { item.title.ifBlank { "agent" } }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(
-                text = item.title.ifBlank { item.kind.ifBlank { "Prompt" } },
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = item.kind,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp),
-            )
-            if (item.kind == "question") {
-                var answer by remember(item.feedId) { mutableStateOf("") }
-                OutlinedTextField(
-                    value = answer,
-                    onValueChange = { answer = it },
-                    label = { Text("answer") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(
-                    onClick = { onReply(item, ReplyDecision.ANSWER, answer) },
-                    modifier = Modifier.padding(top = 8.dp),
-                ) { Text("Reply") }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onReply(item, ReplyDecision.APPROVE, "") }) { Text("Approve") }
-                    OutlinedButton(onClick = { onReply(item, ReplyDecision.DENY, "") }) { Text("Deny") }
+            Text(text = agent, style = MaterialTheme.typography.titleMedium)
+            questions.forEach { q ->
+                val heading = q.prompt.ifBlank { q.header }
+                if (heading.isNotBlank()) {
+                    Text(
+                        text = heading,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                    )
                 }
+                q.options.forEach { o ->
+                    OptionRow(o, selected[key(q, o)] == true, q.multiSelect) { toggle(q, o) }
+                }
+            }
+            Button(
+                onClick = {
+                    val labels = questions.flatMap { q ->
+                        q.options.filter { selected[key(q, it)] == true }.map { it.label }
+                    }
+                    onSend(labels)
+                },
+                enabled = ready,
+                modifier = Modifier.padding(top = 10.dp),
+            ) { Text("Send reply") }
+        }
+    }
+}
+
+@Composable
+private fun OptionRow(
+    option: FeedOption,
+    selected: Boolean,
+    multi: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        if (multi) {
+            Checkbox(checked = selected, onCheckedChange = { onClick() })
+        } else {
+            RadioButton(selected = selected, onClick = onClick)
+        }
+        Column(modifier = Modifier.padding(start = 4.dp, top = 12.dp)) {
+            Text(text = option.label, style = MaterialTheme.typography.bodyLarge)
+            if (option.description.isNotBlank()) {
+                Text(
+                    text = option.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

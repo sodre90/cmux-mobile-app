@@ -89,3 +89,44 @@ data class FeedReply(
     @SerialName("request_id") val requestId: String,
     val params: JsonObject,
 )
+
+/** One selectable choice within a [FeedQuestion]. cmux replies with the [label]. */
+@Serializable
+data class FeedOption(
+    val id: String = "",
+    val label: String = "",
+    val description: String = "",
+)
+
+/** A single question inside an AskUserQuestion prompt; an item may carry several. */
+@Serializable
+data class FeedQuestion(
+    val id: String = "",
+    val header: String = "",
+    val prompt: String = "",
+    @SerialName("multi_select") val multiSelect: Boolean = false,
+    val options: List<FeedOption> = emptyList(),
+)
+
+/**
+ * A pending blocking prompt from `GET /feed/pending` (cmux `feed.list pending_only`).
+ * [requestId] is what [FeedReply] must echo back — not the event feed id. For
+ * `kind == "question"` the reply is `selections`: the chosen options' labels.
+ */
+@Serializable
+data class PendingFeedItem(
+    val id: String = "",
+    @SerialName("request_id") val requestId: String = "",
+    val kind: String = "",
+    val status: String = "",
+    val title: String = "",
+    val cwd: String = "",
+    @SerialName("workstream_id") val workstreamId: String = "",
+    @SerialName("question_multi_select") val questionMultiSelect: Boolean = false,
+    @SerialName("question_options") val questionOptions: List<FeedOption> = emptyList(),
+    val questions: List<FeedQuestion> = emptyList(),
+)
+
+/** Envelope returned by `GET /feed/pending`. */
+@Serializable
+data class PendingFeedResponse(val items: List<PendingFeedItem> = emptyList())

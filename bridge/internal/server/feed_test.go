@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,6 +86,41 @@ func TestFeedMissingRequestID400(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(logPath); len(data) != 0 {
 		t.Fatalf("cmux must not be called on validation failure; log:\n%s", data)
+	}
+}
+
+func TestFeedPendingListsItems(t *testing.T) {
+	// The agent must surface the full question structure (request_id, options)
+	// so the app can reply; the endpoint passes cmux feed.list through verbatim.
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"question","status":"pending","title":"AskUserQuestion","question_multi_select":false,"questions":[{"id":"q0","prompt":"Pick","options":[{"id":"opt0","label":"A"},{"id":"opt1","label":"B"}]}]}]}'
+`
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, script)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/feed/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	for _, want := range []string{"REQ1", "question", "opt0", "AskUserQuestion"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("response missing %q; got:\n%s", want, body)
+		}
+	}
+	logData, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(logData), "feed.list") || !strings.Contains(string(logData), "pending_only") {
+		t.Fatalf("cmux not called with feed.list pending_only; got:\n%s", logData)
 	}
 }
 

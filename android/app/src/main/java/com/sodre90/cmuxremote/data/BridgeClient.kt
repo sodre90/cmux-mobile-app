@@ -2,6 +2,8 @@ package com.sodre90.cmuxremote.data
 
 import com.sodre90.cmuxremote.model.BridgeJson
 import com.sodre90.cmuxremote.model.FeedReply
+import com.sodre90.cmuxremote.model.PendingFeedItem
+import com.sodre90.cmuxremote.model.PendingFeedResponse
 import com.sodre90.cmuxremote.model.RegisterDeviceRequest
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.WorkspacesResponse
@@ -43,6 +45,15 @@ class BridgeClient(
             RegisterDeviceRequest(fcmToken),
         )
         post("$root/devices/register", payload)
+    }
+
+    suspend fun pendingFeed(): List<PendingFeedItem> = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$root/feed/pending").get().build()
+        http.newCall(request).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw BridgeException(resp.code, body)
+            BridgeJson.decodeFromString(PendingFeedResponse.serializer(), body).items
+        }
     }
 
     suspend fun replyFeed(feedId: String, reply: FeedReply) {

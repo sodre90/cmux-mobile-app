@@ -3,49 +3,44 @@ package com.sodre90.cmuxremote.ui.inbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
-import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
+import com.sodre90.cmuxremote.model.PendingFeedItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
-/** A pending agent prompt awaiting the user. */
-data class AttentionItem(
-    val feedId: String,
-    val kind: String,
-    val title: String,
-    val workspaceId: String?,
-)
-
-enum class ReplyDecision { APPROVE, DENY, ANSWER }
-
+/**
+ * Backs the agent inbox. Pending blocking prompts come from `GET /feed/pending`
+ * (cmux `feed.list`), which carries the real `request_id` and the choosable
+ * options the user must pick from — the event stream has neither. The live
+ * `/events` socket is used only as a trigger to re-fetch when a new prompt
+ * appears; the prompt content always comes from a fresh pending-feed fetch.
+ */
 class InboxViewModel(container: AppContainer) : ViewModel() {
 
     private val client = container.bridgeClient()
     private val events = container.eventsSocket()
 
-    private val _items = MutableStateFlow<List<AttentionItem>>(emptyList())
-    val items: StateFlow<List<AttentionItem>> = _items.asStateFlow()
+    private val _items = MutableStateFlow<List<PendingFeedItem>>(emptyList())
+    val items: StateFlow<List<PendingFeedItem>> = _items.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
     init {
-        val e = events
-        if (e == null) {
-            _error.value = "Bridge not configured"
-        } else {
+        refresh()
+        // Re-fetch when an agent newly needs attention. Telemetry feed events
+        // (PreToolUse, etc.) are ignored so we don't hammer feed.list.
+        events?.let { e ->
             viewModelScope.launch {
                 try {
                     e.connect().collect { frame ->
-                        val id = frame.feedId
-                        if (frame.type == "feed" && id != null) {
-                            if (frame.needsAttention) add(frame) else remove(id)
-                        }
+                        if (frame.type == "feed" && frame.needsAttention) refresh()
                     }
                 } catch (ex: Exception) {
                     _error.value = ex.message ?: "Events disconnected"
@@ -54,39 +49,30 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun add(frame: EventFrame) {
-        val item = AttentionItem(
-            feedId = frame.feedId!!,
-            kind = frame.kind.orEmpty(),
-            title = frame.title.orEmpty(),
-            workspaceId = frame.workspaceId,
-        )
-        _items.update { cur -> if (cur.any { it.feedId == item.feedId }) cur else cur + item }
-    }
-
-    private fun remove(feedId: String) {
-        _items.update { it.filterNot { x -> x.feedId == feedId } }
-    }
-
-    fun reply(item: AttentionItem, decision: ReplyDecision, text: String = "") {
+    fun refresh() {
         val c = client ?: run { _error.value = "Bridge not configured"; return }
-        // The bridge reads request_id from the body; cmux's exact reply param
-        // names are unconfirmed, so feed_id is used as request_id for now.
-        val replyKind = when (item.kind) {
-            "permissionRequest" -> "permission"
-            "question" -> "question"
-            "exitPlan" -> "exitPlan"
-            else -> item.kind
+        viewModelScope.launch {
+            try {
+                // "question" (AskUserQuestion) is the only replyable kind cmux
+                // currently surfaces as a pending feed item.
+                _items.value = c.pendingFeed().filter { it.kind == "question" }
+                _error.value = null
+            } catch (ex: Exception) {
+                _error.value = ex.message ?: "Failed to load inbox"
+            }
         }
-        val params = when (decision) {
-            ReplyDecision.APPROVE -> buildJsonObject { put("decision", "approve") }
-            ReplyDecision.DENY -> buildJsonObject { put("decision", "deny") }
-            ReplyDecision.ANSWER -> buildJsonObject { put("answer", text) }
+    }
+
+    /** Answer a question item with the labels of the chosen options. */
+    fun reply(item: PendingFeedItem, selections: List<String>) {
+        val c = client ?: run { _error.value = "Bridge not configured"; return }
+        val params = buildJsonObject {
+            putJsonArray("selections") { selections.forEach { add(it) } }
         }
         viewModelScope.launch {
             try {
-                c.replyFeed(item.feedId, FeedReply(replyKind, item.feedId, params))
-                remove(item.feedId)
+                c.replyFeed(item.id, FeedReply("question", item.requestId, params))
+                _items.update { cur -> cur.filterNot { it.id == item.id } }
             } catch (ex: Exception) {
                 _error.value = ex.message ?: "Reply failed"
             }
