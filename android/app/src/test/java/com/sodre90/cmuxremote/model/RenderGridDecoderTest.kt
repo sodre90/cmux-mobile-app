@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -84,5 +85,38 @@ class RenderGridDecoderTest {
     fun scrollbackEmptyWhenAbsent() {
         val d = RenderGridDecoder.decode(grid())
         assertTrue(d.scrollbackLines.isEmpty())
+    }
+
+    private fun decodeWithModes(modes: String) = RenderGridDecoder.decode(
+        BridgeJson.decodeFromString(
+            RenderGrid.serializer(),
+            """{"columns":1,"rows":1,"modes":$modes}""",
+        ),
+    )
+
+    @Test
+    fun detectsApplicationCursorKeysFromDecckmOn() {
+        assertTrue(decodeWithModes("""[{"ansi":false,"code":1,"on":true}]""").applicationCursorKeys)
+    }
+
+    @Test
+    fun decckmResetMeansNormalCursorKeys() {
+        assertFalse(decodeWithModes("""[{"ansi":false,"code":1,"on":false}]""").applicationCursorKeys)
+    }
+
+    @Test
+    fun ansiModeOneIsNotDecckm() {
+        // ANSI mode 1 is distinct from DEC-private mode 1 (DECCKM); only the latter counts.
+        assertFalse(decodeWithModes("""[{"ansi":true,"code":1,"on":true}]""").applicationCursorKeys)
+    }
+
+    @Test
+    fun otherDecModesDoNotEnableApplicationCursorKeys() {
+        assertFalse(decodeWithModes("""[{"ansi":false,"code":25,"on":true}]""").applicationCursorKeys)
+    }
+
+    @Test
+    fun noModesMeansNormalCursorKeys() {
+        assertFalse(RenderGridDecoder.decode(grid()).applicationCursorKeys)
     }
 }

@@ -3,8 +3,11 @@ package com.sodre90.cmuxremote.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 /**
  * The `cmux.render-grid.v1` terminal snapshot: a sparse, style-run encoding of
@@ -88,7 +91,24 @@ data class DecodedGrid(
     val lines: List<DecodedLine>,
     val cursor: Cursor?,
     val scrollbackLines: List<DecodedLine> = emptyList(),
+    // DECCKM state, so the key bar can send the right arrow/Home/End encoding.
+    val applicationCursorKeys: Boolean = false,
 )
+
+/**
+ * True when DECCKM (DEC private mode 1, "application cursor keys") is set: arrow
+ * and Home/End keys must then be sent as SS3 (`ESC O x`) rather than CSI
+ * (`ESC [ x`). cmux reports each mode as `{"ansi":bool,"code":int,"on":bool}`,
+ * where a DEC-private mode carries `ansi=false`; we want mode 1 present and on.
+ */
+internal fun applicationCursorKeysEnabled(modes: List<JsonElement>): Boolean =
+    modes.any { element ->
+        val obj = element as? JsonObject ?: return@any false
+        val ansi = (obj["ansi"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val code = (obj["code"] as? JsonPrimitive)?.intOrNull
+        val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
+        !ansi && code == 1 && on
+    }
 
 object RenderGridDecoder {
     private const val BLANK = ' '
@@ -104,7 +124,10 @@ object RenderGridDecoder {
             if (sbRows == 0 || grid.scrollbackSpans.isEmpty()) emptyList()
             else layout(grid.scrollbackSpans, sbRows, cols)
 
-        return DecodedGrid(cols, rowCount, lines, grid.cursor, scrollback)
+        return DecodedGrid(
+            cols, rowCount, lines, grid.cursor, scrollback,
+            applicationCursorKeys = applicationCursorKeysEnabled(grid.modes),
+        )
     }
 
     /** Lay [spans] onto a dense [rowCount] x [cols] grid of cells (width-1 chars). */

@@ -101,7 +101,10 @@ fun TerminalScreen(
                     WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom),
                 ),
             ) {
-                KeyBar(onKey = vm::sendText)
+                KeyBar(
+                    applicationCursorKeys = state.grid?.applicationCursorKeys ?: false,
+                    onKey = vm::sendText,
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -211,7 +214,7 @@ fun TerminalScreen(
 }
 
 @Composable
-private fun KeyBar(onKey: (String) -> Unit) {
+private fun KeyBar(applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -219,8 +222,10 @@ private fun KeyBar(onKey: (String) -> Unit) {
             .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        TerminalKeys.forEach { (label, seq) ->
-            OutlinedButton(onClick = { onKey(seq) }) { Text(label) }
+        TerminalKeys.forEach { key ->
+            OutlinedButton(onClick = { onKey(key.sequence(applicationCursorKeys)) }) {
+                Text(key.label)
+            }
         }
     }
 }
