@@ -10,21 +10,30 @@ documented CLI** (`cmux rpc` / `cmux events`) — no cmux source is copied and n
 cmux socket password is stored.
 
 ```
- ┌─────────────┐      HTTPS / WSS        ┌────────────────────┐     WSS dial-out
- │  Android app │ ───  (device cert)  ──▶ │  nginx  (mutual TLS │ ◀── (mac-agent  ─┐
- │  (Compose)   │ ◀──  Bearer token   ─── │  public DNS name)   │      client cert) │
- └─────────────┘                         └─────────┬──────────┘                   │
-                                          HTTP / WS │ (loopback)                   │
-                                                    ▼                              │
-                                              ┌───────────┐   one persistent       │
-                                              │ cmux-relay │   yamux-over-WSS  ─────┘
-                                              │ (home srv) │   tunnel
-                                              └─────┬─────┘
-                                                    │ routes by client-cert CN
-                                                    ▼
-                                       ┌──────────────────────────┐   cmux rpc /
-                                       │  cmux-bridge agent (Mac)  │ ─ cmux events ─▶ cmux.app
-                                       └──────────────────────────┘                  (unchanged)
+    ┌────────────────────────────┐
+    │        Android app         │
+    │         (Compose)          │
+    └────────────────────────────┘
+                   │  HTTPS / WSS — mTLS device cert + bearer token
+                   ▼
+    ┌────────────────────────────┐
+    │  nginx (mutual TLS edge)   │
+    │      public DNS name       │
+    └────────────────────────────┘
+                   │  HTTP / WS — loopback only
+                   ▼
+    ┌────────────────────────────┐
+    │         cmux-relay         │
+    │       (home server)        │
+    └────────────────────────────┘
+                   │  persistent yamux-over-WSS tunnel
+                   ▲  (the Mac dials OUT — mac-agent client cert)
+    ┌────────────────────────────┐
+    │  cmux-bridge agent (Mac)   │
+    └────────────────────────────┘
+                   │  cmux rpc / cmux events
+                   ▼
+                   cmux.app  (unchanged)
 ```
 
 When the Mac is offline the relay returns `503 {"error":"agent_offline"}`; when it
