@@ -5,6 +5,7 @@ import com.sodre90.cmuxremote.model.Cell
 import com.sodre90.cmuxremote.model.DecodedLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class RenderGridViewTest {
@@ -68,5 +69,26 @@ class RenderGridViewTest {
     @Test fun ruleRejectsBlankRow() {
         val l = DecodedLine("   ".map { Cell(it, 0) })
         assertEquals(false, isHorizontalRule(l))
+    }
+
+    @Test fun wrapDropsPureBorderRow() {
+        val l = DecodedLine("──────────".map { Cell(it, 0) })
+        assertNull(wrapModeLine(l, cursorColumn = null))
+    }
+
+    @Test fun wrapStripsTitledSeparatorToLabel() {
+        val l = DecodedLine("──────── Title ────────".map { Cell(it, 0) })
+        assertEquals("Title", wrapModeLine(l, cursorColumn = null)!!.text.trim())
+    }
+
+    @Test fun wrapKeepsListBulletDash() {
+        // A short dash run (a bullet) is content, not decoration — keep it.
+        val l = DecodedLine("- a b".map { Cell(it, 0) })
+        assertEquals("- a b", wrapModeLine(l, cursorColumn = null)!!.text)
+    }
+
+    @Test fun wrapNeverDropsCursorRow() {
+        val l = DecodedLine("──────────".map { Cell(it, 0) })
+        assertNotNull(wrapModeLine(l, cursorColumn = 2))
     }
 }

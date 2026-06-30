@@ -113,20 +113,21 @@ fun RenderGridView(
                 Column(modifier = columnModifier) {
                     buffer.forEachIndexed { index, line ->
                         val cur = if (index == cursorRow) cursorCol else null
-                        // In wrap mode, drop each row's trailing padding blanks so they
-                        // don't wrap onto extra lines and leave a ragged dark right edge.
-                        val rendered = if (wrap) trimTrailingBlanks(line, cur) else line
-                        // A full-width box-drawing border/separator row (e.g. the agent's
-                        // prompt box) would wrap into ugly stacked fragments; keep such rule
-                        // rows on one clipped line so they read as a single clean separator.
-                        val lineWrap = wrap && !isHorizontalRule(rendered)
+                        // In wrap mode, reshape the row: drop pure box-drawing borders, strip
+                        // the rule glyphs off a titled separator (keeping its label), and trim
+                        // trailing padding blanks. A null result means the row is dropped.
+                        val rendered = if (wrap) {
+                            wrapModeLine(line, cur) ?: return@forEachIndexed
+                        } else {
+                            line
+                        }
                         Text(
                             text = buildLine(rendered, styleMap, colors, cur),
                             fontFamily = TerminalFont,
                             fontSize = fontSizeSp.sp,
                             lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
-                            softWrap = lineWrap,
-                            maxLines = if (lineWrap) Int.MAX_VALUE else 1,
+                            softWrap = wrap,
+                            maxLines = if (wrap) Int.MAX_VALUE else 1,
                         )
                     }
                 }
@@ -159,6 +160,40 @@ internal fun isHorizontalRule(line: DecodedLine): Boolean {
         sawRule = true
     }
     return sawRule
+}
+
+/** Longest run of consecutive rule glyphs — a run of 4+ marks drawn decoration. */
+private fun maxRuleRun(line: DecodedLine): Int {
+    var max = 0
+    var run = 0
+    for (cell in line.cells) {
+        if (cell.char in RuleChars) {
+            run++
+            if (run > max) max = run
+        } else {
+            run = 0
+        }
+    }
+    return max
+}
+
+/**
+ * Reshapes a row for wrap mode, or returns null to drop it:
+ *  - a row carrying the cursor is only trailing-trimmed (kept intact for the cursor);
+ *  - a pure border/separator row is dropped;
+ *  - a titled separator (`──── label ────`, a 4+ rule-glyph run around text) keeps
+ *    only the label, dropping the box decoration that would otherwise wrap badly;
+ *  - everything else is just trailing-trimmed.
+ */
+internal fun wrapModeLine(line: DecodedLine, cursorColumn: Int?): DecodedLine? {
+    if (cursorColumn != null && cursorColumn in line.cells.indices) {
+        return trimTrailingBlanks(line, cursorColumn)
+    }
+    if (isHorizontalRule(line)) return null
+    if (maxRuleRun(line) >= 4) {
+        return trimTrailingBlanks(DecodedLine(line.cells.filterNot { it.char in RuleChars }), null)
+    }
+    return trimTrailingBlanks(line, null)
 }
 
 /**
