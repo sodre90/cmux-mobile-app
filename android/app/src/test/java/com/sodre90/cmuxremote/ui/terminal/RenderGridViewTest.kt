@@ -54,4 +54,19 @@ class RenderGridViewTest {
         val l = DecodedLine(listOf(Cell(' ', 0), Cell(' ', 0)))
         assertEquals("", trimTrailingBlanks(l, cursorColumn = null).text)
     }
+
+    @Test fun ruleDetectsBoxBorderRow() {
+        val l = DecodedLine("╭────────╮".map { Cell(it, 0) })
+        assertEquals(true, isHorizontalRule(l))
+    }
+
+    @Test fun ruleRejectsTextRow() {
+        val l = DecodedLine("│ hi │".map { Cell(it, 0) })
+        assertEquals(false, isHorizontalRule(l))
+    }
+
+    @Test fun ruleRejectsBlankRow() {
+        val l = DecodedLine("   ".map { Cell(it, 0) })
+        assertEquals(false, isHorizontalRule(l))
+    }
 }

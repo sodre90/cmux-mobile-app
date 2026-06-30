@@ -116,13 +116,17 @@ fun RenderGridView(
                         // In wrap mode, drop each row's trailing padding blanks so they
                         // don't wrap onto extra lines and leave a ragged dark right edge.
                         val rendered = if (wrap) trimTrailingBlanks(line, cur) else line
+                        // A full-width box-drawing border/separator row (e.g. the agent's
+                        // prompt box) would wrap into ugly stacked fragments; keep such rule
+                        // rows on one clipped line so they read as a single clean separator.
+                        val lineWrap = wrap && !isHorizontalRule(rendered)
                         Text(
                             text = buildLine(rendered, styleMap, colors, cur),
                             fontFamily = TerminalFont,
                             fontSize = fontSizeSp.sp,
                             lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
-                            softWrap = wrap,
-                            maxLines = if (wrap) Int.MAX_VALUE else 1,
+                            softWrap = lineWrap,
+                            maxLines = if (lineWrap) Int.MAX_VALUE else 1,
                         )
                     }
                 }
@@ -135,6 +139,26 @@ fun RenderGridView(
             ) { Text("▼") }
         }
     }
+}
+
+// Box-drawing horizontals, corners and junctions, plus ASCII rule chars. A row made
+// solely of these (and blanks) is a border/separator, not wrappable prose.
+private val RuleChars = setOf(
+    '─', '━', '┄', '┅', '┈', '┉', '╌', '╍', '═', '╾', '╼', '-', '=',
+    '╭', '╮', '╰', '╯', '┌', '┐', '└', '┘',
+    '├', '┤', '┬', '┴', '┼', '╞', '╡', '╪',
+    '╔', '╗', '╚', '╝', '╠', '╣', '╦', '╩', '╬',
+)
+
+/** True if the row's only non-blank glyphs are box-drawing/ASCII rule characters. */
+internal fun isHorizontalRule(line: DecodedLine): Boolean {
+    var sawRule = false
+    for (cell in line.cells) {
+        if (cell.char == ' ') continue
+        if (cell.char !in RuleChars) return false
+        sawRule = true
+    }
+    return sawRule
 }
 
 /**
