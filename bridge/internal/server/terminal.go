@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
@@ -55,7 +56,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		log.Printf("terminal %s: initial write failed after %s: %v", id, time.Since(start), err)
 		return
 	}
-	last := fr.Seq
+	// cmux's top-level seq (and render_grid.state_seq) is always 0, so we can't
+	// gate on it — instead we forward whenever the render-grid bytes change.
+	lastGrid := fr.Grid
 
 	// Read loop (client input) runs in its own goroutine; it only reads.
 	go s.terminalReadLoop(ctx, cancel, c, id)
@@ -74,10 +77,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 				log.Printf("terminal %s: poll replay failed after %s: %v", id, time.Since(start), err)
 				return
 			}
-			if next.Seq == last {
+			if bytes.Equal(next.Grid, lastGrid) {
 				continue
 			}
-			last = next.Seq
+			lastGrid = next.Grid
 			next.Type = "output"
 			_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.WriteJSON(next); err != nil {

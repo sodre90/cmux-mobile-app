@@ -24,6 +24,23 @@ JSON
 esac
 `
 
+// fakeChangingTerminalScript answers replay with content that changes on every
+// call while keeping seq constant at 0 — mirroring real cmux, whose top-level
+// seq (and render_grid.state_seq) never increments. The poll loop must detect
+// the content change itself rather than gating on seq.
+const fakeChangingTerminalScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c 'mobile.terminal.replay' "$CMUX_FAKE_LOG")
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"row_spans":[{"row":0,"text":"line-$n"}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
 func wsConnect(t *testing.T, srvURL, path, tok string) *websocket.Conn {
 	t.Helper()
 	u := "ws" + strings.TrimPrefix(srvURL, "http") + path
@@ -98,6 +115,41 @@ func TestTerminalInputDispatched(t *testing.T) {
 	}
 	data, _ := os.ReadFile(logPath)
 	t.Fatalf("input rpc not dispatched; log:\n%s", data)
+}
+
+func TestTerminalForwardsContentChange(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeChangingTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	// First frame: the full replay.
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var replay TerminalDown
+	if err := c.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Type != "replay" {
+		t.Fatalf("first frame must be replay, got %q", replay.Type)
+	}
+
+	// The screen content changes on the next poll while seq stays 0. The poll
+	// loop must forward it as an output frame rather than freezing on seq.
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var out TerminalDown
+	if err := c.ReadJSON(&out); err != nil {
+		t.Fatalf("expected an output frame after content change, got: %v", err)
+	}
+	if out.Type != "output" {
+		t.Fatalf("second frame must be output, got %q", out.Type)
+	}
+	if !strings.Contains(string(out.Grid), "line-") {
+		t.Fatalf("output grid missing changed content: %s", out.Grid)
+	}
 }
 
 func TestTerminalMissingIDRejected(t *testing.T) {
