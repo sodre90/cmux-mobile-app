@@ -126,7 +126,9 @@ private fun WorkspaceCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = ws.preview.ifBlank { ws.title.ifBlank { ws.cwd } },
+                            // The workspace name, not the agent-status preview — the
+                            // attention stripe already conveys waiting/permission state.
+                            text = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
