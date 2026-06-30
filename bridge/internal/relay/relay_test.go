@@ -46,8 +46,9 @@ func waitFor(t *testing.T, cond func() bool) {
 }
 
 func TestRelayEndToEndSessions(t *testing.T) {
-	// Agent side: trusted handler backed by a fake cmux returning one workspace.
-	const ws = `{"workspaces":[{"id":"E43BBF04","current_directory":"/x","preview":"u@h:~/x"}]}`
+	// Agent side: trusted handler backed by a fake cmux returning one workspace
+	// with one terminal pane (a workspace always carries a terminals array).
+	const ws = `{"workspaces":[{"id":"E43BBF04","current_directory":"/x","preview":"u@h:~/x","terminals":[{"id":"E43BBF04-T1","current_directory":"/x","title":"~/x","is_focused":true,"is_ready":true}]}]}`
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\ncat <<'JSON'\n"+ws+"\nJSON\n")
 	agentSrv := server.New(config.Config{}, &cmux.Client{Bin: bin}, nil)
 	const relayTok = "relay-secret"
@@ -86,13 +87,13 @@ func TestRelayEndToEndSessions(t *testing.T) {
 		t.Fatalf("want 200 through relay, got %d", resp.StatusCode)
 	}
 	var body struct {
-		Sessions []map[string]any `json:"sessions"`
+		Workspaces []map[string]any `json:"workspaces"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Sessions) != 1 {
-		t.Fatalf("want 1 session, got %d", len(body.Sessions))
+	if len(body.Workspaces) != 1 {
+		t.Fatalf("want 1 workspace, got %d", len(body.Workspaces))
 	}
 
 	// A device with no bearer is rejected before reaching the agent.
