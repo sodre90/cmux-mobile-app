@@ -113,8 +113,11 @@ fun RenderGridView(
                 Column(modifier = columnModifier) {
                     buffer.forEachIndexed { index, line ->
                         val cur = if (index == cursorRow) cursorCol else null
+                        // In wrap mode, drop each row's trailing padding blanks so they
+                        // don't wrap onto extra lines and leave a ragged dark right edge.
+                        val rendered = if (wrap) trimTrailingBlanks(line, cur) else line
                         Text(
-                            text = buildLine(line, styleMap, colors, cur),
+                            text = buildLine(rendered, styleMap, colors, cur),
                             fontFamily = TerminalFont,
                             fontSize = fontSizeSp.sp,
                             lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
@@ -132,6 +135,24 @@ fun RenderGridView(
             ) { Text("▼") }
         }
     }
+}
+
+/**
+ * Drops a row's trailing padding blanks (space + default style 0, as the decoder
+ * fills empty cells) so wrapping doesn't push them onto extra display lines. Keeps
+ * styled trailing spaces (e.g. a colored status bar that extends to the edge) and
+ * never trims past the cursor cell, so it can still be drawn. A fully blank row
+ * collapses to an empty line, preserving its vertical slot.
+ */
+internal fun trimTrailingBlanks(line: DecodedLine, cursorColumn: Int?): DecodedLine {
+    val cells = line.cells
+    var last = -1
+    for (i in cells.indices) {
+        if (cells[i].char != ' ' || cells[i].styleId != 0) last = i
+    }
+    val cur = cursorColumn?.takeIf { it in cells.indices } ?: -1
+    last = maxOf(last, cur)
+    return if (last >= cells.size - 1) line else DecodedLine(cells.subList(0, last + 1))
 }
 
 /** Groups consecutive same-style cells into styled runs; the cursor cell is inverted. */

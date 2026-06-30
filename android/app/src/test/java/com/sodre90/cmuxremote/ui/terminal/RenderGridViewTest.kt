@@ -28,4 +28,30 @@ class RenderGridViewTest {
         assertEquals(colors.cursor, span!!.item.background)
         assertEquals(colors.background, span.item.color)
     }
+
+    @Test fun trimDropsTrailingDefaultBlanks() {
+        val l = DecodedLine(listOf(Cell('a', 0), Cell('b', 0), Cell(' ', 0), Cell(' ', 0)))
+        assertEquals("ab", trimTrailingBlanks(l, cursorColumn = null).text)
+    }
+
+    @Test fun trimKeepsInteriorBlanks() {
+        val l = DecodedLine(listOf(Cell('a', 0), Cell(' ', 0), Cell('b', 0), Cell(' ', 0)))
+        assertEquals("a b", trimTrailingBlanks(l, cursorColumn = null).text)
+    }
+
+    @Test fun trimKeepsStyledTrailingSpace() {
+        // A trailing space carrying a non-default style (e.g. a colored bar) stays.
+        val l = DecodedLine(listOf(Cell('a', 0), Cell(' ', 7)))
+        assertEquals(2, trimTrailingBlanks(l, cursorColumn = null).cells.size)
+    }
+
+    @Test fun trimNeverTrimsPastCursor() {
+        val l = DecodedLine(listOf(Cell('a', 0), Cell(' ', 0), Cell(' ', 0)))
+        assertEquals(3, trimTrailingBlanks(l, cursorColumn = 2).cells.size)
+    }
+
+    @Test fun trimCollapsesFullyBlankLine() {
+        val l = DecodedLine(listOf(Cell(' ', 0), Cell(' ', 0)))
+        assertEquals("", trimTrailingBlanks(l, cursorColumn = null).text)
+    }
 }
