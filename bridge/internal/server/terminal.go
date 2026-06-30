@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 )
@@ -37,17 +38,21 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.Close()
+	start := time.Now()
+	log.Printf("terminal %s: connected", id)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
 	// Initial full replay.
 	fr, err := s.fetchReplay(ctx, id)
 	if err != nil {
+		log.Printf("terminal %s: initial replay failed after %s: %v", id, time.Since(start), err)
 		return
 	}
 	fr.Type = "replay"
 	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := c.WriteJSON(fr); err != nil {
+		log.Printf("terminal %s: initial write failed after %s: %v", id, time.Since(start), err)
 		return
 	}
 	last := fr.Seq
@@ -61,10 +66,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("terminal %s: closed after %s", id, time.Since(start))
 			return
 		case <-t.C:
 			next, err := s.fetchReplay(ctx, id)
 			if err != nil {
+				log.Printf("terminal %s: poll replay failed after %s: %v", id, time.Since(start), err)
 				return
 			}
 			if next.Seq == last {
@@ -74,6 +81,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			next.Type = "output"
 			_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.WriteJSON(next); err != nil {
+				log.Printf("terminal %s: output write failed after %s: %v", id, time.Since(start), err)
 				return
 			}
 		}
@@ -87,6 +95,7 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 	for {
 		var up TerminalUp
 		if err := c.ReadJSON(&up); err != nil {
+			log.Printf("terminal %s: read loop ended: %v", id, err)
 			return
 		}
 		switch up.Type {
