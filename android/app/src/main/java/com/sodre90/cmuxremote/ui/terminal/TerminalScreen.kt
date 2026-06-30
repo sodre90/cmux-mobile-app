@@ -214,23 +214,20 @@ fun TerminalScreen(
 }
 
 /**
- * An always-visible arrow D-pad (cross layout) above the scrollable key bar, so
- * menu navigation never requires scrolling to find the arrows. Each arrow resolves
- * SS3 vs CSI against [applicationCursorKeys] like any cursor key.
+ * An always-visible single row of arrow keys above the scrollable key bar, so menu
+ * navigation never requires scrolling to find them. Each arrow resolves SS3 vs CSI
+ * against [applicationCursorKeys] like any cursor key.
  */
 @Composable
 private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
     ) {
+        ArrowButton(ArrowLeft, applicationCursorKeys, onKey)
         ArrowButton(ArrowUp, applicationCursorKeys, onKey)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ArrowButton(ArrowLeft, applicationCursorKeys, onKey)
-            ArrowButton(ArrowDown, applicationCursorKeys, onKey)
-            ArrowButton(ArrowRight, applicationCursorKeys, onKey)
-        }
+        ArrowButton(ArrowDown, applicationCursorKeys, onKey)
+        ArrowButton(ArrowRight, applicationCursorKeys, onKey)
     }
 }
 
