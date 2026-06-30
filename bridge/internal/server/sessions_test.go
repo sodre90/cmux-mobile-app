@@ -140,6 +140,21 @@ func TestClassifyKind(t *testing.T) {
 	}
 }
 
+func TestClassifyAttention(t *testing.T) {
+	cases := map[string]string{
+		"Claude needs your permission":     "permission",
+		"Claude is waiting for your input": "input",
+		"CODEX NEEDS YOUR PERMISSION":      "permission", // case-insensitive
+		"All done. Summary of the work…":   "",
+		"":                                 "",
+	}
+	for preview, want := range cases {
+		if got := classifyAttention(preview); got != want {
+			t.Errorf("classifyAttention(%q)=%q want %q", preview, got, want)
+		}
+	}
+}
+
 func TestCleanTitleStripsGlyph(t *testing.T) {
 	if got := cleanTitle("⠂ Build price comparison"); got != "Build price comparison" {
 		t.Fatalf("cleanTitle glyph strip failed: %q", got)

@@ -16,6 +16,7 @@ type Workspace struct {
 	Title     string         `json:"title"`
 	Preview   string         `json:"preview"`
 	HasUnread bool           `json:"has_unread"`
+	Attention string         `json:"attention,omitempty"`
 	Terminals []TerminalPane `json:"terminals"`
 }
 
@@ -67,12 +68,14 @@ func parseWorkspaces(raw []byte) ([]Workspace, error) {
 				seen[id] = true
 				cwd, _ := stringField(v, "current_directory")
 				hasUnread, _ := v["has_unread"].(bool)
+				preview := firstString(v, "preview")
 				out = append(out, Workspace{
 					ID:        id,
 					CWD:       cwd,
 					Title:     cleanTitle(firstString(v, "title")),
-					Preview:   firstString(v, "preview"),
+					Preview:   preview,
 					HasUnread: hasUnread,
+					Attention: classifyAttention(preview),
 					Terminals: parsePanes(terms),
 				})
 			}
@@ -147,6 +150,23 @@ func cleanTitle(t string) string {
 
 func isTitleRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '~' || r == '/'
+}
+
+// classifyAttention flags workspaces whose preview is one of cmux's agent-status
+// strings so the app can color them: "permission" when the agent is blocked on a
+// permission prompt, "input" when it is idle waiting for the user. Matching is
+// case-insensitive and substring-based so it also covers non-Claude agents
+// ("Codex needs your permission", …). Any other preview yields "".
+func classifyAttention(preview string) string {
+	p := strings.ToLower(preview)
+	switch {
+	case strings.Contains(p, "needs your permission"):
+		return "permission"
+	case strings.Contains(p, "waiting for your input"):
+		return "input"
+	default:
+		return ""
+	}
 }
 
 // classifyKind treats shell-prompt-looking titles as terminals and everything

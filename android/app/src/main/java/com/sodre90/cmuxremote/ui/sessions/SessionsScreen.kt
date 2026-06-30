@@ -1,14 +1,19 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -28,6 +33,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.TerminalPane
@@ -100,50 +106,68 @@ private fun WorkspaceCard(
     onOpen: (String) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .clickable(enabled = ws.terminals.isNotEmpty()) {
-                        val direct = singlePaneTarget(ws)
-                        if (direct != null) onOpen(direct) else onToggle()
-                    }
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = ws.preview.ifBlank { ws.title.ifBlank { ws.cwd } },
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = ws.cwd,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (ws.hasUnread) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.error,
-                        shape = CircleShape,
-                        modifier = Modifier.size(10.dp),
-                    ) {}
-                }
-                Text(
-                    text = paneCountLabel(ws.terminals.size),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        // A left accent stripe flags agents that want attention: red when blocked
+        // on a permission prompt, amber when idle waiting for input. IntrinsicSize
+        // lets the stripe span the card's full height (header + expanded panes).
+        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+            attentionAccent(ws.attention)?.let { accent ->
+                Box(Modifier.fillMaxHeight().width(5.dp).background(accent))
             }
-            if (expanded) {
-                ws.terminals.forEach { pane -> PaneRow(pane, onOpen) }
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(enabled = ws.terminals.isNotEmpty()) {
+                            val direct = singlePaneTarget(ws)
+                            if (direct != null) onOpen(direct) else onToggle()
+                        }
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = ws.preview.ifBlank { ws.title.ifBlank { ws.cwd } },
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = ws.cwd,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (ws.hasUnread) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.error,
+                            shape = CircleShape,
+                            modifier = Modifier.size(10.dp),
+                        ) {}
+                    }
+                    Text(
+                        text = paneCountLabel(ws.terminals.size),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (expanded) {
+                    ws.terminals.forEach { pane -> PaneRow(pane, onOpen) }
+                }
             }
         }
     }
+}
+
+// Accent colors for the attention stripe. Null = no stripe (normal workspace).
+private val PermissionAccent = Color(0xFFE53935) // red — agent blocked on a prompt
+private val WaitingAccent = Color(0xFFFFB300)    // amber — agent idle, waiting for input
+
+private fun attentionAccent(attention: String): Color? = when (attention) {
+    "permission" -> PermissionAccent
+    "input" -> WaitingAccent
+    else -> null
 }
 
 @Composable

@@ -26,6 +26,8 @@ data class Workspace(
     val title: String = "",
     val preview: String = "",
     @SerialName("has_unread") val hasUnread: Boolean = false,
+    /** Agent attention state derived by the bridge: "permission", "input", or "". */
+    val attention: String = "",
     val terminals: List<TerminalPane> = emptyList(),
 )
 
