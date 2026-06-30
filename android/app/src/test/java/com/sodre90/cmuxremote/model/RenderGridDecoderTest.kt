@@ -63,4 +63,26 @@ class RenderGridDecoderTest {
         val decoded = RenderGridDecoder.decode(BridgeJson.decodeFromString(RenderGrid.serializer(), js))
         assertEquals("  ab", decoded.lines[0].text)
     }
+
+    @Test
+    fun decodesScrollbackLinesBeforeVisible() {
+        val js = """
+            {"columns":5,"rows":1,"scrollback_rows":2,
+             "scrollback_spans":[
+               {"row":0,"column":0,"style_id":0,"text":"old1"},
+               {"row":1,"column":0,"style_id":0,"text":"old2"}],
+             "row_spans":[{"row":0,"column":0,"style_id":0,"text":"live"}]}
+        """.trimIndent()
+        val d = RenderGridDecoder.decode(BridgeJson.decodeFromString(RenderGrid.serializer(), js))
+        assertEquals(2, d.scrollbackLines.size)
+        assertEquals("old1 ", d.scrollbackLines[0].text)
+        assertEquals("old2 ", d.scrollbackLines[1].text)
+        assertEquals("live ", d.lines[0].text)
+    }
+
+    @Test
+    fun scrollbackEmptyWhenAbsent() {
+        val d = RenderGridDecoder.decode(grid())
+        assertTrue(d.scrollbackLines.isEmpty())
+    }
 }

@@ -22,6 +22,7 @@ data class RenderGrid(
     // the whole frame parse, so stay tolerant.
     val modes: List<JsonElement> = emptyList(),
     @SerialName("row_spans") val rowSpans: List<RowSpan> = emptyList(),
+    @SerialName("scrollback_spans") val scrollbackSpans: List<RowSpan> = emptyList(),
     val styles: List<Style> = emptyList(),
     @SerialName("scrollback_rows") val scrollbackRows: Int = 0,
     @SerialName("active_screen") val activeScreen: String? = null,
@@ -86,22 +87,30 @@ data class DecodedGrid(
     val rows: Int,
     val lines: List<DecodedLine>,
     val cursor: Cursor?,
+    val scrollbackLines: List<DecodedLine> = emptyList(),
 )
 
 object RenderGridDecoder {
     private const val BLANK = ' '
 
-    /**
-     * Expand the sparse [grid] into a dense [DecodedGrid]. Each span's characters
-     * are laid out at consecutive columns from its start (correct for width-1
-     * content, which is effectively all terminal UI); blanks fill the rest.
-     */
+    /** Expand the sparse [grid] into a dense [DecodedGrid] (visible + scrollback). */
     fun decode(grid: RenderGrid): DecodedGrid {
         val cols = grid.columns.coerceAtLeast(0)
         val rowCount = grid.rows.coerceAtLeast(0)
-        val cells = Array(rowCount) { Array(cols) { Cell(BLANK, 0) } }
+        val lines = layout(grid.rowSpans, rowCount, cols)
 
-        for (span in grid.rowSpans) {
+        val sbRows = grid.scrollbackRows.coerceAtLeast(0)
+        val scrollback =
+            if (sbRows == 0 || grid.scrollbackSpans.isEmpty()) emptyList()
+            else layout(grid.scrollbackSpans, sbRows, cols)
+
+        return DecodedGrid(cols, rowCount, lines, grid.cursor, scrollback)
+    }
+
+    /** Lay [spans] onto a dense [rowCount] x [cols] grid of cells (width-1 chars). */
+    private fun layout(spans: List<RowSpan>, rowCount: Int, cols: Int): List<DecodedLine> {
+        val cells = Array(rowCount) { Array(cols) { Cell(BLANK, 0) } }
+        for (span in spans) {
             if (span.row < 0 || span.row >= rowCount) continue
             var col = span.column
             for (ch in span.text) {
@@ -110,8 +119,6 @@ object RenderGridDecoder {
                 col++
             }
         }
-
-        val lines = cells.map { DecodedLine(it.toList()) }
-        return DecodedGrid(cols, rowCount, lines, grid.cursor)
+        return cells.map { DecodedLine(it.toList()) }
     }
 }
