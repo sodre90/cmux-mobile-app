@@ -48,7 +48,7 @@ class TerminalSocket(
         socket = ws
         awaitClose {
             ws.cancel()
-            socket = null
+            if (socket === ws) socket = null
         }
     }
 

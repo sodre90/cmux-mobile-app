@@ -105,14 +105,15 @@ fun TerminalScreen(
                 else -> {
                     val measurer = rememberTextMeasurer()
                     val density = LocalDensity.current
-                    // Measure the bundled font's real cell from a 10-glyph run.
-                    val (cellW, cellH) = remember(fontSizeSp) {
-                        val r = measurer.measure(
+                    // Cell advance width from the bundled font at the current zoom.
+                    val cellW = remember(fontSizeSp) {
+                        measurer.measure(
                             AnnotatedString("MMMMMMMMMM"),
                             style = TextStyle(fontFamily = TerminalFont, fontSize = fontSizeSp.sp),
-                        )
-                        (r.size.width / 10f) to r.size.height.toFloat()
+                        ).size.width / 10f
                     }
+                    // Cell height MUST match the line height RenderGridView renders with.
+                    val cellH = with(density) { (fontSizeSp * TerminalLineHeightFactor).sp.toPx() }
                     BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
@@ -123,8 +124,11 @@ fun TerminalScreen(
                                 }
                             },
                     ) {
-                        val wPx = with(density) { maxWidth.toPx() }
-                        val hPx = with(density) { maxHeight.toPx() }
+                        // RenderGridView insets its content by 8.dp on every side; subtract
+                        // it so the measured fit matches the real text area (no clipped edge).
+                        val padPx = with(density) { 8.dp.toPx() }
+                        val wPx = with(density) { maxWidth.toPx() } - 2 * padPx
+                        val hPx = with(density) { maxHeight.toPx() } - 2 * padPx
                         val (cols, rows) = gridDimensions(wPx, hPx, cellW, cellH)
                         // resize() only fires when (cols,rows) actually change.
                         LaunchedEffect(cols, rows) { vm.resize(cols, rows) }

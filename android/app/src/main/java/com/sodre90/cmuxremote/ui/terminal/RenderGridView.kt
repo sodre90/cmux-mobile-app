@@ -44,6 +44,13 @@ val TerminalFont = FontFamily(
 )
 
 /**
+ * Line height as a multiple of the font size. Shared so the rendered row height
+ * and TerminalScreen's row-count measurement use a single basis (otherwise the
+ * grid resize sent to the backend would not match what is actually drawn).
+ */
+internal const val TerminalLineHeightFactor = 1.25f
+
+/**
  * Renders a [DecodedGrid] (scrollback + visible screen) on a solid dark canvas:
  * one no-wrap styled line per row, the cursor drawn by inverting its cell, native
  * long-press selection, and stick-to-bottom follow with a jump-to-bottom button.
@@ -85,7 +92,7 @@ fun RenderGridView(
                         text = buildLine(line, styleMap, colors, cur),
                         fontFamily = TerminalFont,
                         fontSize = fontSizeSp.sp,
-                        lineHeight = (fontSizeSp * 1.25f).sp,
+                        lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
                         softWrap = false,
                         maxLines = 1,
                     )
