@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -23,6 +24,9 @@ func writeJSONErr(w http.ResponseWriter, code int, msg string) {
 // surfaced as 503 agent_offline; other transport failures as 502.
 func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
+		// Surfaces internal proxy failures (upgrade/copy errors after headers are
+		// sent, which ErrorHandler can no longer report) to the relay's log.
+		ErrorLog: log.New(log.Writer(), "relay-proxy: ", log.Flags()),
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
 			req.URL.Host = "agent" // ignored by the stream dialer below
@@ -37,11 +41,13 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 				return sess.Open()
 			},
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			if errors.Is(err, ErrAgentOffline) {
+				log.Printf("relay: %s %s -> agent_offline", req.Method, req.URL.Path)
 				writeJSONErr(w, http.StatusServiceUnavailable, "agent_offline")
 				return
 			}
+			log.Printf("relay: %s %s -> agent_error: %v", req.Method, req.URL.Path, err)
 			writeJSONErr(w, http.StatusBadGateway, "agent_error")
 		},
 	}

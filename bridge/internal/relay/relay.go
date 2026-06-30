@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -74,7 +75,7 @@ func (r *Relay) Handler() http.Handler {
 	})
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
-	mux.Handle("/", r.notAgent(auth.Require(r.store, r.proxy)))
+	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))
 	if r.edgeToken == "" {
 		return mux
 	}
@@ -119,10 +120,12 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.reg.Set(sess, cancel)
+	log.Printf("relay: agent tunnel up (cn=%q)", r.clientCN(req))
 	if r.onSession != nil {
 		go r.onSession(ctx, sess)
 	}
 	<-sess.CloseChan() // block until the tunnel dies
+	log.Printf("relay: agent tunnel down (cn=%q)", r.clientCN(req))
 	r.reg.Clear(sess)
 	cancel()
 }
