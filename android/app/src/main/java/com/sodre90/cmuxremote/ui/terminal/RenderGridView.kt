@@ -79,13 +79,3 @@ internal fun buildLine(
         }
     }
 }
-
-/** Parses `#rrggbb` / `#aarrggbb` to a [Color]; returns null for other forms. */
-internal fun parseColor(value: String?): Color? {
-    val hex = value?.removePrefix("#") ?: return null
-    return when (hex.length) {
-        6 -> runCatching { Color("FF$hex".toLong(16)) }.getOrNull()
-        8 -> runCatching { Color(hex.toLong(16)) }.getOrNull()
-        else -> null
-    }
-}
