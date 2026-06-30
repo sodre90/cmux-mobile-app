@@ -19,6 +19,23 @@ fun gridDimensions(
     return cols to rows
 }
 
-/** Maps an accumulated pinch [scale] onto a clamped font size in sp. */
-fun zoomedFontSizeSp(baseSp: Float, scale: Float, min: Float = 7f, max: Float = 22f): Float =
-    (baseSp * scale).coerceIn(min, max)
+/**
+ * Largest font size (sp) at which a [gridCols]-wide monospace line still fits
+ * [availWidthPx], given the glyph advance [advancePerSp] (px of advance per 1 sp
+ * of font size). This is the fit-to-width baseline: at the returned size the whole
+ * surface width is visible without horizontal scrolling.
+ *
+ * Clamped to [min] (legibility floor — on very wide output the true fit would be
+ * illegibly tiny, so we stop here and let horizontal panning cover the overflow)
+ * and [max] (so a narrow surface does not blow the font up absurdly large).
+ */
+fun fitFontSizeSp(
+    availWidthPx: Float,
+    gridCols: Int,
+    advancePerSp: Float,
+    min: Float = 7f,
+    max: Float = 22f,
+): Float {
+    if (gridCols <= 0 || advancePerSp <= 0f || availWidthPx <= 0f) return max
+    return (availWidthPx / (gridCols * advancePerSp)).coerceIn(min, max)
+}

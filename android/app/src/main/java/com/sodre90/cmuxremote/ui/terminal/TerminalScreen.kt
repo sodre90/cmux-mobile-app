@@ -1,6 +1,8 @@
 package com.sodre90.cmuxremote.ui.terminal
 
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -46,7 +49,19 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+// Reference size for the surface-viewport resize math (decoupled from the display
+// zoom so pinching never re-resizes the surface).
 private const val BASE_FONT_SP = 13f
+
+// Display font bounds. The fit-to-width baseline lives in [MIN_FONT_SP, FIT_MAX_SP];
+// pinching in can grow it up to MAX_FONT_SP.
+private const val MIN_FONT_SP = 7f
+private const val FIT_MAX_SP = 22f
+private const val MAX_FONT_SP = 28f
+
+// Pinch range, multiplied onto the fit baseline: 1x = exact fit, up to 6x to read in.
+private const val MIN_ZOOM = 1f
+private const val MAX_ZOOM = 6f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,9 +73,8 @@ fun TerminalScreen(
     var input by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
-    // Pinch-zoom: accumulate scale, clamp so the derived font size stays in range.
-    var zoomScale by remember { mutableFloatStateOf(1f) }
-    val fontSizeSp = zoomedFontSizeSp(BASE_FONT_SP, zoomScale)
+    // Pinch-to-zoom factor over the fit-to-width baseline (1f = exact fit).
+    var userZoom by remember { mutableFloatStateOf(1f) }
 
     Scaffold(
         topBar = {
@@ -120,22 +134,42 @@ fun TerminalScreen(
                 else -> {
                     val measurer = rememberTextMeasurer()
                     val density = LocalDensity.current
-                    // Cell advance width from the bundled font at the current zoom.
-                    val cellW = remember(fontSizeSp) {
-                        measurer.measure(
+                    // Glyph advance per 1sp, measured once at the base size. The font is
+                    // scalable, so advance scales linearly with size — this lets us solve
+                    // for the font that makes the surface width fit the viewport.
+                    val advancePerSp = remember {
+                        val w = measurer.measure(
                             AnnotatedString("MMMMMMMMMM"),
-                            style = TextStyle(fontFamily = TerminalFont, fontSize = fontSizeSp.sp),
+                            style = TextStyle(fontFamily = TerminalFont, fontSize = BASE_FONT_SP.sp),
                         ).size.width / 10f
+                        w / BASE_FONT_SP
                     }
-                    // Cell height MUST match the line height RenderGridView renders with.
-                    val cellH = with(density) { (fontSizeSp * TerminalLineHeightFactor).sp.toPx() }
+                    // Surface-viewport (resize) cell box: a fixed reference, independent of
+                    // display zoom, so pinching never re-resizes the surface.
+                    val cellWBase = advancePerSp * BASE_FONT_SP
+                    val cellHBase = with(density) { (BASE_FONT_SP * TerminalLineHeightFactor).sp.toPx() }
                     BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
                             .pointerInput(Unit) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    zoomScale = (zoomScale * zoom)
-                                        .coerceIn(7f / BASE_FONT_SP, 22f / BASE_FONT_SP)
+                                // Reliable pinch: claim multi-touch on the Initial pass so the
+                                // grid's vertical/horizontal scroll never fights it. Single-finger
+                                // events are left unconsumed and fall through to those scrolls.
+                                awaitEachGesture {
+                                    awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Initial,
+                                    )
+                                    do {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        if (event.changes.count { it.pressed } >= 2) {
+                                            val zoom = event.calculateZoom()
+                                            if (zoom != 1f) {
+                                                userZoom = (userZoom * zoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                                event.changes.forEach { if (it.pressed) it.consume() }
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
                                 }
                             },
                     ) {
@@ -144,9 +178,15 @@ fun TerminalScreen(
                         val padPx = with(density) { 8.dp.toPx() }
                         val wPx = with(density) { maxWidth.toPx() } - 2 * padPx
                         val hPx = with(density) { maxHeight.toPx() } - 2 * padPx
-                        val (cols, rows) = gridDimensions(wPx, hPx, cellW, cellH)
+                        val (cols, rows) = gridDimensions(wPx, hPx, cellWBase, cellHBase)
                         // resize() only fires when (cols,rows) actually change.
                         LaunchedEffect(cols, rows) { vm.resize(cols, rows) }
+
+                        // Fit-to-width: size the font so the surface's full column count fits
+                        // the viewport; pinch (userZoom) grows it from there to read a section.
+                        val gridCols = s.grid.columns.takeIf { it > 0 } ?: cols
+                        val fitFontSp = fitFontSizeSp(wPx, gridCols, advancePerSp, MIN_FONT_SP, FIT_MAX_SP)
+                        val fontSizeSp = (fitFontSp * userZoom).coerceIn(MIN_FONT_SP, MAX_FONT_SP)
 
                         RenderGridView(
                             grid = s.grid,

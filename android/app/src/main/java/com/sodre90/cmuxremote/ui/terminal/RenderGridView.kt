@@ -1,9 +1,9 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -65,6 +65,7 @@ fun RenderGridView(
 ) {
     val styleMap = remember(styles) { styles.associateBy { it.id } }
     val scroll = rememberScrollState()
+    val hScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
 
     val buffer = remember(grid) { grid.scrollbackLines + grid.lines }
@@ -85,7 +86,12 @@ fun RenderGridView(
 
     Box(modifier = modifier.background(colors.background)) {
         SelectionContainer {
-            Column(modifier = Modifier.fillMaxSize().verticalScroll(scroll)) {
+            // Lines are drawn at the surface's native width (softWrap=false). When the
+            // fit-to-width font is at its legibility floor — or the user has pinched in
+            // past fit — the content is wider than the viewport, so add horizontal pan
+            // alongside the vertical scroll. The Column wraps its content width (no
+            // fillMaxSize) so horizontalScroll has a range to pan over.
+            Column(modifier = Modifier.verticalScroll(scroll).horizontalScroll(hScroll)) {
                 buffer.forEachIndexed { index, line ->
                     val cur = if (index == cursorRow) cursorCol else null
                     Text(
