@@ -130,16 +130,42 @@ object RenderGridDecoder {
         )
     }
 
-    /** Lay [spans] onto a dense [rowCount] x [cols] grid of cells (width-1 chars). */
+    /**
+     * Lay [spans] onto a dense [rowCount] x [cols] grid of cells (width-1 chars).
+     *
+     * A span's `cell_width` is the number of terminal columns its whole `text`
+     * run occupies; cmux only groups multiple characters into one span when
+     * they're all narrow (width 1), so `cell_width` is only meaningful as a
+     * per-character width when the span carries exactly one Unicode codepoint —
+     * that single glyph may be a wide CJK/emoji character (2 columns) or an
+     * astral one needing a UTF-16 surrogate pair (2 `Char`s). Iterating by
+     * codepoint (not `Char`) keeps a surrogate pair intact and in order; any
+     * extra declared width beyond what the codepoint's `Char`s need is a blank
+     * filler cell, so a later span's declared `column` still lines up.
+     */
     private fun layout(spans: List<RowSpan>, rowCount: Int, cols: Int): List<DecodedLine> {
         val cells = Array(rowCount) { Array(cols) { Cell(BLANK, 0) } }
         for (span in spans) {
             if (span.row < 0 || span.row >= rowCount) continue
+            val codepoints = span.text.codePoints().toArray()
+            val singleWidth = if (codepoints.size == 1) span.cellWidth.coerceAtLeast(1) else 1
             var col = span.column
-            for (ch in span.text) {
+            for (cp in codepoints) {
                 if (col >= cols) break
-                if (col >= 0) cells[span.row][col] = Cell(ch, span.styleId)
-                col++
+                val chars = Character.toChars(cp)
+                // Never fewer columns than the codepoint needs Chars for, even if
+                // cell_width under-declares it (e.g. a mis-tagged narrow-astral char).
+                val width = maxOf(singleWidth, chars.size)
+                if (col >= 0) {
+                    for (i in chars.indices) {
+                        val c = col + i
+                        if (c < cols) cells[span.row][c] = Cell(chars[i], span.styleId)
+                    }
+                    for (c in (col + chars.size) until (col + width).coerceAtMost(cols)) {
+                        cells[span.row][c] = Cell(BLANK, span.styleId)
+                    }
+                }
+                col += width
             }
         }
         return cells.map { DecodedLine(it.toList()) }

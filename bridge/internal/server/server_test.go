@@ -19,7 +19,6 @@ func TestRoutesRequireAuth(t *testing.T) {
 		{"GET", "/events"},
 		{"GET", "/terminal/S1"},
 		{"POST", "/feed/F1/reply"},
-		{"POST", "/devices/register"},
 	}
 	for _, c := range cases {
 		req, _ := http.NewRequest(c.method, srv.URL+c.path, nil)

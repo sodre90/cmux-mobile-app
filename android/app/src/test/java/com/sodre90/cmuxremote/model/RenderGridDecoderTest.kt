@@ -87,6 +87,40 @@ class RenderGridDecoderTest {
         assertTrue(d.scrollbackLines.isEmpty())
     }
 
+    @Test
+    fun wideCharacterReservesTwoColumnsForNextSpan() {
+        // A single wide CJK glyph ("文", cell_width 2) must occupy two grid
+        // columns with a blank filler, so the next span's declared column
+        // (2) still lands on the right cell instead of overlapping.
+        val js = """
+            {"columns":6,"rows":1,"row_spans":[
+              {"row":0,"column":0,"cell_width":2,"style_id":0,"text":"文"},
+              {"row":0,"column":2,"cell_width":1,"style_id":0,"text":"X"}
+            ]}
+        """.trimIndent()
+        val d = RenderGridDecoder.decode(BridgeJson.decodeFromString(RenderGrid.serializer(), js))
+        assertEquals('文', d.lines[0].cells[0].char)
+        assertEquals(' ', d.lines[0].cells[1].char) // wide glyph's second column
+        assertEquals('X', d.lines[0].cells[2].char)
+        assertEquals("文 X   ", d.lines[0].text)
+    }
+
+    @Test
+    fun astralCodepointKeepsSurrogatePairIntact() {
+        // An emoji outside the BMP is 2 UTF-16 Chars for 1 codepoint; iterating
+        // by Char (the old bug) would split the pair across cells. Both halves
+        // must land in adjacent cells, in order, so the row's text reconstructs
+        // a valid, renderable string.
+        val js = """
+            {"columns":4,"rows":1,"row_spans":[
+              {"row":0,"column":0,"cell_width":2,"style_id":0,"text":"😀"}
+            ]}
+        """.trimIndent()
+        val d = RenderGridDecoder.decode(BridgeJson.decodeFromString(RenderGrid.serializer(), js))
+        assertEquals("😀".codePointAt(0), Character.toCodePoint(d.lines[0].cells[0].char, d.lines[0].cells[1].char))
+        assertEquals("😀  ", d.lines[0].text)
+    }
+
     private fun decodeWithModes(modes: String) = RenderGridDecoder.decode(
         BridgeJson.decodeFromString(
             RenderGrid.serializer(),
