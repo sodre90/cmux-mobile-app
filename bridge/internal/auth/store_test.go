@@ -217,3 +217,24 @@ func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
 		t.Fatalf("tenantB tokens = %v, want [fcm-b]", gotB)
 	}
 }
+
+func TestOpenCreatesParentDirectory(t *testing.T) {
+	// Verify that Open creates parent directories that don't exist yet.
+	// This is a regression test: the old JSON-based store called os.MkdirAll
+	// before persisting, and failing to do so causes fresh invocations to crash
+	// when the config directory doesn't exist.
+	path := filepath.Join(t.TempDir(), "nested", "does-not-exist-yet", "store.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open with non-existent parent dirs: %v", err)
+	}
+
+	// Verify the store is usable by calling a cheap read method.
+	list, err := s.ListTenants()
+	if err != nil {
+		t.Fatalf("ListTenants after Open: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("fresh store should have zero tenants, got %d", len(list))
+	}
+}

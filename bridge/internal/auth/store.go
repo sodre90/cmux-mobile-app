@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -73,6 +75,9 @@ type Store struct {
 // locking, so there is no in-memory cache to fall out of sync (unlike the
 // previous JSON-file store, this needs no reload-on-SIGHUP mechanism).
 func Open(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("create dir for store: %w", err)
+	}
 	// Add busy_timeout pragma to allow multiple processes to wait instead of
 	// immediately failing with SQLITE_BUSY. 5 seconds should be ample for
 	// infrequent operations like tenant/device list and pairing code redemption.
