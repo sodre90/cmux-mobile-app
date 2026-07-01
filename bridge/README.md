@@ -96,7 +96,7 @@ the relay can route by CN.
 `docker-compose.yml` + `deploy/Containerfile` build and run the relay in a
 rootless container. Copy this tree to the host, drop a `config.toml` beside the
 compose file (from `deploy/relay.example.toml`, with a real `relay_token` and
-`token_store = "/data/devices.json"`), then:
+`token_store = "/data/store.db"`), then:
 
 ```bash
 podman-compose up -d --build
