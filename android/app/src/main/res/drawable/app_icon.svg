@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Dark background -->
+  <rect width="1024" height="1024" fill="#0A0E27"/>
+
+  <!-- Secondary frame (magenta, background) - offset down and right -->
+  <g id="secondary-frame">
+    <rect x="280" y="380" width="480" height="360" fill="none" stroke="#FF1493" stroke-width="32" rx="8"/>
+  </g>
+
+  <!-- Primary frame (cyan, foreground) - overlapping -->
+  <g id="primary-frame">
+    <rect x="200" y="300" width="480" height="360" fill="none" stroke="#00D9FF" stroke-width="32" rx="8"/>
+  </g>
+
+  <!-- Prompt symbols inside primary frame -->
+  <g id="prompt-symbols" font-family="monospace" font-size="56" font-weight="bold" fill="#FFFFFF">
+    <text x="240" y="500">$</text>
+    <text x="900" y="500">></text>
+  </g>
+</svg>
