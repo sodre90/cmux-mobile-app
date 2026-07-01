@@ -1642,10 +1642,14 @@ func runServe(args []string) int {
 }
 ```
 
-- [ ] **Step 11: Build and run the full bridge test suite**
+- [ ] **Step 11: Build and run the affected packages**
 
-Run: `cd bridge && go build ./... && go test ./...`
-Expected: PASS across all packages, including `TestRegistrySetReplaceClosesOldForSameTenant`, `TestRegistryTenantsDoNotInterfere`, `TestRegistryClearOnlyIfCurrent`, and `TestRegistryGetUnknownTenant` from Step 1 above. If `proxy_test.go` or `pushmon_test.go` still reference old shapes, fix them the same way as Step 9 until this passes clean.
+`bridge/cmd/cmux-relay` (the `commands.go`/`main.go` files, not touched by this task) still calls the pre-multi-tenant `Store.Issue(name)` single-arg signature and reads `Device.Token` — both removed in Task 1. That package is Task 6's responsibility to fix; it is expected to remain non-compiling until Task 6 lands. Do not run a whole-module `go build ./...`/`go test ./...` for this task — scope it to what this task actually owns:
+
+Run: `cd bridge && go build ./internal/... && go test ./internal/...`
+Expected: PASS across all `internal` packages, including `TestRegistrySetReplaceClosesOldForSameTenant`, `TestRegistryTenantsDoNotInterfere`, `TestRegistryClearOnlyIfCurrent`, and `TestRegistryGetUnknownTenant` from Step 1 above. If `proxy_test.go` or `pushmon_test.go` still reference old shapes, fix them the same way as Step 9 until this passes clean.
+
+Also run: `cd bridge && go vet ./cmd/cmux-relay/... 2>&1 | grep -v commands.go` (or simply inspect the compiler errors) to confirm the *only* remaining `cmd/cmux-relay` build errors are the known `commands.go` gaps (`store.Issue` arg count, `Device.Token`) — not something this task's `serve.go` rewrite introduced. If `serve.go` itself has any new compile error, that's this task's bug and must be fixed before committing.
 
 - [ ] **Step 12: Commit**
 
@@ -2377,3 +2381,4 @@ git commit -m "docs: describe the multi-tenant relay model"
 - **Explicit limitation carried forward from the spec:** no per-cert-serial revocation with stable tenant-ID preservation; re-registration mints a new tenant ID. Documented in Global Constraints and in Task 1's `RecordAgentCert` comment.
 - **Type consistency check:** `Device.TenantID`/`HashSuffix` (Task 1) match their use in `proxy.go`'s `dev.TenantID` (Task 3) and `commands.go`'s `d.TenantID`/`d.HashSuffix` (Task 6). `relay.New(store, signer, relayToken)` (Task 3) matches its call sites in `relay_test.go`, `multitenant_test.go` (Task 7), and `cmd/cmux-relay/serve.go` (Task 3). `Registry.Get/Set/Clear(tenantID, ...)` (Task 3) matches all call sites in `relay.go` and both test files, all landing together within Task 3 itself.
 - **Pre-flight fix:** the original draft split registry.go (old Task 3) from relay.go/proxy.go/config.go/serve.go (old Task 4) as if independently testable — they are not, since registry.go and relay.go share a package and relay.go calls Registry's changed methods immediately. Merged into one task before dispatch; see Task 3's intro paragraph.
+- **Second pre-flight fix (found while briefing Task 3):** Task 3's original Step 11 ran `go build ./... && go test ./...` and expected a full pass, but `cmd/cmux-relay/commands.go` and `main.go` (Task 6's files, not Task 3's) still call the pre-multi-tenant `Store.Issue(name)`/`Device.Token` API removed in Task 1 — that package cannot compile until Task 6 lands. Scoped Step 11 to `./internal/...` only, with an explicit note on why `cmd/cmux-relay` is expected to keep failing until Task 6. Same category of defect as the first pre-flight fix (an assumed build/test boundary that doesn't actually hold), one task-pair deeper (Task 3 vs. Task 6 instead of Task 3 vs. Task 4).
