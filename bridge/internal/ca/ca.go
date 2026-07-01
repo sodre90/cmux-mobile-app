@@ -46,7 +46,7 @@ func create(certPath, keyPath string) (*CA, error) {
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate CA serial: %w", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -64,21 +64,21 @@ func create(certPath, keyPath string) (*CA, error) {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal CA key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create dir for CA cert: %w", err)
 	}
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write CA cert: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create dir for CA key: %w", err)
 	}
 	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write CA key: %w", err)
 	}
 	return load(certPEM, keyPEM)
 }
@@ -121,7 +121,7 @@ func (c *CA) SignCSR(csrPEM []byte, cn string, validity time.Duration) (certPEM 
 	}
 	serialNum, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("generate cert serial: %w", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serialNum,
