@@ -46,37 +46,35 @@ func waitFor(t *testing.T, cond func() bool) {
 }
 
 func TestRelayEndToEndSessions(t *testing.T) {
-	// Agent side: trusted handler backed by a fake cmux returning one workspace
-	// with one terminal pane (a workspace always carries a terminals array).
 	const ws = `{"workspaces":[{"id":"E43BBF04","current_directory":"/x","preview":"u@h:~/x","terminals":[{"id":"E43BBF04-T1","current_directory":"/x","title":"~/x","is_focused":true,"is_ready":true}]}]}`
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\ncat <<'JSON'\n"+ws+"\nJSON\n")
 	agentSrv := server.New(config.Config{}, &cmux.Client{Bin: bin}, nil)
 	const relayTok = "relay-secret"
 	trusted := agentSrv.TrustedHandler(relayTok)
 
-	// Relay with its own device store.
 	relayStore, err := auth.Open(t.TempDir() + "/r.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenant, _ := relayStore.CreateTenant()
-	devTok, _ := relayStore.Issue(tenant, "phone")
-	rl := New(relayStore, "mac-agent", relayTok)
+	tenantID, err := relayStore.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devTok, _ := relayStore.Issue(tenantID, "phone")
+	rl := New(relayStore, nil, relayTok)
 	relayHTTP := httptest.NewServer(rl.Handler())
 	defer relayHTTP.Close()
 
-	// Agent dials /agent/tunnel; we set X-Client-Cert-CN as nginx would.
 	u := "ws" + strings.TrimPrefix(relayHTTP.URL, "http") + "/agent/tunnel"
-	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{"X-Client-Cert-Cn": {"CN=mac-agent"}})
+	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{"X-Client-Cert-Cn": {"CN=agent:" + tenantID}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sess.Close()
 	go func() { _ = http.Serve(sess, trusted) }()
 
-	waitFor(t, func() bool { return rl.Current() != nil })
+	waitFor(t, func() bool { return rl.reg.Get(tenantID) != nil })
 
-	// Device GET /sessions through the relay.
 	req, _ := http.NewRequest("GET", relayHTTP.URL+"/sessions", nil)
 	req.Header.Set("Authorization", "Bearer "+devTok)
 	resp, err := http.DefaultClient.Do(req)
@@ -110,7 +108,7 @@ func TestRelayEndToEndSessions(t *testing.T) {
 
 func TestRelayHealthz(t *testing.T) {
 	// /healthz is liveness only: no client cert, no bearer, no agent required.
-	rl := New(nil, "mac-agent", "tok")
+	rl := New(nil, nil, "tok")
 	srv := httptest.NewServer(rl.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/healthz")
@@ -124,7 +122,7 @@ func TestRelayHealthz(t *testing.T) {
 }
 
 func TestRelayEdgeTokenGate(t *testing.T) {
-	rl := New(nil, "mac-agent", "tok")
+	rl := New(nil, nil, "tok")
 	rl.SetEdgeToken("edge-secret")
 	srv := httptest.NewServer(rl.Handler())
 	defer srv.Close()
@@ -167,7 +165,7 @@ func TestRelayEdgeTokenGate(t *testing.T) {
 }
 
 func TestRelayTunnelRejectsWrongCN(t *testing.T) {
-	rl := New(nil, "mac-agent", "tok")
+	rl := New(nil, nil, "tok")
 	srv := httptest.NewServer(rl.Handler())
 	defer srv.Close()
 	// A non-agent CN on /agent/tunnel → 403 (no WebSocket upgrade).

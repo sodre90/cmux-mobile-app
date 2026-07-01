@@ -20,14 +20,14 @@ func mkSession(t *testing.T) *yamux.Session {
 	return s
 }
 
-func TestRegistryReplaceClosesOld(t *testing.T) {
+func TestRegistrySetReplaceClosesOldForSameTenant(t *testing.T) {
 	r := NewRegistry()
 	s1 := mkSession(t)
 	stopped := make(chan struct{})
-	r.Set(s1, func() { close(stopped) })
+	r.Set("tenant-a", s1, func() { close(stopped) })
 
 	s2 := mkSession(t)
-	r.Set(s2, nil)
+	r.Set("tenant-a", s2, nil)
 
 	select {
 	case <-stopped:
@@ -37,22 +37,51 @@ func TestRegistryReplaceClosesOld(t *testing.T) {
 	if !s1.IsClosed() {
 		t.Fatal("prior session should be closed on replace")
 	}
-	if r.Current() != s2 {
-		t.Fatal("Current should be s2")
+	if r.Get("tenant-a") != s2 {
+		t.Fatal("Get(tenant-a) should return s2")
+	}
+}
+
+func TestRegistryTenantsDoNotInterfere(t *testing.T) {
+	r := NewRegistry()
+	sa := mkSession(t)
+	sb := mkSession(t)
+	r.Set("tenant-a", sa, nil)
+	r.Set("tenant-b", sb, nil)
+
+	if r.Get("tenant-a") != sa {
+		t.Fatal("tenant-a's session should be unaffected by tenant-b's Set")
+	}
+	if r.Get("tenant-b") != sb {
+		t.Fatal("tenant-b's session should be present")
+	}
+	r.Clear("tenant-a", sa)
+	if r.Get("tenant-a") != nil {
+		t.Fatal("tenant-a should be cleared")
+	}
+	if r.Get("tenant-b") != sb {
+		t.Fatal("clearing tenant-a must not affect tenant-b")
 	}
 }
 
 func TestRegistryClearOnlyIfCurrent(t *testing.T) {
 	r := NewRegistry()
 	s1 := mkSession(t)
-	r.Set(s1, nil)
+	r.Set("tenant-a", s1, nil)
 	other := mkSession(t)
-	r.Clear(other) // not current → no-op
-	if r.Current() != s1 {
+	r.Clear("tenant-a", other) // not current for tenant-a → no-op
+	if r.Get("tenant-a") != s1 {
 		t.Fatal("Clear of a non-current session should be a no-op")
 	}
-	r.Clear(s1)
-	if r.Current() != nil {
-		t.Fatal("Current should be nil after clearing the active session")
+	r.Clear("tenant-a", s1)
+	if r.Get("tenant-a") != nil {
+		t.Fatal("Get should be nil after clearing the active session")
+	}
+}
+
+func TestRegistryGetUnknownTenant(t *testing.T) {
+	r := NewRegistry()
+	if r.Get("never-registered") != nil {
+		t.Fatal("Get on an unknown tenant should return nil, not panic")
 	}
 }

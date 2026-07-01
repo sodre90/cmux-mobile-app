@@ -47,14 +47,17 @@ func TestLoadAgentMissingFileDefaults(t *testing.T) {
 func TestConfigRelayFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "relay.toml")
-	if err := os.WriteFile(path, []byte("agent_cn=\"mac-agent\"\nrelay_token=\"secret\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("relay_token=\"secret\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AgentCN != "mac-agent" || cfg.RelayToken != "secret" {
+	if cfg.RelayToken != "secret" {
 		t.Fatalf("relay fields not parsed: %+v", cfg)
+	}
+	if cfg.CACert == "" || cfg.CAKey == "" {
+		t.Fatal("CACert/CAKey should default, not be empty")
 	}
 }

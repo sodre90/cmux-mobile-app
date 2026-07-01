@@ -27,20 +27,25 @@ type Config struct {
 	// FCMCredentials is the path to a Google service-account JSON key. Empty
 	// disables push.
 	FCMCredentials string `toml:"fcm_credentials"`
-	// AgentCN is the client-cert CN the relay trusts as the Mac agent.
-	AgentCN string `toml:"agent_cn"`
 	// RelayToken is the shared secret the relay injects and the agent checks.
 	RelayToken string `toml:"relay_token"`
 	// EdgeToken is the shared secret the trusted edge (nginx) must present on
 	// every relay request. Empty disables the check (loopback-only relay).
 	EdgeToken string `toml:"edge_token"`
+	// CACert is the path to the relay's own CA certificate (PEM). Auto-
+	// created on first run if absent.
+	CACert string `toml:"ca_cert"`
+	// CAKey is the path to the relay's own CA private key (PEM), 0600.
+	CAKey string `toml:"ca_key"`
 }
 
 func defaults() Config {
 	return Config{
 		Listen:     "127.0.0.1:8765",
 		CmuxBin:    "cmux",
-		TokenStore: expandHome("~/.config/cmux-bridge/devices.json"),
+		TokenStore: expandHome("~/.config/cmux-relay/store.db"),
+		CACert:     expandHome("~/.config/cmux-relay/ca.crt"),
+		CAKey:      expandHome("~/.config/cmux-relay/ca.key"),
 	}
 }
 
@@ -61,6 +66,8 @@ func Load(path string) (Config, error) {
 	}
 	cfg.TokenStore = expandHome(cfg.TokenStore)
 	cfg.FCMCredentials = expandHome(cfg.FCMCredentials)
+	cfg.CACert = expandHome(cfg.CACert)
+	cfg.CAKey = expandHome(cfg.CAKey)
 	if cfg.Listen == "" {
 		cfg.Listen = defaults().Listen
 	}

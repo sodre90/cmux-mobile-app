@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/hashicorp/yamux"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
 )
 
 func TestProxyOfflineReturns503(t *testing.T) {
@@ -41,12 +43,28 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 		}))
 	}()
 
-	reg := NewRegistry()
-	reg.Set(relaySess, nil)
-	p := newProxy(reg, "relay-secret")
+	store, err := auth.Open(t.TempDir() + "/proxy.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devTok, err := store.Issue(tenantID, "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	reg := NewRegistry()
+	reg.Set(tenantID, relaySess, nil)
+	p := newProxy(reg, "relay-secret")
+	handler := auth.Require(store, p)
+
+	req := httptest.NewRequest("GET", "http://relay/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+devTok)
 	rr := httptest.NewRecorder()
-	p.ServeHTTP(rr, httptest.NewRequest("GET", "http://relay/sessions", nil))
+	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d (%s)", rr.Code, rr.Body.String())
 	}

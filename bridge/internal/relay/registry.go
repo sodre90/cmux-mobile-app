@@ -1,6 +1,7 @@
-// Package relay is the home-server rendezvous: it accepts the Mac agent's
-// outbound yamux tunnel and reverse-proxies authenticated app requests over it,
-// one yamux stream per request. It owns device auth, pairing, and FCM push.
+// Package relay is the home-server rendezvous: it accepts Mac agents'
+// outbound yamux tunnels and reverse-proxies authenticated app requests over
+// them, one yamux stream per request, one tunnel slot per tenant. It owns
+// tenant/device auth, pairing, and FCM push.
 package relay
 
 import (
@@ -9,49 +10,64 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// Registry holds the single active agent tunnel session (v1: one Mac). A new
-// session replaces and closes the previous one.
+// Registry holds one active agent tunnel session per tenant. A new session
+// for a tenant replaces and closes that tenant's prior session; it never
+// touches other tenants' sessions.
 type Registry struct {
-	mu   sync.Mutex
-	sess *yamux.Session
-	stop func() // cancels work bound to sess (e.g. the push monitor)
+	mu    sync.Mutex
+	sess  map[string]*yamux.Session
+	stops map[string]func()
 }
 
-func NewRegistry() *Registry { return &Registry{} }
+func NewRegistry() *Registry {
+	return &Registry{
+		sess:  map[string]*yamux.Session{},
+		stops: map[string]func(){},
+	}
+}
 
-// Set installs sess as current, closing any prior session and calling its stop
-// func. stop may be nil.
-func (r *Registry) Set(sess *yamux.Session, stop func()) {
+// Set installs sess as tenantID's current session, closing and stopping any
+// prior session for that same tenant. stop may be nil. Other tenants are
+// untouched.
+func (r *Registry) Set(tenantID string, sess *yamux.Session, stop func()) {
 	r.mu.Lock()
-	old, oldStop := r.sess, r.stop
-	r.sess, r.stop = sess, stop
+	oldSess, oldStop := r.sess[tenantID], r.stops[tenantID]
+	r.sess[tenantID] = sess
+	if stop != nil {
+		r.stops[tenantID] = stop
+	} else {
+		delete(r.stops, tenantID)
+	}
 	r.mu.Unlock()
 
 	if oldStop != nil {
 		oldStop()
 	}
-	if old != nil {
-		_ = old.Close()
+	if oldSess != nil {
+		_ = oldSess.Close()
 	}
 }
 
-// Current returns the active session, or nil when none is connected or it has
-// closed.
-func (r *Registry) Current() *yamux.Session {
+// Get returns tenantID's active session, or nil when none is connected, it
+// has closed, or the tenant is unknown.
+func (r *Registry) Get(tenantID string) *yamux.Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.sess != nil && r.sess.IsClosed() {
+	sess := r.sess[tenantID]
+	if sess != nil && sess.IsClosed() {
 		return nil
 	}
-	return r.sess
+	return sess
 }
 
-// Clear removes sess if it is still the current session.
-func (r *Registry) Clear(sess *yamux.Session) {
+// Clear removes tenantID's session if sess is still the one on record.
+func (r *Registry) Clear(tenantID string, sess *yamux.Session) {
 	r.mu.Lock()
 	var stop func()
-	if r.sess == sess {
-		stop, r.stop, r.sess = r.stop, nil, nil
+	if r.sess[tenantID] == sess {
+		stop = r.stops[tenantID]
+		delete(r.sess, tenantID)
+		delete(r.stops, tenantID)
 	}
 	r.mu.Unlock()
 	if stop != nil {

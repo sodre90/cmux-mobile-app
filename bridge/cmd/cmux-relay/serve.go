@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
+	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/relay"
@@ -33,8 +34,13 @@ func runServe(args []string) int {
 		log.Printf("serve: %v", err)
 		return 1
 	}
+	signer, err := ca.LoadOrCreate(cfg.CACert, cfg.CAKey)
+	if err != nil {
+		log.Printf("serve: ca: %v", err)
+		return 1
+	}
 
-	rl := relay.New(store, cfg.AgentCN, cfg.RelayToken)
+	rl := relay.New(store, signer, cfg.RelayToken)
 	rl.SetEdgeToken(cfg.EdgeToken)
 
 	var pusher relay.Pusher
@@ -55,20 +61,9 @@ func runServe(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// SIGHUP re-reads the device store so a phone paired via `cmux-relay pair`
-	// (a separate process appending to devices.json) takes effect without a
-	// relay restart. Trigger with `podman kill --signal HUP cmux-relay`.
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
-	go func() {
-		for range hup {
-			if n, err := store.Reload(); err != nil {
-				log.Printf("serve: SIGHUP device-store reload failed: %v", err)
-			} else {
-				log.Printf("serve: SIGHUP reloaded device store (%d devices)", n)
-			}
-		}
-	}()
+	// No SIGHUP/reload handling needed: the store reads live from SQLite on
+	// every request, so a separate `cmux-relay pair`/`tenants` process's
+	// writes are visible immediately without a restart or reload signal.
 
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: rl.Handler()}
 	go func() {
@@ -78,7 +73,7 @@ func runServe(args []string) int {
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("cmux-relay listening on %s (agent CN %q)", cfg.Listen, cfg.AgentCN)
+	log.Printf("cmux-relay listening on %s", cfg.Listen)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("serve: %v", err)
 		return 1
