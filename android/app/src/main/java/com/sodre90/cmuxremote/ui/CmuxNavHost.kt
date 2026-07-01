@@ -37,7 +37,9 @@ fun CmuxNavHost(
     // surface id is already known, jump straight there; otherwise fetch the
     // live session list and apply the same singlePaneTarget rule the sessions
     // list itself uses on tap — one pane opens directly, several fall back to
-    // the (attention-striped) sessions list rather than guessing wrong.
+    // the (attention-striped) sessions list. That fallback must navigate there
+    // explicitly: the tap can arrive while a different, unrelated terminal is
+    // already open, so doing nothing would strand the user on it.
     LaunchedEffect(pendingWorkspaceId, pendingSurfaceId, configured) {
         if (!configured) return@LaunchedEffect
         if (pendingSurfaceId != null) {
@@ -49,7 +51,14 @@ fun CmuxNavHost(
                 .getOrNull()
                 ?.firstOrNull { it.id == pendingWorkspaceId }
                 ?.let { singlePaneTarget(it) }
-            if (target != null) navController.navigate(Routes.terminal(target))
+            if (target != null) {
+                navController.navigate(Routes.terminal(target))
+            } else {
+                navController.navigate(Routes.SESSIONS) {
+                    popUpTo(Routes.SESSIONS) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
         }
     }
 

@@ -1,12 +1,16 @@
 package com.sodre90.cmuxremote
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.google.firebase.messaging.FirebaseMessaging
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
@@ -20,6 +24,13 @@ class MainActivity : ComponentActivity() {
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    // Backed by Compose state (not plain vals read once in onCreate) so a
+    // notification tap while this task is already running - the common case,
+    // since singleTask launchMode reuses the instance via onNewIntent instead
+    // of a fresh onCreate - still reaches CmuxNavHost's deep-link resolution.
+    private var pendingWorkspaceId by mutableStateOf<String?>(null)
+    private var pendingSurfaceId by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -31,8 +42,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as CmuxApp).container
         registerFcmToken()
 
-        val pendingWorkspaceId = intent?.getStringExtra(EXTRA_WORKSPACE_ID)
-        val pendingSurfaceId = intent?.getStringExtra(EXTRA_SURFACE_ID)
+        applyDeepLink(intent)
         setContent {
             CmuxTheme {
                 CmuxNavHost(
@@ -42,6 +52,17 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        applyDeepLink(intent)
+    }
+
+    private fun applyDeepLink(intent: Intent) {
+        pendingWorkspaceId = intent.getStringExtra(EXTRA_WORKSPACE_ID)
+        pendingSurfaceId = intent.getStringExtra(EXTRA_SURFACE_ID)
     }
 
     /**
