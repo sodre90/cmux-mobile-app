@@ -66,11 +66,18 @@ stored in EncryptedSharedPreferences and never logged.
 
 ### 3. Device token
 
-On the **home server** (the relay owns the device token store), pair the device
-to mint a long-lived bearer token:
+On the **home server** (the relay owns the device token store), find the
+tenant this phone belongs to (the Mac agent printed its tenant ID when it
+self-registered — see [`bridge/README.md`](../bridge/README.md#agent-client-certificate)):
 
 ```bash
-cmux-relay pair --name phone
+cmux-relay tenants list
+```
+
+Then pair the device to mint a long-lived bearer token for that tenant:
+
+```bash
+cmux-relay pair --tenant <id> --name phone
 ```
 
 Copy the printed token and paste it into the **Device token** field. Revoke later

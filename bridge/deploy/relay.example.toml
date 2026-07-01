@@ -1,9 +1,11 @@
 # cmux-relay config (home server). Copy to /etc/cmux-relay/config.toml.
 listen      = "127.0.0.1:8765"                 # loopback; nginx is the edge
-token_store = "/var/lib/cmux-relay/devices.json"
-agent_cn    = "mac-agent"                       # client-cert CN trusted as the Mac
+token_store = "/var/lib/cmux-relay/store.db"
 relay_token = "CHANGE_ME_long_random_secret"    # shared with the Mac agent
 edge_token  = ""                                # if nginx is on another host: a secret it must send in X-Edge-Token (empty = off, for a loopback relay)
+
+# ca_cert = "/var/lib/cmux-relay/ca.crt"        # the relay's own CA, auto-created on first run if absent
+# ca_key  = "/var/lib/cmux-relay/ca.key"        # (both default under ~/.config/cmux-relay if unset)
 
 # Push (optional): leave both empty to disable.
 # fcm_project_id  = "your-firebase-project-id"

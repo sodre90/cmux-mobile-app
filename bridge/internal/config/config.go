@@ -20,7 +20,7 @@ type Config struct {
 	Listen string `toml:"listen"`
 	// CmuxBin is the path to the cmux CLI. Default "cmux" (resolved via PATH).
 	CmuxBin string `toml:"cmux_bin"`
-	// TokenStore is the path to the device-token JSON file.
+	// TokenStore is the path to the tenant/device SQLite database.
 	TokenStore string `toml:"token_store"`
 	// FCMProjectID is the Firebase project id for push. Empty disables push.
 	FCMProjectID string `toml:"fcm_project_id"`
