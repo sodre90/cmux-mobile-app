@@ -16,7 +16,7 @@ const deviceKey ctxKey = 0
 // to the request context (see DeviceFromContext).
 func Require(s *Store, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := bearerToken(r)
+		tok := BearerToken(r)
 		dev, ok := s.Verify(tok)
 		if !ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -35,7 +35,11 @@ func DeviceFromContext(ctx context.Context) (Device, bool) {
 	return d, ok
 }
 
-func bearerToken(r *http.Request) string {
+// BearerToken extracts the raw "Authorization: Bearer <token>" value from a
+// request, or "" if absent/malformed. Exported so handlers that already went
+// through Require (and so already have a Device in context) can recover the
+// original raw token for calls that key off it directly, like SetFCMToken.
+func BearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(h) > len(prefix) && strings.EqualFold(h[:len(prefix)], prefix) {

@@ -57,11 +57,12 @@ func TestMonitorAgentPushesAttention(t *testing.T) {
 		}))
 	}()
 
-	store, err := auth.Open(t.TempDir() + "/d.json")
+	store, err := auth.Open(t.TempDir() + "/d.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, _ := store.Issue("phone")
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone")
 	store.SetFCMToken(tok, "fcm-123")
 
 	fp := &fakePusher{}

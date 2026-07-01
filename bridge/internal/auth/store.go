@@ -1,232 +1,90 @@
-// Package auth manages device tokens and one-time pairing codes for the bridge.
-// Device tokens are long-lived bearer credentials persisted to disk; pairing
-// codes are short, single-use, in-memory codes exchanged for a token during
-// first-run pairing.
+// Package auth manages tenants, their Mac-agent identity, and paired device
+// (phone) bearer tokens, persisted in a local SQLite database. Bearer tokens
+// are stored only as a SHA-256 hash — the raw token is returned once, at
+// issuance, and never persisted or logged.
 package auth
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
-// Device is a paired client. FCM is the optional push registration token.
+const schema = `
+CREATE TABLE IF NOT EXISTS tenants (
+	id         TEXT PRIMARY KEY,
+	created_at TEXT NOT NULL,
+	revoked_at TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_certs (
+	serial     TEXT PRIMARY KEY,
+	tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+	issued_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS devices (
+	token_hash TEXT PRIMARY KEY,
+	tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+	name       TEXT NOT NULL,
+	fcm_token  TEXT,
+	created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pairing_codes (
+	code       TEXT PRIMARY KEY,
+	tenant_id  TEXT NOT NULL REFERENCES tenants(id),
+	expires_at TEXT NOT NULL
+);
+`
+
+// Tenant is a registered Mac-agent identity. Devices belong to exactly one.
+type Tenant struct {
+	ID        string
+	CreatedAt time.Time
+	Revoked   bool
+}
+
+// Device is a paired client (a phone) belonging to exactly one tenant.
 type Device struct {
-	Token   string    `json:"token"`
-	Name    string    `json:"name"`
-	FCM     string    `json:"fcm,omitempty"`
-	Created time.Time `json:"created"`
+	TenantID string
+	Name     string
+	FCM      string
+	Created  time.Time
+	// HashSuffix is the last 6 hex characters of the token's SHA-256 hash —
+	// enough for an operator to eyeball which device is which; the store
+	// never holds anything the raw token can be recovered from.
+	HashSuffix string
 }
 
-// pairingCode is an unredeemed one-time code held in memory only.
-type pairingCode struct {
-	expires time.Time
-}
-
-// Store holds devices (persisted) and pending pairing codes (in-memory).
+// Store holds tenants, agent-cert audit records, devices, and pairing codes
+// in a local SQLite database at path.
 type Store struct {
-	path  string
-	mu    sync.Mutex
-	devs  map[string]Device      // token -> device
-	codes map[string]pairingCode // code -> metadata
+	mu sync.Mutex
+	db *sql.DB
 }
 
-// pairing-code alphabet: unambiguous (no 0/O/1/I).
-const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
-// Open loads the store from path, creating an empty one if the file is absent.
+// Open opens (creating if absent) the SQLite database at path and applies the
+// schema. Safe to call from multiple short-lived processes (the relay server
+// and the `cmux-relay` CLI) against the same file — SQLite handles the
+// locking, so there is no in-memory cache to fall out of sync (unlike the
+// previous JSON-file store, this needs no reload-on-SIGHUP mechanism).
 func Open(path string) (*Store, error) {
-	s := &Store{
-		path:  path,
-		devs:  map[string]Device{},
-		codes: map[string]pairingCode{},
-	}
-	data, err := os.ReadFile(path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return s, nil
-		}
-		return nil, fmt.Errorf("read token store: %w", err)
+		return nil, fmt.Errorf("open store %s: %w", path, err)
 	}
-	var list []Device
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &list); err != nil {
-			return nil, fmt.Errorf("parse token store: %w", err)
-		}
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
-	for _, d := range list {
-		s.devs[d.Token] = d
-	}
-	return s, nil
+	return &Store{db: db}, nil
 }
 
-// Reload re-reads the device file from disk and atomically replaces the
-// in-memory device map, returning the new device count. Pending in-memory
-// pairing codes are left untouched. On a read or parse error the current
-// devices are kept and the error is returned, so a missing or corrupt file
-// never wipes a running relay's devices. This lets a newly paired device
-// (written by a separate `cmux-relay pair` process) take effect on SIGHUP
-// without restarting the relay.
-func (s *Store) Reload() (int, error) {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return 0, fmt.Errorf("reload token store: %w", err)
-	}
-	var list []Device
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &list); err != nil {
-			return 0, fmt.Errorf("parse token store: %w", err)
-		}
-	}
-	next := make(map[string]Device, len(list))
-	for _, d := range list {
-		next[d.Token] = d
-	}
-	s.mu.Lock()
-	s.devs = next
-	s.mu.Unlock()
-	return len(next), nil
-}
-
-// Issue creates and persists a new device token.
-func (s *Store) Issue(name string) (string, error) {
-	tok, err := randomHex(32)
-	if err != nil {
-		return "", err
-	}
-	s.mu.Lock()
-	s.devs[tok] = Device{Token: tok, Name: name, Created: time.Now().UTC()}
-	err = s.persistLocked()
-	s.mu.Unlock()
-	if err != nil {
-		return "", err
-	}
-	return tok, nil
-}
-
-// Verify returns the device for a token using a constant-time comparison.
-func (s *Store) Verify(token string) (Device, bool) {
-	if token == "" {
-		return Device{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for t, d := range s.devs {
-		if subtle.ConstantTimeCompare([]byte(t), []byte(token)) == 1 {
-			return d, true
-		}
-	}
-	return Device{}, false
-}
-
-// List returns devices with tokens redacted to the last 6 characters.
-func (s *Store) List() []Device {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]Device, 0, len(s.devs))
-	for _, d := range s.devs {
-		red := d
-		if len(d.Token) > 6 {
-			red.Token = "..." + d.Token[len(d.Token)-6:]
-		}
-		out = append(out, red)
-	}
-	return out
-}
-
-// Revoke removes a device by token. It returns whether a device was removed.
-func (s *Store) Revoke(token string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.devs[token]; !ok {
-		return false
-	}
-	delete(s.devs, token)
-	_ = s.persistLocked()
-	return true
-}
-
-// SetFCMToken records the FCM registration token for a device token.
-func (s *Store) SetFCMToken(token, fcm string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, ok := s.devs[token]
-	if !ok {
-		return false
-	}
-	d.FCM = fcm
-	s.devs[token] = d
-	_ = s.persistLocked()
-	return true
-}
-
-// FCMTokens returns all non-empty FCM registration tokens.
-func (s *Store) FCMTokens() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := []string{}
-	for _, d := range s.devs {
-		if d.FCM != "" {
-			out = append(out, d.FCM)
-		}
-	}
-	return out
-}
-
-// NewPairingCode generates a single-use pairing code valid for ttl.
-func (s *Store) NewPairingCode(ttl time.Duration) string {
-	code := randomCode(8)
-	s.mu.Lock()
-	s.codes[code] = pairingCode{expires: time.Now().Add(ttl)}
-	s.mu.Unlock()
-	return code
-}
-
-// RedeemPairingCode exchanges a valid, unexpired code for a freshly issued
-// device token. The code is consumed regardless of success to prevent reuse.
-func (s *Store) RedeemPairingCode(code, name string) (string, bool) {
-	s.mu.Lock()
-	pc, ok := s.codes[code]
-	if ok {
-		delete(s.codes, code)
-	}
-	s.mu.Unlock()
-	if !ok || time.Now().After(pc.expires) {
-		return "", false
-	}
-	tok, err := s.Issue(name)
-	if err != nil {
-		return "", false
-	}
-	return tok, true
-}
-
-// persistLocked atomically writes the device list. Caller must hold s.mu.
-func (s *Store) persistLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	list := make([]Device, 0, len(s.devs))
-	for _, d := range s.devs {
-		list = append(list, d)
-	}
-	data, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
-}
+func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)
@@ -236,12 +94,251 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// CreateTenant mints a fresh, unguessable tenant ID.
+func (s *Store) CreateTenant() (string, error) {
+	id, err := randomHex(16)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`INSERT INTO tenants (id, created_at) VALUES (?, ?)`, id, now()); err != nil {
+		return "", fmt.Errorf("create tenant: %w", err)
+	}
+	return id, nil
+}
+
+// TenantActive reports whether id names a tenant that exists and has not
+// been revoked.
+func (s *Store) TenantActive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var revoked sql.NullString
+	err := s.db.QueryRow(`SELECT revoked_at FROM tenants WHERE id = ?`, id).Scan(&revoked)
+	if err != nil {
+		return false
+	}
+	return !revoked.Valid
+}
+
+// RevokeTenant marks a tenant revoked. Its agent tunnel is refused on next
+// connect and its devices' bearer tokens stop verifying immediately (Verify
+// joins against tenants.revoked_at).
+func (s *Store) RevokeTenant(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE tenants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, now(), id)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+// ListTenants returns every tenant, oldest first.
+func (s *Store) ListTenants() ([]Tenant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, created_at, revoked_at FROM tenants ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Tenant
+	for rows.Next() {
+		var t Tenant
+		var created string
+		var revoked sql.NullString
+		if err := rows.Scan(&t.ID, &created, &revoked); err != nil {
+			return nil, err
+		}
+		t.CreatedAt, _ = time.Parse(time.RFC3339, created)
+		t.Revoked = revoked.Valid
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RecordAgentCert logs an issued agent-cert serial against its tenant, for
+// audit purposes only. It is not consulted for access control in this
+// version: revoking a specific cert without losing tenant identity (key
+// rotation) is out of scope — revoking a tenant revokes its whole identity.
+func (s *Store) RecordAgentCert(tenantID, serial string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO agent_certs (serial, tenant_id, issued_at) VALUES (?, ?, ?)`,
+		serial, tenantID, now())
+	return err
+}
+
+// Issue creates a new device bearer token for tenantID. The raw token is
+// returned once, here — only its hash is ever persisted.
+func (s *Store) Issue(tenantID, name string) (string, error) {
+	tok, err := randomHex(32)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.db.Exec(`INSERT INTO devices (token_hash, tenant_id, name, created_at) VALUES (?, ?, ?, ?)`,
+		hashToken(tok), tenantID, name, now())
+	if err != nil {
+		return "", fmt.Errorf("issue device token: %w", err)
+	}
+	return tok, nil
+}
+
+// Verify returns the device for a token, provided its tenant has not been
+// revoked. A SHA-256 digest lookup needs no constant-time comparison here:
+// unlike a raw-token equality check with early-exit branching, an indexed
+// lookup on a fully-avalanching hash leaks no exploitable timing signal.
+func (s *Store) Verify(token string) (Device, bool) {
+	if token == "" {
+		return Device{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hash := hashToken(token)
+	row := s.db.QueryRow(`
+		SELECT d.tenant_id, d.name, d.fcm_token, d.created_at
+		FROM devices d JOIN tenants t ON t.id = d.tenant_id
+		WHERE d.token_hash = ? AND t.revoked_at IS NULL`, hash)
+	var dev Device
+	var fcm sql.NullString
+	var created string
+	if err := row.Scan(&dev.TenantID, &dev.Name, &fcm, &created); err != nil {
+		return Device{}, false
+	}
+	dev.FCM = fcm.String
+	dev.Created, _ = time.Parse(time.RFC3339, created)
+	dev.HashSuffix = hash[len(hash)-6:]
+	return dev, true
+}
+
+// List returns all devices across all tenants.
+func (s *Store) List() []Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT token_hash, tenant_id, name, fcm_token, created_at FROM devices ORDER BY created_at`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []Device
+	for rows.Next() {
+		var dev Device
+		var hash string
+		var fcm sql.NullString
+		var created string
+		if err := rows.Scan(&hash, &dev.TenantID, &dev.Name, &fcm, &created); err != nil {
+			continue
+		}
+		dev.FCM = fcm.String
+		dev.Created, _ = time.Parse(time.RFC3339, created)
+		dev.HashSuffix = hash[len(hash)-6:]
+		out = append(out, dev)
+	}
+	return out
+}
+
+// Revoke removes a device by its raw token. Reports whether a device was
+// removed.
+func (s *Store) Revoke(token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`DELETE FROM devices WHERE token_hash = ?`, hashToken(token))
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+// SetFCMToken records the FCM registration token for a device token.
+func (s *Store) SetFCMToken(token, fcm string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE devices SET fcm_token = ? WHERE token_hash = ?`, fcm, hashToken(token))
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+// FCMTokens returns all non-empty FCM registration tokens across all
+// tenants.
+func (s *Store) FCMTokens() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT fcm_token FROM devices WHERE fcm_token IS NOT NULL AND fcm_token != ''`)
+	if err != nil {
+		return []string{}
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var tok string
+		if err := rows.Scan(&tok); err == nil {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+const pairingCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // unambiguous: no 0/O/1/I
+
 func randomCode(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	out := make([]byte, n)
 	for i := range b {
-		out[i] = codeAlphabet[int(b[i])%len(codeAlphabet)]
+		out[i] = pairingCodeAlphabet[int(b[i])%len(pairingCodeAlphabet)]
 	}
 	return string(out)
+}
+
+// NewPairingCode generates a single-use pairing code, scoped to tenantID,
+// valid for ttl.
+func (s *Store) NewPairingCode(tenantID string, ttl time.Duration) (string, error) {
+	code := randomCode(8)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO pairing_codes (code, tenant_id, expires_at) VALUES (?, ?, ?)`,
+		code, tenantID, time.Now().Add(ttl).UTC().Format(time.RFC3339))
+	if err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// RedeemPairingCode exchanges a valid, unexpired code for a freshly issued
+// device token scoped to that code's tenant. The code is consumed regardless
+// of outcome, to prevent reuse.
+func (s *Store) RedeemPairingCode(code, name string) (token, tenantID string, ok bool) {
+	s.mu.Lock()
+	var expiresAt string
+	err := s.db.QueryRow(`SELECT tenant_id, expires_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&tenantID, &expiresAt)
+	if err == nil {
+		_, _ = s.db.Exec(`DELETE FROM pairing_codes WHERE code = ?`, code)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return "", "", false
+	}
+	exp, _ := time.Parse(time.RFC3339, expiresAt)
+	if time.Now().After(exp) {
+		return "", "", false
+	}
+	tok, err := s.Issue(tenantID, name)
+	if err != nil {
+		return "", "", false
+	}
+	return tok, tenantID, true
 }

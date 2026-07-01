@@ -32,7 +32,8 @@ func TestLoadStoreOpensConfiguredStore(t *testing.T) {
 		t.Fatalf("TokenStore = %q want %q", cfg.TokenStore, storePath)
 	}
 	// Issuing a token should persist to the configured path.
-	if _, err := store.Issue("phone"); err != nil {
+	tenant, _ := store.CreateTenant()
+	if _, err := store.Issue(tenant, "phone"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(storePath); err != nil {

@@ -9,11 +9,12 @@ import (
 
 func protected(t *testing.T) (*Store, http.Handler, string) {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "d.json"))
+	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, _ := s.Issue("phone")
+	tenant, _ := s.CreateTenant()
+	tok, _ := s.Issue(tenant, "phone")
 	h := Require(s, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dev, ok := DeviceFromContext(r.Context())
 		if !ok || dev.Name != "phone" {

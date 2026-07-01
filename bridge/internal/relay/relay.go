@@ -135,7 +135,7 @@ type registerReq struct {
 }
 
 func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
-	dev, ok := auth.DeviceFromContext(req.Context())
+	_, ok := auth.DeviceFromContext(req.Context())
 	if !ok {
 		writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -145,7 +145,7 @@ func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
 		writeJSONErr(w, http.StatusBadRequest, "missing fcm_token")
 		return
 	}
-	r.store.SetFCMToken(dev.Token, rq.FCMToken)
+	r.store.SetFCMToken(auth.BearerToken(req), rq.FCMToken)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true}`))

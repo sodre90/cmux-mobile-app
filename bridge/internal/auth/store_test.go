@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,21 +8,79 @@ import (
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "d.json"))
+	s, err := Open(filepath.Join(t.TempDir(), "d.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
-func TestIssueVerifyRevoke(t *testing.T) {
-	s := newStore(t)
-	tok, err := s.Issue("phone")
+func newTenant(t *testing.T, s *Store) string {
+	t.Helper()
+	id, err := s.CreateTenant()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.Verify(tok); !ok {
+	return id
+}
+
+func TestCreateTenantActiveRevoke(t *testing.T) {
+	s := newStore(t)
+	id := newTenant(t, s)
+	if !s.TenantActive(id) {
+		t.Fatal("freshly created tenant should be active")
+	}
+	if s.TenantActive("nonexistent") {
+		t.Fatal("unknown tenant id must not be active")
+	}
+	if !s.RevokeTenant(id) {
+		t.Fatal("revoke should report success")
+	}
+	if s.TenantActive(id) {
+		t.Fatal("revoked tenant must not be active")
+	}
+	if s.RevokeTenant(id) {
+		t.Fatal("double revoke should report false")
+	}
+}
+
+func TestListTenants(t *testing.T) {
+	s := newStore(t)
+	a := newTenant(t, s)
+	b := newTenant(t, s)
+	s.RevokeTenant(b)
+	list, err := s.ListTenants()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("want 2 tenants, got %d", len(list))
+	}
+	byID := map[string]Tenant{}
+	for _, tn := range list {
+		byID[tn.ID] = tn
+	}
+	if byID[a].Revoked {
+		t.Fatal("tenant a should not be revoked")
+	}
+	if !byID[b].Revoked {
+		t.Fatal("tenant b should be revoked")
+	}
+}
+
+func TestIssueVerifyRevoke(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, err := s.Issue(tenant, "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, ok := s.Verify(tok)
+	if !ok {
 		t.Fatal("issued token should verify")
+	}
+	if dev.TenantID != tenant {
+		t.Fatalf("Verify TenantID = %q want %q", dev.TenantID, tenant)
 	}
 	if _, ok := s.Verify("bogus"); ok {
 		t.Fatal("bogus token must not verify")
@@ -43,14 +99,44 @@ func TestIssueVerifyRevoke(t *testing.T) {
 	}
 }
 
+func TestVerifyFailsClosedWhenTenantRevoked(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone")
+	s.RevokeTenant(tenant)
+	if _, ok := s.Verify(tok); ok {
+		t.Fatal("a device token must stop verifying once its tenant is revoked")
+	}
+}
+
+func TestTokensAreHashedAtRest(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone")
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE token_hash = ?`, tok).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("the raw token must never appear as a stored token_hash value")
+	}
+}
+
 func TestPairingCodeSingleUse(t *testing.T) {
 	s := newStore(t)
-	code := s.NewPairingCode(time.Minute)
-	tok, ok := s.RedeemPairingCode(code, "phone")
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, gotTenant, ok := s.RedeemPairingCode(code, "phone")
 	if !ok || tok == "" {
 		t.Fatal("first redeem should succeed")
 	}
-	if _, ok := s.RedeemPairingCode(code, "phone"); ok {
+	if gotTenant != tenant {
+		t.Fatalf("redeemed tenant = %q want %q", gotTenant, tenant)
+	}
+	if _, _, ok := s.RedeemPairingCode(code, "phone"); ok {
 		t.Fatal("reuse of a code must fail")
 	}
 	if _, ok := s.Verify(tok); !ok {
@@ -60,111 +146,52 @@ func TestPairingCodeSingleUse(t *testing.T) {
 
 func TestPairingCodeExpiry(t *testing.T) {
 	s := newStore(t)
-	code := s.NewPairingCode(-time.Second) // already expired
-	if _, ok := s.RedeemPairingCode(code, "phone"); ok {
+	tenant := newTenant(t, s)
+	code, _ := s.NewPairingCode(tenant, -time.Second) // already expired
+	if _, _, ok := s.RedeemPairingCode(code, "phone"); ok {
 		t.Fatal("expired code must fail")
 	}
 }
 
-func TestPersistenceReload(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "d.json")
+func TestPersistenceAcrossReopen(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "d.db")
 	s, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, _ := s.Issue("phone")
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone")
 	s2, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s2.Verify(tok); !ok {
-		t.Fatal("token must survive reload")
+		t.Fatal("token must survive reopening the database file")
 	}
 }
 
-func TestReloadPicksUpExternalChanges(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "d.json")
-	s, err := Open(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok1, _ := s.Issue("phone-1")
-
-	// Simulate an external `cmux-relay pair` process that appended a device:
-	// it read the current file (preserving phone-1) and wrote both back.
-	external := []Device{
-		{Token: tok1, Name: "phone-1"},
-		{Token: "TOK2", Name: "phone-2"},
-	}
-	writeStore(t, p, external)
-
-	// The new device is unknown until we reload.
-	if _, ok := s.Verify("TOK2"); ok {
-		t.Fatal("TOK2 should be unknown before reload")
-	}
-	n, err := s.Reload()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 2 {
-		t.Fatalf("want 2 devices after reload, got %d", n)
-	}
-	if _, ok := s.Verify("TOK2"); !ok {
-		t.Fatal("TOK2 should be known after reload")
-	}
-	if _, ok := s.Verify(tok1); !ok {
-		t.Fatal("phone-1 should still be known after reload")
-	}
-}
-
-func TestReloadKeepsDevicesOnError(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "d.json")
-	s, err := Open(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, _ := s.Issue("phone")
-
-	if err := os.WriteFile(p, []byte("{ not valid json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Reload(); err == nil {
-		t.Fatal("reload of a corrupt file must return an error")
-	}
-	if _, ok := s.Verify(tok); !ok {
-		t.Fatal("devices must be preserved when reload fails")
-	}
-}
-
-func writeStore(t *testing.T, path string, devs []Device) {
-	t.Helper()
-	data, err := json.MarshalIndent(devs, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestListRedactsTokens(t *testing.T) {
+func TestListShowsHashSuffixNotRawToken(t *testing.T) {
 	s := newStore(t)
-	tok, _ := s.Issue("phone")
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone")
 	list := s.List()
 	if len(list) != 1 {
 		t.Fatalf("want 1 device, got %d", len(list))
 	}
-	if list[0].Token == tok {
-		t.Fatal("List must redact the full token")
+	if list[0].HashSuffix == "" || len(list[0].HashSuffix) != 6 {
+		t.Fatalf("want a 6-char hash suffix, got %q", list[0].HashSuffix)
 	}
-	if len(list[0].Token) > 9 { // "..." + 6 chars
-		t.Fatalf("redacted token too long: %q", list[0].Token)
+	for _, want := range []string{tok, tok[len(tok)-6:]} {
+		if list[0].HashSuffix == want {
+			t.Fatal("List must never expose anything derived from the raw token")
+		}
 	}
 }
 
 func TestFCMTokens(t *testing.T) {
 	s := newStore(t)
-	tok, _ := s.Issue("phone")
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone")
 	if got := s.FCMTokens(); len(got) != 0 {
 		t.Fatalf("expected no FCM tokens, got %v", got)
 	}

@@ -55,11 +55,12 @@ func TestRelayEndToEndSessions(t *testing.T) {
 	trusted := agentSrv.TrustedHandler(relayTok)
 
 	// Relay with its own device store.
-	relayStore, err := auth.Open(t.TempDir() + "/r.json")
+	relayStore, err := auth.Open(t.TempDir() + "/r.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, _ := relayStore.Issue("phone")
+	tenant, _ := relayStore.CreateTenant()
+	devTok, _ := relayStore.Issue(tenant, "phone")
 	rl := New(relayStore, "mac-agent", relayTok)
 	relayHTTP := httptest.NewServer(rl.Handler())
 	defer relayHTTP.Close()

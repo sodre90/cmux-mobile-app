@@ -38,11 +38,12 @@ const fakeWorkspaceList = `{
 func newTestServer(t *testing.T, script string) (*Server, string) {
 	t.Helper()
 	bin := testutil.WriteFakeCmux(t, script)
-	store, err := auth.Open(t.TempDir() + "/d.json")
+	store, err := auth.Open(t.TempDir() + "/d.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, _ := store.Issue("phone")
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone")
 	s := New(config.Config{}, &cmux.Client{Bin: bin}, store)
 	return s, tok
 }
