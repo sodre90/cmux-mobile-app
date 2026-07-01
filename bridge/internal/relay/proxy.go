@@ -35,6 +35,7 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			req.Header.Set("X-Relay-Token", relayToken)
 		},
 		Transport: &http.Transport{
+			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				dev, ok := auth.DeviceFromContext(ctx)
 				if !ok {
