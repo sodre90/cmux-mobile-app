@@ -6,6 +6,7 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -19,9 +20,12 @@ import (
 	"time"
 )
 
-// CA holds the root signing key and certificate.
+// CA holds the root signing key and certificate. key is a crypto.Signer
+// rather than a concrete type so LoadOrCreate can adopt a pre-existing CA
+// regardless of its key algorithm (e.g. a hand-rolled RSA CA), not only the
+// ECDSA keys this package generates itself.
 type CA struct {
-	key  *ecdsa.PrivateKey
+	key  crypto.Signer
 	cert *x509.Certificate
 	// CertPEM is the root certificate, PEM-encoded — handed to newly
 	// registered agents so they can pin it as their trust root.
@@ -96,11 +100,34 @@ func load(certPEM, keyPEM []byte) (*CA, error) {
 	if keyBlock == nil {
 		return nil, fmt.Errorf("no PEM block in CA key")
 	}
-	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	key, err := parsePrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse CA key: %w", err)
 	}
 	return &CA{key: key, cert: cert, CertPEM: certPEM}, nil
+}
+
+// parsePrivateKey accepts a CA key in any of the three DER encodings openssl
+// commonly produces: PKCS#8 ("BEGIN PRIVATE KEY", any algorithm — this is
+// what a hand-rolled RSA CA is typically stored as), SEC1 ("BEGIN EC PRIVATE
+// KEY", the format this package's own create() writes), and PKCS#1 ("BEGIN
+// RSA PRIVATE KEY"). Adopting a pre-existing hand-rolled CA (so nginx's trust
+// bundle and already-issued device certs need no changes) requires all three.
+func parsePrivateKey(der []byte) (crypto.Signer, error) {
+	if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
+		signer, ok := key.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("PKCS8 key of type %T does not support signing", key)
+		}
+		return signer, nil
+	}
+	if key, err := x509.ParseECPrivateKey(der); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unrecognized private key encoding (tried PKCS8, SEC1 EC, PKCS1 RSA)")
 }
 
 // SignCSR verifies csrPEM's self-signature and issues a leaf certificate
