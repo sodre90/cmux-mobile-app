@@ -71,6 +71,10 @@ go test ./...        # all tests run with no network and no real cmux
    first run the relay generates its own CA (`ca_cert`/`ca_key`, default
    `~/.config/cmux-relay/ca.crt` / `ca.key`) and signs every agent and device
    cert against it — there's no separate hand-rolled CA to create any more.
+   Migrating an existing deployment that already has a CA (RSA or ECDSA)?
+   Point `ca_cert`/`ca_key` at those files instead and the relay loads and
+   reuses it rather than minting a new one — nginx's trust bundle and any
+   already-issued device certs need no changes.
 3. Install the systemd unit and nginx vhost:
 
    ```bash
