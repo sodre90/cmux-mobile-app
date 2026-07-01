@@ -8,14 +8,14 @@
     <rect x="280" y="380" width="480" height="360" fill="none" stroke="#FF1493" stroke-width="32" rx="8"/>
   </g>
 
-  <!-- Primary frame (cyan, foreground) - overlapping -->
+  <!-- Primary frame (cyan, foreground) - overlapping, filled with dark background to cover magenta -->
   <g id="primary-frame">
-    <rect x="200" y="300" width="480" height="360" fill="none" stroke="#00D9FF" stroke-width="32" rx="8"/>
+    <rect x="200" y="300" width="480" height="360" fill="#0A0E27" stroke="#00D9FF" stroke-width="32" rx="8"/>
   </g>
 
   <!-- Prompt symbols inside primary frame -->
-  <g id="prompt-symbols" font-family="monospace" font-size="56" font-weight="bold" fill="#FFFFFF">
-    <text x="240" y="500">$</text>
-    <text x="900" y="500">></text>
+  <g id="prompt-symbols" font-family="monospace" font-size="100" font-weight="bold" fill="#FFFFFF">
+    <text x="280" y="520">$</text>
+    <text x="540" y="520">></text>
   </g>
 </svg>
