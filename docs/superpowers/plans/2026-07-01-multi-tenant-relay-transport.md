@@ -1644,7 +1644,7 @@ func runServe(args []string) int {
 
 - [ ] **Step 11: Build and run the affected packages**
 
-`bridge/cmd/cmux-relay` (the `commands.go`/`main.go` files, not touched by this task) still calls the pre-multi-tenant `Store.Issue(name)` single-arg signature and reads `Device.Token` — both removed in Task 1. That package is Task 6's responsibility to fix; it is expected to remain non-compiling until Task 6 lands. Do not run a whole-module `go build ./...`/`go test ./...` for this task — scope it to what this task actually owns:
+`bridge/cmd/cmux-relay` (the `commands.go`/`main.go` files, not touched by this task) still calls the pre-multi-tenant `Store.Issue(name)` single-arg signature and reads `Device.Token` — both removed in Task 1. That package is Task 7's responsibility to fix; it is expected to remain non-compiling until Task 7 lands. Do not run a whole-module `go build ./...`/`go test ./...` for this task — scope it to what this task actually owns:
 
 Run: `cd bridge && go build ./internal/... && go test ./internal/...`
 Expected: PASS across all `internal` packages, including `TestRegistrySetReplaceClosesOldForSameTenant`, `TestRegistryTenantsDoNotInterfere`, `TestRegistryClearOnlyIfCurrent`, and `TestRegistryGetUnknownTenant` from Step 1 above. If `proxy_test.go` or `pushmon_test.go` still reference old shapes, fix them the same way as Step 9 until this passes clean.
@@ -1660,7 +1660,335 @@ git commit -m "relay: registry becomes tenant-keyed, route by tenant instead of 
 
 ---
 
-### Task 4: nginx bootstrap surface for `/tenants/register`
+### Task 4: Tenant-scope FCM push fanout (close a cross-tenant leak in `pushmon.go`)
+
+Not in the original plan — added after Task 3's review found it. `pushmon.go`'s
+attention-push fanout calls `Store.FCMTokens()`, which returns FCM tokens
+**across all tenants**. Since `MonitorAgent` is wired one-per-tunnel via
+`Relay.SetSessionHook` and carries no tenant identity, an attention event
+from tenant A's agent currently fans out to every tenant's registered
+phones, not just tenant A's — a direct violation of this project's core
+guarantee (a device must never receive another tenant's data), even though
+Task 3's HTTP/WS routing paths are correctly isolated. This task plumbs
+`tenantID` through the session-hook → `MonitorAgent` → `fanout` call chain
+and replaces the global `FCMTokens()` query with a tenant-scoped one.
+
+**Files:**
+- Modify: `bridge/internal/auth/store.go` (remove `FCMTokens()`, add `TenantFCMTokens(tenantID string) []string`)
+- Modify: `bridge/internal/auth/store_test.go` (replace `TestFCMTokens` with a tenant-scoped version)
+- Modify: `bridge/internal/relay/relay.go` (`onSession`/`SetSessionHook` gain a `tenantID string` parameter; `handleTunnel` passes it)
+- Modify: `bridge/internal/relay/pushmon.go` (`MonitorAgent`/`subscribeOnce`/`fanout` gain a `tenantID string` parameter; `fanout` calls `TenantFCMTokens`)
+- Modify: `bridge/internal/relay/pushmon_test.go` (update the call site; add a cross-tenant isolation test)
+- Modify: `bridge/cmd/cmux-relay/serve.go` (update the `SetSessionHook` closure's signature)
+
+**Interfaces:**
+- Produces: `Store.TenantFCMTokens(tenantID string) []string`; `Relay.SetSessionHook(f func(context.Context, string, *yamux.Session))`; `MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher)`.
+- Consumes: `auth.Store` (Task 1); `Relay`/`Registry`/`handleTunnel` (Task 3).
+
+- [ ] **Step 1: Write the failing store test**
+
+Replace `TestFCMTokens` in `bridge/internal/auth/store_test.go`:
+
+```go
+func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
+	s := newStore(t)
+	tenantA := newTenant(t, s)
+	tenantB := newTenant(t, s)
+	tokA, _ := s.Issue(tenantA, "phone-a")
+	tokB, _ := s.Issue(tenantB, "phone-b")
+
+	if got := s.TenantFCMTokens(tenantA); len(got) != 0 {
+		t.Fatalf("expected no FCM tokens yet, got %v", got)
+	}
+	if !s.SetFCMToken(tokA, "fcm-a") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+	if !s.SetFCMToken(tokB, "fcm-b") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+	if s.SetFCMToken("bogus", "x") {
+		t.Fatal("SetFCMToken must fail for unknown device")
+	}
+
+	gotA := s.TenantFCMTokens(tenantA)
+	if len(gotA) != 1 || gotA[0] != "fcm-a" {
+		t.Fatalf("tenantA tokens = %v, want [fcm-a]", gotA)
+	}
+	gotB := s.TenantFCMTokens(tenantB)
+	if len(gotB) != 1 || gotB[0] != "fcm-b" {
+		t.Fatalf("tenantB tokens = %v, want [fcm-b]", gotB)
+	}
+}
+```
+
+- [ ] **Step 2: Run to confirm it fails**
+
+Run: `cd bridge && go test ./internal/auth/... -run TestTenantFCMTokens`
+Expected: FAIL — `s.TenantFCMTokens undefined`.
+
+- [ ] **Step 3: Replace `FCMTokens` with `TenantFCMTokens` in `store.go`**
+
+In `bridge/internal/auth/store.go`, remove the existing `FCMTokens` method (the one whose doc comment reads "returns all non-empty FCM registration tokens across all tenants") and replace it with:
+
+```go
+// TenantFCMTokens returns all non-empty FCM registration tokens belonging to
+// tenantID's own devices. Scoped per tenant so an attention push triggered by
+// one tenant's agent can never fan out to another tenant's phones.
+func (s *Store) TenantFCMTokens(tenantID string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != ''`, tenantID)
+	if err != nil {
+		return []string{}
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var tok string
+		if err := rows.Scan(&tok); err == nil {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+```
+
+- [ ] **Step 4: Run to confirm it passes**
+
+Run: `cd bridge && go test ./internal/auth/... -v`
+Expected: PASS, including `TestTenantFCMTokensScopedPerTenant`.
+
+- [ ] **Step 5: Thread `tenantID` through `relay.go`'s session hook**
+
+In `bridge/internal/relay/relay.go`:
+- Change the `onSession` field's type from `func(context.Context, *yamux.Session)` to `func(context.Context, string, *yamux.Session)`.
+- Change `SetSessionHook`'s parameter type to match: `func (r *Relay) SetSessionHook(f func(context.Context, string, *yamux.Session)) { r.onSession = f }`.
+- In `handleTunnel`, change `go r.onSession(ctx, sess)` to `go r.onSession(ctx, tenantID, sess)` (the function already computes `tenantID` earlier in the same handler — no new lookup needed).
+
+- [ ] **Step 6: Update `pushmon.go` to accept and use `tenantID`**
+
+Replace `bridge/internal/relay/pushmon.go`:
+
+```go
+package relay
+
+import (
+	"context"
+	"log"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/server"
+)
+
+// Pusher delivers an attention push to a single device token. push.Sender
+// satisfies it.
+type Pusher interface {
+	Send(ctx context.Context, fcmToken, title, body string, data map[string]string) error
+}
+
+// MonitorAgent subscribes to the agent's /events over the tunnel and fans
+// blocking prompts out to FCM, scoped to tenantID's own devices only. It
+// returns when ctx is cancelled or the session dies. relayToken authenticates
+// to the agent's trusted handler.
+func MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) {
+	if push == nil {
+		return
+	}
+	for ctx.Err() == nil {
+		if err := subscribeOnce(tenantID, sess, relayToken, store, push); err != nil && sess.IsClosed() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) error {
+	d := websocket.Dialer{
+		NetDial: func(_, _ string) (net.Conn, error) { return sess.Open() },
+	}
+	ws, _, err := d.Dial("ws://agent/events", http.Header{"X-Relay-Token": {relayToken}})
+	if err != nil {
+		return err
+	}
+	defer ws.Close()
+	for {
+		var f server.EventFrame
+		if err := ws.ReadJSON(&f); err != nil {
+			return err
+		}
+		if f.NeedsAttention {
+			fanout(tenantID, store, push, f)
+		}
+	}
+}
+
+func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame) {
+	tokens := store.TenantFCMTokens(tenantID)
+	if len(tokens) == 0 {
+		return
+	}
+	body := f.Title
+	if body == "" {
+		body = f.Kind
+	}
+	data := map[string]string{
+		"type":         "attention",
+		"feed_id":      f.FeedID,
+		"workspace_id": f.WorkspaceID,
+		"surface_id":   f.SurfaceID,
+		"kind":         f.Kind,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sent, failed := 0, 0
+	for _, tok := range tokens {
+		if err := push.Send(ctx, tok, "Agent needs your attention", body, data); err != nil {
+			failed++
+			log.Printf("relay: attention push failed (tenant=%q kind=%s ws=%s): %v", tenantID, f.Kind, f.WorkspaceID, err)
+			continue
+		}
+		sent++
+	}
+	log.Printf("relay: attention push (tenant=%q kind=%s label=%q ws=%s) sent=%d failed=%d", tenantID, f.Kind, body, f.WorkspaceID, sent, failed)
+}
+```
+
+- [ ] **Step 7: Update `pushmon_test.go` — existing call site plus a new cross-tenant test**
+
+In `bridge/internal/relay/pushmon_test.go`:
+- Change `fakePusher` to also record which token each push went to:
+
+```go
+type fakePusher struct {
+	mu     sync.Mutex
+	tokens []string
+	calls  []map[string]string
+}
+
+func (p *fakePusher) Send(_ context.Context, tok, _, _ string, data map[string]string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tokens = append(p.tokens, tok)
+	p.calls = append(p.calls, data)
+	return nil
+}
+```
+
+- Update `TestMonitorAgentPushesAttention`'s existing call site: change `tenant, _ := store.CreateTenant()` / `tok, _ := store.Issue(tenant, "phone")` to keep using a single `tenant`, and change the dispatch line from `go MonitorAgent(ctx, relaySess, "tok", store, fp)` to `go MonitorAgent(ctx, tenant, relaySess, "tok", store, fp)`.
+
+- Add a new test proving the isolation property:
+
+```go
+func TestMonitorAgentScopesPushToOwnTenant(t *testing.T) {
+	c1, c2 := net.Pipe()
+	agentSess, err := yamux.Server(c1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relaySess, err := yamux.Client(c2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	go func() {
+		_ = http.Serve(agentSess, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/events" || r.Header.Get("X-Relay-Token") != "tok" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			ws, err := up.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			_ = ws.WriteJSON(server.EventFrame{
+				Type: "feed", NeedsAttention: true, FeedID: "F1",
+				Kind: "permissionRequest", Title: "Run rm -rf?",
+			})
+			time.Sleep(500 * time.Millisecond)
+		}))
+	}()
+
+	store, err := auth.Open(t.TempDir() + "/d.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantA, _ := store.CreateTenant()
+	tenantB, _ := store.CreateTenant()
+	tokA, _ := store.Issue(tenantA, "phone-a")
+	tokB, _ := store.Issue(tenantB, "phone-b")
+	store.SetFCMToken(tokA, "fcm-a")
+	store.SetFCMToken(tokB, "fcm-b")
+
+	fp := &fakePusher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// tenantA's agent session fires the attention event; tenantB's FCM token
+	// must never receive it.
+	go MonitorAgent(ctx, tenantA, relaySess, "tok", store, fp)
+
+	waitFor(t, func() bool {
+		fp.mu.Lock()
+		defer fp.mu.Unlock()
+		return len(fp.tokens) > 0
+	})
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	for _, tok := range fp.tokens {
+		if tok != "fcm-a" {
+			t.Fatalf("push reached a token outside tenantA: %q", tok)
+		}
+	}
+}
+```
+
+- [ ] **Step 8: Update `serve.go`'s session-hook wiring**
+
+In `bridge/cmd/cmux-relay/serve.go`, change:
+
+```go
+	if pusher != nil {
+		rl.SetSessionHook(func(ctx context.Context, sess *yamux.Session) {
+			relay.MonitorAgent(ctx, sess, cfg.RelayToken, store, pusher)
+		})
+	}
+```
+
+to:
+
+```go
+	if pusher != nil {
+		rl.SetSessionHook(func(ctx context.Context, tenantID string, sess *yamux.Session) {
+			relay.MonitorAgent(ctx, tenantID, sess, cfg.RelayToken, store, pusher)
+		})
+	}
+```
+
+- [ ] **Step 9: Run the affected packages**
+
+Run: `cd bridge && go build ./internal/... && go test ./internal/... -v`
+Expected: PASS, including `TestTenantFCMTokensScopedPerTenant`, `TestMonitorAgentPushesAttention`, and `TestMonitorAgentScopesPushToOwnTenant`. As with Task 3, `cmd/cmux-relay`'s `commands.go`/`main.go` gaps are still expected and out of scope — but this task's own change to `serve.go` must compile cleanly, so also run `cd bridge && go build ./cmd/cmux-relay/... 2>&1` and confirm the only errors are the same two pre-existing `commands.go` ones (`store.Issue` arg count, `Device.Token`), not a new error from `serve.go`.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add bridge/internal/auth/ bridge/internal/relay/ bridge/cmd/cmux-relay/serve.go
+git commit -m "relay: scope FCM attention-push fanout to the triggering tenant only"
+```
+
+---
+
+### Task 5: nginx bootstrap surface for `/tenants/register`
 
 **Files:**
 - Create: `bridge/deploy/nginx-cmux-relay-bootstrap.conf`
@@ -1725,7 +2053,7 @@ git commit -m "deploy: add no-mTLS nginx surface for agent self-registration"
 
 ---
 
-### Task 5: `cmux-bridge agent` self-registers on first run
+### Task 6: `cmux-bridge agent` self-registers on first run
 
 **Files:**
 - Create: `bridge/cmd/cmux-bridge/register.go`
@@ -1978,7 +2306,7 @@ git commit -m "agent: self-register with the relay's bootstrap endpoint on first
 
 ---
 
-### Task 6: `cmux-relay` CLI — tenant admin commands and tenant-scoped pairing
+### Task 7: `cmux-relay` CLI — tenant admin commands and tenant-scoped pairing
 
 **Files:**
 - Modify: `bridge/cmd/cmux-relay/commands.go`
@@ -2171,7 +2499,7 @@ git commit -m "cli: add tenants list/revoke, scope pair/devices by tenant"
 
 ---
 
-### Task 7: Adversarial cross-tenant isolation test
+### Task 8: Adversarial cross-tenant isolation test
 
 This is the test that proves the property the whole plan exists for: one tenant's device token can never reach another tenant's session, even when both are connected to the same relay process at once.
 
@@ -2334,7 +2662,7 @@ git commit -m "relay: add adversarial cross-tenant isolation test"
 
 ---
 
-### Task 8: Update docs for the multi-tenant model
+### Task 9: Update docs for the multi-tenant model
 
 **Files:**
 - Modify: `bridge/README.md`
@@ -2377,8 +2705,9 @@ git commit -m "docs: describe the multi-tenant relay model"
 
 ## Self-review notes (for the plan author, not a task to execute)
 
-- **Spec coverage:** Layer 1 (transport/routing) of the design spec is fully covered — per-tenant registry and per-tenant certs via the relay's own CA (Task 2, 3, 4), tenant-scoped device tokens with hashing (Task 1), agent self-registration (Task 4, 5), revocation (Task 1, 6), and the adversarial isolation test the spec explicitly calls for (Task 7). Layer 2 (E2E content encryption, QR pairing) is intentionally **not** covered — it's the next plan, built on top of this one.
+- **Spec coverage:** Layer 1 (transport/routing) of the design spec is fully covered — per-tenant registry and per-tenant certs via the relay's own CA (Task 2, 3), tenant-scoped device tokens with hashing (Task 1), tenant-scoped FCM push fanout (Task 4), agent self-registration (Task 5, 6), revocation (Task 1, 7), and the adversarial isolation test the spec explicitly calls for (Task 8). Layer 2 (E2E content encryption, QR pairing) is intentionally **not** covered — it's the next plan, built on top of this one.
 - **Explicit limitation carried forward from the spec:** no per-cert-serial revocation with stable tenant-ID preservation; re-registration mints a new tenant ID. Documented in Global Constraints and in Task 1's `RecordAgentCert` comment.
-- **Type consistency check:** `Device.TenantID`/`HashSuffix` (Task 1) match their use in `proxy.go`'s `dev.TenantID` (Task 3) and `commands.go`'s `d.TenantID`/`d.HashSuffix` (Task 6). `relay.New(store, signer, relayToken)` (Task 3) matches its call sites in `relay_test.go`, `multitenant_test.go` (Task 7), and `cmd/cmux-relay/serve.go` (Task 3). `Registry.Get/Set/Clear(tenantID, ...)` (Task 3) matches all call sites in `relay.go` and both test files, all landing together within Task 3 itself.
-- **Pre-flight fix:** the original draft split registry.go (old Task 3) from relay.go/proxy.go/config.go/serve.go (old Task 4) as if independently testable — they are not, since registry.go and relay.go share a package and relay.go calls Registry's changed methods immediately. Merged into one task before dispatch; see Task 3's intro paragraph.
-- **Second pre-flight fix (found while briefing Task 3):** Task 3's original Step 11 ran `go build ./... && go test ./...` and expected a full pass, but `cmd/cmux-relay/commands.go` and `main.go` (Task 6's files, not Task 3's) still call the pre-multi-tenant `Store.Issue(name)`/`Device.Token` API removed in Task 1 — that package cannot compile until Task 6 lands. Scoped Step 11 to `./internal/...` only, with an explicit note on why `cmd/cmux-relay` is expected to keep failing until Task 6. Same category of defect as the first pre-flight fix (an assumed build/test boundary that doesn't actually hold), one task-pair deeper (Task 3 vs. Task 6 instead of Task 3 vs. Task 4).
+- **Type consistency check:** `Device.TenantID`/`HashSuffix` (Task 1) match their use in `proxy.go`'s `dev.TenantID` (Task 3) and `commands.go`'s `d.TenantID`/`d.HashSuffix` (Task 7). `relay.New(store, signer, relayToken)` (Task 3) matches its call sites in `relay_test.go`, `multitenant_test.go` (Task 8), and `cmd/cmux-relay/serve.go` (Task 3, then re-touched by Task 4's `SetSessionHook` signature change). `Registry.Get/Set/Clear(tenantID, ...)` (Task 3) matches all call sites in `relay.go` and both test files, all landing together within Task 3 itself.
+- **Pre-flight fix (before dispatch):** the original draft split registry.go (old Task 3) from relay.go/proxy.go/config.go/serve.go (old Task 4) as if independently testable — they are not, since registry.go and relay.go share a package and relay.go calls Registry's changed methods immediately. Merged into one task before dispatch; see Task 3's intro paragraph.
+- **Second pre-flight fix (found while briefing Task 3, before dispatch):** Task 3's original build/test step ran `go build ./... && go test ./...` and expected a full pass, but `cmd/cmux-relay/commands.go`/`main.go` (the CLI task's files, not Task 3's) still call the pre-multi-tenant `Store.Issue(name)`/`Device.Token` API removed in Task 1 — that package cannot compile until the CLI task lands. Scoped the step to `./internal/...` only, with an explicit note on the expected gap. Same category of defect as the first pre-flight fix (an assumed build/test boundary that doesn't actually hold), just depending on a task several steps further out instead of the immediately-adjacent one.
+- **Mid-execution fix (found by Task 3's task reviewer, after Task 3 was implemented and approved):** `pushmon.go`'s attention-push fanout called `Store.FCMTokens()`, scoped across **all** tenants, with no tenant identity threaded through `Relay.SetSessionHook`/`MonitorAgent` — so tenant A's agent events would have paged every tenant's phones, not just tenant A's. This is a direct violation of the project's core isolation guarantee and wasn't caught by the original 8-task plan (no task touched `pushmon.go`). Added as Task 4, inserted immediately after Task 3 (the task that owns the session-hook wiring this fix threads a tenant ID through) and before the previously-Task-4 nginx work, renumbering everything after it up by one. Unlike the two pre-flight fixes above, this one only surfaced once real code existed for a reviewer to read — a static plan read couldn't have caught it, which is exactly why the per-task review loop exists.
