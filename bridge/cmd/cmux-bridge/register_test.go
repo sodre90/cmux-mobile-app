@@ -48,9 +48,8 @@ func TestEnsureRegisteredCallsBootstrapAndWritesFiles(t *testing.T) {
 	if _, err := os.ReadFile(cfg.ClientKey); err != nil {
 		t.Fatalf("client key not written: %v", err)
 	}
-	caCert, err := os.ReadFile(cfg.CACert)
-	if err != nil || string(caCert) != "FAKE CA" {
-		t.Fatalf("ca cert not written correctly: %v %q", err, caCert)
+	if _, err := os.Stat(cfg.CACert); !os.IsNotExist(err) {
+		t.Fatalf("ca_cert must not be written by self-registration, got err=%v", err)
 	}
 }
 

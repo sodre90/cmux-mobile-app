@@ -21,7 +21,6 @@ import (
 type registerResp struct {
 	TenantID string `json:"tenant_id"`
 	CertPEM  string `json:"cert_pem"`
-	CAPEM    string `json:"ca_pem"`
 }
 
 // ensureRegistered generates a keypair and self-registers with the relay's
@@ -73,9 +72,6 @@ func ensureRegistered(cfg config.AgentConfig) error {
 
 	if err := writeNew(cfg.ClientKey, keyPEM, 0o600); err != nil {
 		return fmt.Errorf("write client key: %w", err)
-	}
-	if err := writeNew(cfg.CACert, []byte(rr.CAPEM), 0o644); err != nil {
-		return fmt.Errorf("write CA cert: %w", err)
 	}
 	if err := writeNew(cfg.ClientCert, []byte(rr.CertPEM), 0o644); err != nil {
 		return fmt.Errorf("write client cert: %w", err)

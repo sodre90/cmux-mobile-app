@@ -179,7 +179,6 @@ type registerTenantReq struct {
 type registerTenantResp struct {
 	TenantID string `json:"tenant_id"`
 	CertPEM  string `json:"cert_pem"`
-	CAPEM    string `json:"ca_pem"`
 }
 
 // handleRegisterTenant mints a brand-new tenant identity for a Mac agent that
@@ -217,7 +216,6 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	_ = json.NewEncoder(w).Encode(registerTenantResp{
 		TenantID: tenantID,
 		CertPEM:  string(certPEM),
-		CAPEM:    string(r.ca.CertPEM),
 	})
 	log.Printf("relay: registered new tenant %q", tenantID)
 }

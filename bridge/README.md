@@ -147,13 +147,20 @@ first time *it* starts:
 2. On first run — only while `client_cert` doesn't exist on disk yet — the
    agent generates a keypair, sends a CSR to `bootstrap_url`, and the relay
    mints a fresh tenant and signs the cert with CN `agent:<tenant-id>`
-   against its own CA. The agent writes the returned cert, key, and CA cert to
-   the paths `client_cert` / `client_key` / `ca_cert` point at, and prints the
-   tenant ID it was assigned, for example:
+   against its own CA. The agent writes the returned cert and key to the
+   paths `client_cert` / `client_key` point at, and prints the tenant ID it
+   was assigned, for example:
 
    ```
    agent: registered as tenant 9f3a2c1e4b7d0a6f... (cert written to /Users/you/.config/cmux-bridge/agent.crt)
    ```
+
+   Self-registration never touches `ca_cert` — that setting is unrelated: it
+   pins the CA that signed nginx's own *server* certificate, not the relay's
+   internal agent/device-signing CA. Leave it empty (the default) if nginx
+   presents a publicly-trusted server cert (e.g. Let's Encrypt), which is the
+   common case. Only set it if you've deliberately given nginx a self-signed
+   or private-CA server cert.
 
 3. Every run after that skips registration — the cert is already on disk. Hand
    the printed tenant ID to whoever will pair phones for this agent (see
