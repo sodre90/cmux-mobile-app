@@ -32,7 +32,7 @@ independent work that consumes cmux's IPC contract.
     │       (home server)        │
     └────────────────────────────┘
                    │  yamux stream — routed by client-cert CN
-                   ▲  (the Mac dials OUT — mac-agent client cert)
+                   ▲  (the Mac dials OUT — agent:<tenant-id> client cert)
     ┌────────────────────────────┐
     │  cmux-bridge agent (Mac)   │
     └────────────────────────────┘
@@ -67,8 +67,10 @@ go test ./...        # all tests run with no network and no real cmux
 
 1. Copy the binary to `/usr/local/bin/cmux-relay`.
 2. Copy `deploy/relay.example.toml` to `/etc/cmux-relay/config.toml` and set
-   `relay_token` (a long random secret), `agent_cn` (the Mac's client-cert CN,
-   e.g. `mac-agent`), and optionally the FCM fields.
+   `relay_token` (a long random secret) and optionally the FCM fields. On
+   first run the relay generates its own CA (`ca_cert`/`ca_key`, default
+   `~/.config/cmux-relay/ca.crt` / `ca.key`) and signs every agent and device
+   cert against it — there's no separate hand-rolled CA to create any more.
 3. Install the systemd unit and nginx vhost:
 
    ```bash
@@ -77,6 +79,13 @@ go test ./...        # all tests run with no network and no real cmux
    cp deploy/nginx-cmux-relay.conf /etc/nginx/sites-available/cmux
    # enable the site + add the `map $http_upgrade $connection_upgrade` block, reload nginx
    ```
+
+   If a new Mac agent will self-register (see [Agent client
+   certificate](#agent-client-certificate) below), also install the no-mTLS
+   bootstrap vhost — `deploy/nginx-cmux-relay-bootstrap.conf` proxies only
+   `POST /tenants/register`, on a separate port (8444 in the example). The
+   main vhost above keeps `ssl_verify_client on`, unchanged, for the agent
+   tunnel and all device traffic.
 
 The relay binds `127.0.0.1:8765`; nginx is the only public surface. nginx must
 **set** `X-Client-Cert-CN $ssl_client_s_dn` (never trust an inbound value) so
@@ -97,7 +106,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/healthz   # 200
 The image builds on the host (don't ship it across architectures). The port is
 published on loopback only; the device store persists in the `relay-data`
 volume. Pair devices with `podman exec cmux-relay cmux-relay pair --config
-/etc/cmux-relay/config.toml --name phone`.
+/etc/cmux-relay/config.toml --tenant <id> --name phone` (tenant IDs from
+`cmux-relay tenants list`).
 
 ## Agent (Mac)
 
@@ -125,35 +135,67 @@ relay or network drops.
 
 ## Agent client certificate
 
-The Mac authenticates to nginx with its own client cert, signed by the **same
-client CA** as device certs, with a CN matching the relay's `agent_cn`:
+The Mac no longer needs a hand-rolled client cert. The relay generates its own
+CA the first time it starts, and a new agent registers itself against it the
+first time *it* starts:
 
-```bash
-openssl req -newkey rsa:2048 -nodes -keyout agent.key -out agent.csr -subj "/CN=mac-agent"
-openssl x509 -req -in agent.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out agent.crt -days 825 -sha256
-```
+1. Point `bootstrap_url` in `agent.toml` at the relay's no-mTLS bootstrap
+   vhost, e.g. `https://cmux.example.com:8444/tenants/register` — that's
+   `deploy/nginx-cmux-relay-bootstrap.conf`, which proxies only that one path.
+   A brand-new agent has no client cert yet, so it can't reach the main mTLS
+   vhost at all; this separate surface is how it gets one.
+2. On first run — only while `client_cert` doesn't exist on disk yet — the
+   agent generates a keypair, sends a CSR to `bootstrap_url`, and the relay
+   mints a fresh tenant and signs the cert with CN `agent:<tenant-id>`
+   against its own CA. The agent writes the returned cert, key, and CA cert to
+   the paths `client_cert` / `client_key` / `ca_cert` point at, and prints the
+   tenant ID it was assigned, for example:
 
-Place `agent.crt` / `agent.key` where `agent.toml` points. For `ca_cert`: leave
-it **empty** when nginx uses a publicly-trusted server cert (Let's Encrypt) — the
-agent then verifies the relay against the system roots; set it to a CA file only
-when nginx presents a private server cert.
+   ```
+   agent: registered as tenant 9f3a2c1e4b7d0a6f... (cert written to /Users/you/.config/cmux-bridge/agent.crt)
+   ```
+
+3. Every run after that skips registration — the cert is already on disk. Hand
+   the printed tenant ID to whoever will pair phones for this agent (see
+   [Pair a device](#pair-a-device) below).
 
 ## Pair a device
 
-Run on the **home server** (the relay owns the device token store):
+Pairing is still operator-driven — run this on the **home server**, where the
+relay owns the device token store. Every device belongs to exactly one
+tenant, so first find the tenant ID (the Mac agent printed its own when it
+self-registered; see [Agent client certificate](#agent-client-certificate)):
 
 ```bash
-cmux-relay pair --name phone
+cmux-relay tenants list
+```
+
+Then mint a token for that tenant:
+
+```bash
+cmux-relay pair --tenant <id> --name phone
 ```
 
 This prints a long-lived **device token**. Paste it into the app once; the app
-sends it as `Authorization: Bearer <token>` on every request. List and revoke:
+sends it as `Authorization: Bearer <token>` on every request. The device's own
+client cert (`.p12`) is still hand-rolled with `openssl` exactly as before
+(see [android/README.md](../android/README.md#2-client-certificate-p12)) —
+just sign it with the relay's own CA files (`~/.config/cmux-relay/ca.crt` /
+`ca.key` by default) instead of a separately hand-rolled CA. List/revoke
+devices and tenants:
 
 ```bash
-cmux-relay devices            # list (tokens redacted)
+cmux-relay devices                # list devices (tokens redacted)
 cmux-relay devices revoke <token>
+cmux-relay tenants list            # created/revoked per tenant
+cmux-relay tenants revoke <id>     # devices stop authenticating immediately;
+                                   # the agent is refused on its next reconnect
 ```
+
+Self-service phone pairing (a QR code instead of hand-run `openssl`/`.p12`)
+and end-to-end content encryption are tracked in a follow-up design, not yet
+implemented — see
+[`docs/superpowers/specs/2026-07-01-multi-tenant-relay-design.md`](../docs/superpowers/specs/2026-07-01-multi-tenant-relay-design.md).
 
 ## Edge: nginx mutual TLS
 

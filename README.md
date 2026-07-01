@@ -27,7 +27,7 @@ cmux socket password is stored.
     │       (home server)        │
     └────────────────────────────┘
                    │  persistent yamux-over-WSS tunnel
-                   ▲  (the Mac dials OUT — mac-agent client cert)
+                   ▲  (the Mac dials OUT — agent:<tenant-id> client cert)
     ┌────────────────────────────┐
     │  cmux-bridge agent (Mac)   │
     └────────────────────────────┘
@@ -53,12 +53,17 @@ launchd plist, nginx vhosts, container files, example configs) are in
 ## How it fits together
 
 1. **`cmux-relay`** runs on your home server behind nginx with `ssl_verify_client
-   on`. It owns device pairing/tokens, routes requests by client-cert CN, and
+   on`. It's its own certificate authority — it mints and signs every agent and
+   device cert itself — and serves many independent tenants (Mac agents) at
+   once: it owns device pairing/tokens, routes requests by client-cert CN, and
    (optionally) sends FCM push. It binds loopback only — nginx is the sole public
    surface.
-2. **`cmux-bridge agent`** runs in your Mac's GUI login session next to cmux. It
-   opens **one outbound WSS tunnel** to the relay and serves the bridge HTTP/WS
-   API over it. No port-forwarding, no inbound exposure on the Mac.
+2. **`cmux-bridge agent`** runs in your Mac's GUI login session next to cmux.
+   The first time it runs it self-registers with the relay (see
+   [bridge/README.md → Agent client certificate](bridge/README.md#agent-client-certificate))
+   to get its own signed cert and tenant ID; from then on it opens **one
+   outbound WSS tunnel** to the relay and serves the bridge HTTP/WS API over
+   it. No port-forwarding, no inbound exposure on the Mac.
 3. **The Android app** connects to the relay's public DNS name, presenting a
    client TLS certificate (mTLS) plus a per-device bearer token, and renders
    cmux's `render_grid` cell grid live.
@@ -90,10 +95,16 @@ go test ./...                                # no network, no real cmux
 
 Defense in depth, all the way to the cmux socket:
 
+- **Per-tenant isolation** — the relay serves many independent Mac agents at
+  once; each gets its own client cert (`CN=agent:<tenant-id>`) and its own
+  tunnel slot, and a device's bearer token is scoped to exactly one tenant.
+  A bug in one tenant's traffic can't spill into another's — enforced by an
+  adversarial test (`internal/relay/multitenant_test.go`), not just by
+  convention.
 - **Mutual TLS at the nginx edge** — both the Mac agent and every device present
   client certificates signed by one CA.
-- **Client-cert CN routing** in the relay — `CN=mac-agent` may open the tunnel;
-  device CNs are reverse-proxied as API calls.
+- **Client-cert CN routing** in the relay — an `agent:<tenant-id>` CN may open
+  that tenant's tunnel; device CNs are reverse-proxied as API calls.
 - **Per-device bearer token** — minted by `cmux-relay pair`, revocable, sent as
   `Authorization: Bearer …` on every request.
 - **`X-Relay-Token` shared secret** — injected by the relay so the agent only
