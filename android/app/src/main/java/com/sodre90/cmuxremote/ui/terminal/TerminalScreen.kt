@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,6 +45,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -73,6 +75,15 @@ fun TerminalScreen(
     val state by vm.state.collectAsState()
     var input by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
+
+    // Remote terminal sessions are watched, not typed into continuously - don't
+    // let the screen sleep mid-session. Reset on leaving so the rest of the app
+    // keeps normal screen-timeout behavior.
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
 
     // Pinch-to-zoom factor over the fit-to-width baseline (1f = exact fit).
     var userZoom by remember { mutableFloatStateOf(1f) }
