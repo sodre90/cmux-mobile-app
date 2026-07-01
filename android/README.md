@@ -100,7 +100,10 @@ config.** To enable "an agent needs you" notifications:
 
 The app registers its FCM token via `POST /devices/register` on launch and on
 token rotation. When the bridge sends a `type=attention` data message, the app
-posts a high-priority notification that deep-links into the agent inbox.
+posts a high-priority notification that deep-links into the exact workspace
+that needs attention — opening its terminal directly when it has a single
+pane, or the sessions list (with that workspace's attention stripe visible)
+when it has several.
 
 ## Known gaps / assumptions
 

@@ -84,7 +84,9 @@ func needsAttention(hookEvent, phase string) bool {
 
 // attentionLabel returns the best human label for a feed item. cmux redacts the
 // prompt text, so the cwd basename ("cmux-app") tells the user which agent is
-// waiting; a real payload title is preferred if cmux ever provides one.
+// waiting; a real payload title is preferred if cmux ever provides one. This is
+// only the cheap, synchronous fallback used before enrichTitle's workspace
+// lookup runs (or if that lookup fails).
 func attentionLabel(payload map[string]any) string {
 	if t := str(payload, "title"); t != "" {
 		return t
@@ -95,8 +97,46 @@ func attentionLabel(payload map[string]any) string {
 	return ""
 }
 
+// enrichTitle upgrades an attention frame's Title with the workspace's live
+// title + status preview (e.g. "Check Cloudera ticket CB-33546: Claude is
+// waiting for your input") — the richest context cmux exposes for a prompt
+// whose actual text it redacts. On any lookup failure the cheap cwd-basename
+// Title classify already set is left as-is.
+func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
+	if f.WorkspaceID == "" {
+		return
+	}
+	raw, err := s.cmux.Rpc(ctx, "mobile.workspace.list", nil)
+	if err != nil {
+		return
+	}
+	workspaces, err := parseWorkspaces(raw)
+	if err != nil {
+		return
+	}
+	for _, ws := range workspaces {
+		if ws.ID != f.WorkspaceID {
+			continue
+		}
+		label := ws.Title
+		if ws.Preview != "" {
+			if label != "" {
+				label += ": " + ws.Preview
+			} else {
+				label = ws.Preview
+			}
+		}
+		if label != "" {
+			f.Title = label
+		}
+		return
+	}
+}
+
 // ingestEvents reads NDJSON cmux event frames from r, classifies each, and
-// broadcasts the ones the app should see.
+// broadcasts the ones the app should see. Relay-side push (internal/relay's
+// pushmon) subscribes to this same /events stream, so enriching an attention
+// frame's Title here reaches both the live app and the FCM fan-out for free.
 func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -109,17 +149,17 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 			continue
 		}
 		if f, ok := classify(m); ok {
-			s.hub.broadcast(f)
 			if f.NeedsAttention {
-				go s.notifyPush(f)
+				s.enrichTitle(ctx, &f)
 			}
+			s.hub.broadcast(f)
 		}
 	}
 }
 
 // RunEvents keeps a `cmux events --reconnect` stream flowing into the hub. It is
-// started once by `serve`. When push is configured, attention frames also fan
-// out to FCM.
+// started once by the agent's tunnel handler. The relay subscribes to this same
+// /events stream over the tunnel to drive FCM push (internal/relay/pushmon.go).
 func (s *Server) RunEvents(ctx context.Context) {
 	for ctx.Err() == nil {
 		cmd, pipe, err := s.cmux.Events(ctx,

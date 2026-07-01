@@ -72,6 +72,7 @@ func fanout(store *auth.Store, push Pusher, f server.EventFrame) {
 		"type":         "attention",
 		"feed_id":      f.FeedID,
 		"workspace_id": f.WorkspaceID,
+		"surface_id":   f.SurfaceID,
 		"kind":         f.Kind,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

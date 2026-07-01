@@ -185,3 +185,53 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 		t.Fatalf("expected the classified feed frame, got %+v", got)
 	}
 }
+
+func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
+	// Reuses sessions_test.go's fakeWorkspaceList: workspace "882CA6F0" has
+	// title "✳ Build options" (cleaned to "Build options") and preview "Build
+	// options trading system".
+	script := "#!/bin/sh\ncat <<'JSON'\n" + fakeWorkspaceList + "\nJSON\n"
+	s, tok := newTestServer(t, script)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsDial(t, srv.URL, tok)
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-9","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/Users/u/prj/trading","workspace_id":"882CA6F0"}}`
+	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got EventFrame
+	if err := c.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+	want := "Build options: Build options trading system"
+	if got.Title != want {
+		t.Fatalf("title not enriched: got %q want %q", got.Title, want)
+	}
+}
+
+func TestIngestEventsKeepsFallbackTitleWhenWorkspaceNotFound(t *testing.T) {
+	script := "#!/bin/sh\ncat <<'JSON'\n" + fakeWorkspaceList + "\nJSON\n"
+	s, tok := newTestServer(t, script)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsDial(t, srv.URL, tok)
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-10","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/x/y","workspace_id":"UNKNOWN"}}`
+	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got EventFrame
+	if err := c.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "y" { // cwd basename fallback, unchanged when the lookup misses
+		t.Fatalf("title should fall back to cwd basename, got %q", got.Title)
+	}
+}

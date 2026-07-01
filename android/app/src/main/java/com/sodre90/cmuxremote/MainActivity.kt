@@ -31,10 +31,15 @@ class MainActivity : ComponentActivity() {
         val container = (application as CmuxApp).container
         registerFcmToken()
 
-        val initialRoute = intent?.getStringExtra(EXTRA_NAV)
+        val pendingWorkspaceId = intent?.getStringExtra(EXTRA_WORKSPACE_ID)
+        val pendingSurfaceId = intent?.getStringExtra(EXTRA_SURFACE_ID)
         setContent {
             CmuxTheme {
-                CmuxNavHost(container, initialRoute = initialRoute)
+                CmuxNavHost(
+                    container,
+                    pendingWorkspaceId = pendingWorkspaceId,
+                    pendingSurfaceId = pendingSurfaceId,
+                )
             }
         }
     }
@@ -63,6 +68,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        const val EXTRA_NAV = "cmux.nav"
+        const val EXTRA_WORKSPACE_ID = "cmux.workspace_id"
+        const val EXTRA_SURFACE_ID = "cmux.surface_id"
     }
 }

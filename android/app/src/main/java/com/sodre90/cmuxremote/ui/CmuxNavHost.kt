@@ -15,22 +15,41 @@ import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
+import com.sodre90.cmuxremote.ui.sessions.singlePaneTarget
 import com.sodre90.cmuxremote.ui.settings.SettingsScreen
 import com.sodre90.cmuxremote.ui.settings.SettingsViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
 @Composable
-fun CmuxNavHost(container: AppContainer, initialRoute: String? = null) {
+fun CmuxNavHost(
+    container: AppContainer,
+    pendingWorkspaceId: String? = null,
+    pendingSurfaceId: String? = null,
+) {
     val navController = rememberNavController()
     val configured = container.settings.bridgeConfig() != null
     val start = if (!configured) Routes.SETTINGS else Routes.SESSIONS
 
-    // A notification deep link (e.g. EXTRA_NAV=inbox) navigates once after launch,
-    // but only when the bridge is configured — otherwise onboarding must come first.
-    LaunchedEffect(initialRoute, configured) {
-        if (initialRoute != null && configured) {
-            navController.navigate(initialRoute)
+    // A notification tap carries which workspace needs attention (cmux never
+    // tells us the exact pane). Resolve it once after launch, but only when the
+    // bridge is configured — otherwise onboarding must come first: if the
+    // surface id is already known, jump straight there; otherwise fetch the
+    // live session list and apply the same singlePaneTarget rule the sessions
+    // list itself uses on tap — one pane opens directly, several fall back to
+    // the (attention-striped) sessions list rather than guessing wrong.
+    LaunchedEffect(pendingWorkspaceId, pendingSurfaceId, configured) {
+        if (!configured) return@LaunchedEffect
+        if (pendingSurfaceId != null) {
+            navController.navigate(Routes.terminal(pendingSurfaceId))
+            return@LaunchedEffect
+        }
+        if (pendingWorkspaceId != null) {
+            val target = runCatching { container.bridgeClient()?.sessions() }
+                .getOrNull()
+                ?.firstOrNull { it.id == pendingWorkspaceId }
+                ?.let { singlePaneTarget(it) }
+            if (target != null) navController.navigate(Routes.terminal(target))
         }
     }
 

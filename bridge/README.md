@@ -174,9 +174,16 @@ To get "agent needs you" notifications:
    blocking prompt it sends a high-priority FCM data message to every paired
    device.
 
-Notification text is **redacted in cmux's event stream**, so push is driven off
-structured feed items (a pending `permissionRequest` / `question` / `exitPlan`),
-not notification bodies.
+cmux redacts the actual prompt text in its event stream, so push triggers on
+the Claude Code hook name (`Notification` covers permission prompts and idle
+"waiting for input"; `AskUserQuestion` is an explicit blocking choice) rather
+than on structured feed content. The notification body is enriched with the
+workspace's live title + status preview (e.g. "Check ticket CB-33546: Claude
+is waiting for your input") — the richest context cmux exposes for a prompt
+whose text it hides. Tapping the notification deep-links to that workspace's
+terminal (its one pane directly, or the sessions list when it has several) —
+cmux never reports which pane raised the prompt, so pane-exact linking isn't
+possible.
 
 ## API
 

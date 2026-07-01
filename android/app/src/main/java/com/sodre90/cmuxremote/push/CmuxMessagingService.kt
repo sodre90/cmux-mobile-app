@@ -9,7 +9,6 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sodre90.cmuxremote.CmuxApp
 import com.sodre90.cmuxremote.MainActivity
-import com.sodre90.cmuxremote.ui.Routes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -17,10 +16,11 @@ import kotlinx.coroutines.launch
 
 /**
  * Receives FCM pushes. On a data message with `type=attention` it posts a
- * notification that deep-links to the agent inbox; on a new token it registers
- * the device with the bridge. Firebase only initialises when
- * `app/google-services.json` is present — without it these callbacks never fire,
- * so the app still builds and runs with push simply inactive.
+ * notification that deep-links to the workspace that needs attention (resolved
+ * to its exact terminal by CmuxNavHost, since cmux never tells us the pane); on
+ * a new token it registers the device with the bridge. Firebase only
+ * initialises when `app/google-services.json` is present — without it these
+ * callbacks never fire, so the app still builds and runs with push inactive.
  */
 class CmuxMessagingService : FirebaseMessagingService() {
 
@@ -41,15 +41,20 @@ class CmuxMessagingService : FirebaseMessagingService() {
         if (message.data["type"] != "attention") return
         val title = message.data["title"]?.takeIf { it.isNotBlank() }
             ?: "Agent needs your attention"
-        // body carries the agent label (cwd basename) so the user knows *which*
-        // agent is waiting; fall back to the raw kind, then a generic prompt.
+        // body carries the workspace's live title + status preview (the richest
+        // context cmux exposes for a prompt whose text it redacts).
         val body = message.data["body"]?.takeIf { it.isNotBlank() }
             ?: message.data["kind"]?.takeIf { it.isNotBlank() }
-            ?: "Open inbox to reply"
-        showNotification(title, body)
+            ?: "Open cmux to reply"
+        showNotification(
+            title,
+            body,
+            workspaceId = message.data["workspace_id"]?.takeIf { it.isNotBlank() },
+            surfaceId = message.data["surface_id"]?.takeIf { it.isNotBlank() },
+        )
     }
 
-    private fun showNotification(title: String, body: String) {
+    private fun showNotification(title: String, body: String, workspaceId: String?, surfaceId: String?) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Agent attention", NotificationManager.IMPORTANCE_HIGH),
@@ -57,7 +62,8 @@ class CmuxMessagingService : FirebaseMessagingService() {
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(MainActivity.EXTRA_NAV, Routes.INBOX)
+            putExtra(MainActivity.EXTRA_WORKSPACE_ID, workspaceId)
+            putExtra(MainActivity.EXTRA_SURFACE_ID, surfaceId)
         }
         val pending = PendingIntent.getActivity(
             this,
