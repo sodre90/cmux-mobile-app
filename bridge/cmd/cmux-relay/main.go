@@ -19,6 +19,8 @@ func main() {
 		os.Exit(runPair(os.Args[2:]))
 	case "devices":
 		os.Exit(runDevices(os.Args[2:]))
+	case "tenants":
+		os.Exit(runTenants(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("cmux-relay", version.String())
 	default:
@@ -28,5 +30,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cmux-relay <serve|pair|devices|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cmux-relay <serve|pair|devices|tenants|version> [flags]")
 }
