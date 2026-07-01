@@ -2503,8 +2503,11 @@ git commit -m "cli: add tenants list/revoke, scope pair/devices by tenant"
 
 This is the test that proves the property the whole plan exists for: one tenant's device token can never reach another tenant's session, even when both are connected to the same relay process at once.
 
+**Amended after first run (see "Mid-execution fix" #2 in the Self-review notes below):** the first implementer ran this test verbatim and it failed — `TestRelayIsolatesTenants` showed tenant B's device receiving tenant A's data. Root cause: `bridge/internal/relay/proxy.go`'s `newProxy` builds an `http.Transport` whose `Director` sets `req.URL.Host = "agent"` — the same constant string for every tenant. Go's `http.Transport` pools idle connections keyed by that host string alone, regardless of the custom `DialContext`'s per-request tenant resolution. Once tenant A's request opens a connection, it sits in the idle pool and can be handed to tenant B's next request without `DialContext` (and its `TenantActive`/registry lookup) ever running again — B's request rides A's already-open stream and gets A's data back. This task's scope now includes fixing that, in `proxy.go`, not just `bridge/internal/relay/multitenant_test.go` — the task's deliverable is "prove isolation holds," which isn't met by a test that merely exists.
+
 **Files:**
 - Create: `bridge/internal/relay/multitenant_test.go`
+- Modify: `bridge/internal/relay/proxy.go` (fix: disable connection reuse so every request re-resolves its tenant)
 
 **Interfaces:** none new — exercises `New`, `Registry`, `Store` end-to-end via real HTTP.
 
@@ -2643,21 +2646,34 @@ func TestRelayRevokedTenantCannotReconnectOrServeDevices(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to confirm it passes**
+- [ ] **Step 2: Run it, confirm the pre-existing leak, then fix `proxy.go`**
+
+Run: `cd bridge && go test ./internal/relay/... -run TestRelayIsolatesTenants -v`
+Expected (before the fix below): FAIL — tenant B's fetch contains `"tenant-a-secret"`.
+
+In `bridge/internal/relay/proxy.go`, add `DisableKeepAlives: true` to the `http.Transport` inside `newProxy`, so every proxied request is forced through a fresh `DialContext` call (and therefore a fresh `TenantActive`/registry lookup) instead of potentially reusing another tenant's pooled connection:
+
+```go
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+```
+
+- [ ] **Step 3: Run to confirm it passes**
 
 Run: `cd bridge && go test ./internal/relay/... -run TestRelayIsolatesTenants -v && go test ./internal/relay/... -run TestRelayRevokedTenant -v`
 Expected: PASS for both.
 
-- [ ] **Step 3: Run the full suite one more time**
+- [ ] **Step 4: Run the full suite one more time**
 
 Run: `cd bridge && go build ./... && go vet ./... && go test ./...`
 Expected: PASS, no vet warnings.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add bridge/internal/relay/multitenant_test.go
-git commit -m "relay: add adversarial cross-tenant isolation test"
+git add bridge/internal/relay/multitenant_test.go bridge/internal/relay/proxy.go
+git commit -m "relay: add adversarial cross-tenant isolation test, fix connection-pool leak it found"
 ```
 
 ---
@@ -2711,3 +2727,4 @@ git commit -m "docs: describe the multi-tenant relay model"
 - **Pre-flight fix (before dispatch):** the original draft split registry.go (old Task 3) from relay.go/proxy.go/config.go/serve.go (old Task 4) as if independently testable — they are not, since registry.go and relay.go share a package and relay.go calls Registry's changed methods immediately. Merged into one task before dispatch; see Task 3's intro paragraph.
 - **Second pre-flight fix (found while briefing Task 3, before dispatch):** Task 3's original build/test step ran `go build ./... && go test ./...` and expected a full pass, but `cmd/cmux-relay/commands.go`/`main.go` (the CLI task's files, not Task 3's) still call the pre-multi-tenant `Store.Issue(name)`/`Device.Token` API removed in Task 1 — that package cannot compile until the CLI task lands. Scoped the step to `./internal/...` only, with an explicit note on the expected gap. Same category of defect as the first pre-flight fix (an assumed build/test boundary that doesn't actually hold), just depending on a task several steps further out instead of the immediately-adjacent one.
 - **Mid-execution fix (found by Task 3's task reviewer, after Task 3 was implemented and approved):** `pushmon.go`'s attention-push fanout called `Store.FCMTokens()`, scoped across **all** tenants, with no tenant identity threaded through `Relay.SetSessionHook`/`MonitorAgent` — so tenant A's agent events would have paged every tenant's phones, not just tenant A's. This is a direct violation of the project's core isolation guarantee and wasn't caught by the original 8-task plan (no task touched `pushmon.go`). Added as Task 4, inserted immediately after Task 3 (the task that owns the session-hook wiring this fix threads a tenant ID through) and before the previously-Task-4 nginx work, renumbering everything after it up by one. Unlike the two pre-flight fixes above, this one only surfaced once real code existed for a reviewer to read — a static plan read couldn't have caught it, which is exactly why the per-task review loop exists.
+- **Mid-execution fix #2 (found by Task 8's own adversarial test, exactly as designed):** `proxy.go`'s `newProxy` (Task 3) sets `req.URL.Host = "agent"` — a constant, identical for every tenant — as the `Director`'s placeholder target. Go's `http.Transport` pools idle connections keyed by that host string alone, independent of the custom `DialContext`'s per-request tenant resolution. Once tenant A's request opened a connection, it could sit in the idle pool and be handed to tenant B's next request without `DialContext` (and its tenant check) ever running again, serving B tenant A's data. Confirmed via `TestRelayIsolatesTenants` failing exactly this way on first run. User decided (2026-07-01, via AskUserQuestion) to fix this within Task 8 itself rather than spin out a new task, since Task 8's whole deliverable is proving this property holds — amended Task 8's Files/Steps in place (see the note at the top of Task 8) instead of renumbering. Fix: `DisableKeepAlives: true` on the proxy's `http.Transport`, forcing a fresh `DialContext` call — and therefore a fresh tenant check — on every single proxied request; no connection is ever reused across requests, so no connection can ever be reused across tenants either.
