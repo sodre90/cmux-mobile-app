@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/config"
 )
@@ -48,9 +49,10 @@ func ensureRegistered(cfg config.AgentConfig) error {
 
 	body, err := json.Marshal(map[string]string{"csr": string(csrPEM)})
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal registration request: %w", err)
 	}
-	resp, err := http.Post(cfg.BootstrapURL, "application/json", bytes.NewReader(body))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(cfg.BootstrapURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("register with relay: %w", err)
 	}
@@ -65,18 +67,18 @@ func ensureRegistered(cfg config.AgentConfig) error {
 
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal agent key: %w", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeNew(cfg.ClientCert, []byte(rr.CertPEM), 0o644); err != nil {
-		return err
-	}
 	if err := writeNew(cfg.ClientKey, keyPEM, 0o600); err != nil {
-		return err
+		return fmt.Errorf("write client key: %w", err)
 	}
 	if err := writeNew(cfg.CACert, []byte(rr.CAPEM), 0o644); err != nil {
-		return err
+		return fmt.Errorf("write CA cert: %w", err)
+	}
+	if err := writeNew(cfg.ClientCert, []byte(rr.CertPEM), 0o644); err != nil {
+		return fmt.Errorf("write client cert: %w", err)
 	}
 	fmt.Printf("agent: registered as tenant %s (cert written to %s)\n", rr.TenantID, cfg.ClientCert)
 	return nil
@@ -84,7 +86,10 @@ func ensureRegistered(cfg config.AgentConfig) error {
 
 func writeNew(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return fmt.Errorf("create dir for %s: %w", path, err)
 	}
-	return os.WriteFile(path, data, perm)
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
