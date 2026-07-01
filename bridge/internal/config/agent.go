@@ -18,6 +18,10 @@ type AgentConfig struct {
 	ClientKey  string `toml:"client_key"`
 	CACert     string `toml:"ca_cert"`
 	RelayToken string `toml:"relay_token"`
+	// BootstrapURL is the relay's no-mTLS registration endpoint
+	// (e.g. https://cmux.example.com:8444/tenants/register), used exactly
+	// once, on first run, when ClientCert/ClientKey/CACert don't exist yet.
+	BootstrapURL string `toml:"bootstrap_url"`
 }
 
 func agentDefaults() AgentConfig { return AgentConfig{CmuxBin: "cmux"} }

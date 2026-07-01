@@ -80,6 +80,10 @@ func runAgent(args []string) int {
 		log.Printf("agent: %v", err)
 		return 1
 	}
+	if err := ensureRegistered(cfg); err != nil {
+		log.Printf("agent: %v", err)
+		return 1
+	}
 	if cfg.RelayURL == "" {
 		log.Printf("agent: relay_url is required")
 		return 1

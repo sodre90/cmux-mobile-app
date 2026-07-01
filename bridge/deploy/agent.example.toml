@@ -5,3 +5,4 @@ client_key  = "~/.config/cmux-bridge/agent.key"
 ca_cert     = ""                                    # CA that signed the nginx server cert; leave empty for a public CA (Let's Encrypt)
 relay_token = "CHANGE_ME_long_random_secret"        # must match the relay
 cmux_bin    = "cmux"
+# bootstrap_url = "https://cmux.example.com:8444/tenants/register"  # used once, on first run
