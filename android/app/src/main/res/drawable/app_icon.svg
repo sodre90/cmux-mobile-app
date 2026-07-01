@@ -16,6 +16,6 @@
   <!-- Prompt symbols inside primary frame -->
   <g id="prompt-symbols" font-family="monospace" font-size="100" font-weight="bold" fill="#FFFFFF">
     <text x="280" y="520">$</text>
-    <text x="540" y="520">></text>
+    <text x="420" y="520">></text>
   </g>
 </svg>
