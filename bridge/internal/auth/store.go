@@ -73,7 +73,11 @@ type Store struct {
 // locking, so there is no in-memory cache to fall out of sync (unlike the
 // previous JSON-file store, this needs no reload-on-SIGHUP mechanism).
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// Add busy_timeout pragma to allow multiple processes to wait instead of
+	// immediately failing with SQLITE_BUSY. 5 seconds should be ample for
+	// infrequent operations like tenant/device list and pairing code redemption.
+	dsn := path + "?_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open store %s: %w", path, err)
 	}
@@ -319,23 +323,48 @@ func (s *Store) NewPairingCode(tenantID string, ttl time.Duration) (string, erro
 
 // RedeemPairingCode exchanges a valid, unexpired code for a freshly issued
 // device token scoped to that code's tenant. The code is consumed regardless
-// of outcome, to prevent reuse.
+// of outcome, to prevent reuse. The validate-and-delete is atomic at the
+// database level (wrapped in a transaction) to prevent double-redemption
+// across concurrent OS processes.
 func (s *Store) RedeemPairingCode(code, name string) (token, tenantID string, ok bool) {
 	s.mu.Lock()
-	var expiresAt string
-	err := s.db.QueryRow(`SELECT tenant_id, expires_at FROM pairing_codes WHERE code = ?`, code).
-		Scan(&tenantID, &expiresAt)
-	if err == nil {
-		_, _ = s.db.Exec(`DELETE FROM pairing_codes WHERE code = ?`, code)
-	}
-	s.mu.Unlock()
+	// Start an explicit transaction to atomically validate and consume the code.
+	tx, err := s.db.Begin()
 	if err != nil {
+		s.mu.Unlock()
 		return "", "", false
 	}
+
+	var expiresAt string
+	err = tx.QueryRow(`SELECT tenant_id, expires_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&tenantID, &expiresAt)
+	if err != nil {
+		tx.Rollback()
+		s.mu.Unlock()
+		return "", "", false
+	}
+
+	_, err = tx.Exec(`DELETE FROM pairing_codes WHERE code = ?`, code)
+	if err != nil {
+		tx.Rollback()
+		s.mu.Unlock()
+		return "", "", false
+	}
+
+	if err := tx.Commit(); err != nil {
+		s.mu.Unlock()
+		return "", "", false
+	}
+	s.mu.Unlock()
+
+	// Validation happens after transaction and lock release to allow other
+	// processes to proceed. By this time the code is atomically deleted.
 	exp, _ := time.Parse(time.RFC3339, expiresAt)
 	if time.Now().After(exp) {
 		return "", "", false
 	}
+
+	// Issue a new token. This acquires and releases the lock separately.
 	tok, err := s.Issue(tenantID, name)
 	if err != nil {
 		return "", "", false
