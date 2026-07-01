@@ -924,15 +924,24 @@ git commit -m "ca: add minimal certificate authority for tenant agent-cert issua
 
 ---
 
-### Task 3: `relay.Registry` becomes tenant-keyed
+### Task 3: Registry tenant-keyed + relay routing, config, and `serve.go` wiring
+
+`registry.go` and `relay.go` are the same Go package (`relay`): changing `Registry`'s method signatures immediately breaks `relay.go`'s calls to it, so this task lands as one commit, not two — there is no point between them where `go build ./internal/relay/...` succeeds. `proxy.go`, `config.go`, and `cmd/cmux-relay/serve.go` join for the same reason: all reference each other's changed signatures, and the package (and its caller) only compiles once every one of them is updated.
 
 **Files:**
 - Modify: `bridge/internal/relay/registry.go`
 - Modify: `bridge/internal/relay/registry_test.go`
+- Modify: `bridge/internal/relay/relay.go`
+- Modify: `bridge/internal/relay/proxy.go`
+- Modify: `bridge/internal/relay/relay_test.go`
+- Modify: `bridge/internal/relay/proxy_test.go`
+- Modify: `bridge/internal/config/config.go`
+- Modify: `bridge/internal/config/config_test.go`
+- Modify: `bridge/cmd/cmux-relay/serve.go`
 
 **Interfaces:**
-- Produces: `Registry.Set(tenantID string, sess *yamux.Session, stop func())`; `Registry.Get(tenantID string) *yamux.Session`; `Registry.Clear(tenantID string, sess *yamux.Session)`.
-- Consumes: `github.com/hashicorp/yamux`.
+- Produces: `Registry.Set(tenantID string, sess *yamux.Session, stop func())`; `Registry.Get(tenantID string) *yamux.Session`; `Registry.Clear(tenantID string, sess *yamux.Session)`; `relay.New(store *auth.Store, signer *ca.CA, relayToken string) *Relay`; keeps `Relay.Handler()`, `Relay.SetEdgeToken`, `Relay.SetSessionHook` unchanged in shape.
+- Consumes: `github.com/hashicorp/yamux`; `auth.Store` (Task 1); `ca.CA`/`ca.LoadOrCreate` (Task 2).
 
 - [ ] **Step 1: Write the failing test for tenant non-interference**
 
@@ -1114,38 +1123,11 @@ func (r *Registry) Clear(tenantID string, sess *yamux.Session) {
 }
 ```
 
-- [ ] **Step 4: Run to confirm it passes**
+- [ ] **Step 4: `registry.go` alone won't build yet — that's expected**
 
-Run: `cd bridge && go test ./internal/relay/... -run TestRegistry -v`
-Expected: PASS (the rest of the `relay` package will still fail to compile until Task 4 — that's expected, `go test -run TestRegistry` only runs this file's tests, but the package build itself will fail; run `go vet ./internal/relay/...` here only if it succeeds standalone, otherwise proceed directly to Task 4, which is the point at which the whole package compiles again).
+`registry_test.go` (this file) tests only `Registry`, which now compiles on its own. But `relay.go` elsewhere in this same package still calls the old single-session `Registry` API (`reg.Set(sess, cancel)`, `reg.Current()`), so `go build ./internal/relay/...` fails until Step 6 below updates `relay.go` too. Do not attempt to run the package's test suite yet — continue directly to Step 5.
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add bridge/internal/relay/registry.go bridge/internal/relay/registry_test.go
-git commit -m "relay: registry becomes tenant-keyed instead of single-session"
-```
-
----
-
-### Task 4: Relay routing, config, and `serve.go` wiring for tenant-scoped tunnels
-
-This task lands together because `relay.go`, `proxy.go`, `config.go`, and `cmd/cmux-relay/serve.go` all reference each other's changed signatures — the package only compiles once all four are updated.
-
-**Files:**
-- Modify: `bridge/internal/relay/relay.go`
-- Modify: `bridge/internal/relay/proxy.go`
-- Modify: `bridge/internal/relay/relay_test.go`
-- Modify: `bridge/internal/relay/proxy_test.go`
-- Modify: `bridge/internal/config/config.go`
-- Modify: `bridge/internal/config/config_test.go`
-- Modify: `bridge/cmd/cmux-relay/serve.go`
-
-**Interfaces:**
-- Consumes: `auth.Store` (Task 1), `ca.CA`/`ca.LoadOrCreate` (Task 2), `Registry.Set/Get/Clear` (Task 3).
-- Produces: `relay.New(store *auth.Store, signer *ca.CA, relayToken string) *Relay`; keeps `Relay.Handler()`, `Relay.SetEdgeToken`, `Relay.SetSessionHook` unchanged in shape.
-
-- [ ] **Step 1: Update `config.go`**
+- [ ] **Step 5: Update `config.go`**
 
 In `bridge/internal/config/config.go`:
 - Remove the `AgentCN string` field and its doc comment.
@@ -1202,7 +1184,7 @@ func TestConfigRelayFields(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Replace `relay.go`**
+- [ ] **Step 6: Replace `relay.go`**
 
 ```go
 package relay
@@ -1430,7 +1412,7 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 }
 ```
 
-- [ ] **Step 3: Replace `proxy.go`'s dial logic**
+- [ ] **Step 7: Replace `proxy.go`'s dial logic**
 
 In `bridge/internal/relay/proxy.go`, change the `Transport.DialContext` to resolve the tenant from the authenticated device rather than "whatever's current":
 
@@ -1497,7 +1479,7 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 }
 ```
 
-- [ ] **Step 4: Update `relay_test.go`'s existing tests for the new signatures**
+- [ ] **Step 8: Update `relay_test.go`'s existing tests for the new signatures**
 
 In `bridge/internal/relay/relay_test.go`:
 - Change every `New(nil, "mac-agent", "tok")` to `New(nil, nil, "tok")` (3 occurrences: `TestRelayHealthz`, `TestRelayEdgeTokenGate`, `TestRelayTunnelRejectsWrongCN`).
@@ -1567,11 +1549,11 @@ func TestRelayEndToEndSessions(t *testing.T) {
 
 - Update `TestParseCN` cases from `"CN=mac-agent"` style values — no change needed, `parseCN` itself is untouched; only `TestRelayTunnelRejectsWrongCN` needs its `CN=phone` case to keep failing, which it still does since `"phone"` doesn't have the `agent:` prefix.
 
-- [ ] **Step 5: Update `proxy_test.go` if it references `reg.Current()`**
+- [ ] **Step 9: Update `proxy_test.go` if it references `reg.Current()`**
 
 Open `bridge/internal/relay/proxy_test.go`; anywhere it calls the old `reg.Current()`/`reg.Set(sess, stop)` (single-session shape), update to the tenant-keyed shape, e.g. `reg.Set("tenant-a", sess, stop)` and construct requests whose context carries `auth.Device{TenantID: "tenant-a"}` via `auth.DeviceFromContext`-compatible test setup (wrap the request context with `context.WithValue` using the same unexported key is not possible from the test package — instead, drive these tests through `auth.Require` with a real `*auth.Store` device, exactly as `relay_test.go` does, rather than constructing the context by hand).
 
-- [ ] **Step 6: Update `cmd/cmux-relay/serve.go`**
+- [ ] **Step 10: Update `cmd/cmux-relay/serve.go`**
 
 Replace `bridge/cmd/cmux-relay/serve.go`:
 
@@ -1660,21 +1642,21 @@ func runServe(args []string) int {
 }
 ```
 
-- [ ] **Step 7: Build and run the full bridge test suite**
+- [ ] **Step 11: Build and run the full bridge test suite**
 
 Run: `cd bridge && go build ./... && go test ./...`
-Expected: PASS across all packages. If `proxy_test.go` or `pushmon_test.go` still reference old shapes, fix them the same way as Step 5 until this passes clean.
+Expected: PASS across all packages, including `TestRegistrySetReplaceClosesOldForSameTenant`, `TestRegistryTenantsDoNotInterfere`, `TestRegistryClearOnlyIfCurrent`, and `TestRegistryGetUnknownTenant` from Step 1 above. If `proxy_test.go` or `pushmon_test.go` still reference old shapes, fix them the same way as Step 9 until this passes clean.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add bridge/internal/relay/ bridge/internal/config/ bridge/cmd/cmux-relay/serve.go
-git commit -m "relay: route by tenant instead of a single global agent CN"
+git commit -m "relay: registry becomes tenant-keyed, route by tenant instead of a single global agent CN"
 ```
 
 ---
 
-### Task 5: nginx bootstrap surface for `/tenants/register`
+### Task 4: nginx bootstrap surface for `/tenants/register`
 
 **Files:**
 - Create: `bridge/deploy/nginx-cmux-relay-bootstrap.conf`
@@ -1739,7 +1721,7 @@ git commit -m "deploy: add no-mTLS nginx surface for agent self-registration"
 
 ---
 
-### Task 6: `cmux-bridge agent` self-registers on first run
+### Task 5: `cmux-bridge agent` self-registers on first run
 
 **Files:**
 - Create: `bridge/cmd/cmux-bridge/register.go`
@@ -1992,7 +1974,7 @@ git commit -m "agent: self-register with the relay's bootstrap endpoint on first
 
 ---
 
-### Task 7: `cmux-relay` CLI — tenant admin commands and tenant-scoped pairing
+### Task 6: `cmux-relay` CLI — tenant admin commands and tenant-scoped pairing
 
 **Files:**
 - Modify: `bridge/cmd/cmux-relay/commands.go`
@@ -2185,7 +2167,7 @@ git commit -m "cli: add tenants list/revoke, scope pair/devices by tenant"
 
 ---
 
-### Task 8: Adversarial cross-tenant isolation test
+### Task 7: Adversarial cross-tenant isolation test
 
 This is the test that proves the property the whole plan exists for: one tenant's device token can never reach another tenant's session, even when both are connected to the same relay process at once.
 
@@ -2348,7 +2330,7 @@ git commit -m "relay: add adversarial cross-tenant isolation test"
 
 ---
 
-### Task 9: Update docs for the multi-tenant model
+### Task 8: Update docs for the multi-tenant model
 
 **Files:**
 - Modify: `bridge/README.md`
@@ -2391,6 +2373,7 @@ git commit -m "docs: describe the multi-tenant relay model"
 
 ## Self-review notes (for the plan author, not a task to execute)
 
-- **Spec coverage:** Layer 1 (transport/routing) of the design spec is fully covered — per-tenant registry (Task 3), per-tenant certs via the relay's own CA (Task 2, 4, 5), tenant-scoped device tokens with hashing (Task 1), agent self-registration (Task 5, 6), revocation (Task 1, 7), and the adversarial isolation test the spec explicitly calls for (Task 8). Layer 2 (E2E content encryption, QR pairing) is intentionally **not** covered — it's the next plan, built on top of this one.
+- **Spec coverage:** Layer 1 (transport/routing) of the design spec is fully covered — per-tenant registry and per-tenant certs via the relay's own CA (Task 2, 3, 4), tenant-scoped device tokens with hashing (Task 1), agent self-registration (Task 4, 5), revocation (Task 1, 6), and the adversarial isolation test the spec explicitly calls for (Task 7). Layer 2 (E2E content encryption, QR pairing) is intentionally **not** covered — it's the next plan, built on top of this one.
 - **Explicit limitation carried forward from the spec:** no per-cert-serial revocation with stable tenant-ID preservation; re-registration mints a new tenant ID. Documented in Global Constraints and in Task 1's `RecordAgentCert` comment.
-- **Type consistency check:** `Device.TenantID`/`HashSuffix` (Task 1) match their use in `proxy.go`'s `dev.TenantID` (Task 4) and `commands.go`'s `d.TenantID`/`d.HashSuffix` (Task 7). `relay.New(store, signer, relayToken)` (Task 4) matches its call sites in `relay_test.go`, `multitenant_test.go` (Task 8), and `cmd/cmux-relay/serve.go` (Task 4). `Registry.Get/Set/Clear(tenantID, ...)` (Task 3) matches all call sites in `relay.go` (Task 4) and both test files (Task 3, 8).
+- **Type consistency check:** `Device.TenantID`/`HashSuffix` (Task 1) match their use in `proxy.go`'s `dev.TenantID` (Task 3) and `commands.go`'s `d.TenantID`/`d.HashSuffix` (Task 6). `relay.New(store, signer, relayToken)` (Task 3) matches its call sites in `relay_test.go`, `multitenant_test.go` (Task 7), and `cmd/cmux-relay/serve.go` (Task 3). `Registry.Get/Set/Clear(tenantID, ...)` (Task 3) matches all call sites in `relay.go` and both test files, all landing together within Task 3 itself.
+- **Pre-flight fix:** the original draft split registry.go (old Task 3) from relay.go/proxy.go/config.go/serve.go (old Task 4) as if independently testable — they are not, since registry.go and relay.go share a package and relay.go calls Registry's changed methods immediately. Merged into one task before dispatch; see Task 3's intro paragraph.
