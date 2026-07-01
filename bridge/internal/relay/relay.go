@@ -35,7 +35,7 @@ type Relay struct {
 	relayToken string
 	edgeToken  string
 	proxy      *httputil.ReverseProxy
-	onSession  func(context.Context, *yamux.Session)
+	onSession  func(context.Context, string, *yamux.Session)
 }
 
 // New builds a Relay. store may be nil only in tests that never hit auth
@@ -53,7 +53,7 @@ func New(store *auth.Store, signer *ca.CA, relayToken string) *Relay {
 
 // SetSessionHook registers a callback invoked (in its own goroutine) for each
 // accepted agent session; its context is cancelled when the session ends.
-func (r *Relay) SetSessionHook(f func(context.Context, *yamux.Session)) { r.onSession = f }
+func (r *Relay) SetSessionHook(f func(context.Context, string, *yamux.Session)) { r.onSession = f }
 
 // SetEdgeToken sets a shared secret the trusted edge (nginx) must present in
 // X-Edge-Token on every request except /healthz. Empty disables the check.
@@ -144,7 +144,7 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	r.reg.Set(tenantID, sess, cancel)
 	log.Printf("relay: agent tunnel up (tenant=%q)", tenantID)
 	if r.onSession != nil {
-		go r.onSession(ctx, sess)
+		go r.onSession(ctx, tenantID, sess)
 	}
 	<-sess.CloseChan() // block until the tunnel dies
 	log.Printf("relay: agent tunnel down (tenant=%q)", tenantID)

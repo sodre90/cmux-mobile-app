@@ -275,12 +275,13 @@ func (s *Store) SetFCMToken(token, fcm string) bool {
 	return n > 0
 }
 
-// FCMTokens returns all non-empty FCM registration tokens across all
-// tenants.
-func (s *Store) FCMTokens() []string {
+// TenantFCMTokens returns all non-empty FCM registration tokens belonging to
+// tenantID's own devices. Scoped per tenant so an attention push triggered by
+// one tenant's agent can never fan out to another tenant's phones.
+func (s *Store) TenantFCMTokens(tenantID string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT fcm_token FROM devices WHERE fcm_token IS NOT NULL AND fcm_token != ''`)
+	rows, err := s.db.Query(`SELECT fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != ''`, tenantID)
 	if err != nil {
 		return []string{}
 	}

@@ -188,21 +188,32 @@ func TestListShowsHashSuffixNotRawToken(t *testing.T) {
 	}
 }
 
-func TestFCMTokens(t *testing.T) {
+func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
 	s := newStore(t)
-	tenant := newTenant(t, s)
-	tok, _ := s.Issue(tenant, "phone")
-	if got := s.FCMTokens(); len(got) != 0 {
-		t.Fatalf("expected no FCM tokens, got %v", got)
+	tenantA := newTenant(t, s)
+	tenantB := newTenant(t, s)
+	tokA, _ := s.Issue(tenantA, "phone-a")
+	tokB, _ := s.Issue(tenantB, "phone-b")
+
+	if got := s.TenantFCMTokens(tenantA); len(got) != 0 {
+		t.Fatalf("expected no FCM tokens yet, got %v", got)
 	}
-	if !s.SetFCMToken(tok, "fcm-abc") {
+	if !s.SetFCMToken(tokA, "fcm-a") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+	if !s.SetFCMToken(tokB, "fcm-b") {
 		t.Fatal("SetFCMToken should succeed for a known device")
 	}
 	if s.SetFCMToken("bogus", "x") {
 		t.Fatal("SetFCMToken must fail for unknown device")
 	}
-	got := s.FCMTokens()
-	if len(got) != 1 || got[0] != "fcm-abc" {
-		t.Fatalf("unexpected FCM tokens: %v", got)
+
+	gotA := s.TenantFCMTokens(tenantA)
+	if len(gotA) != 1 || gotA[0] != "fcm-a" {
+		t.Fatalf("tenantA tokens = %v, want [fcm-a]", gotA)
+	}
+	gotB := s.TenantFCMTokens(tenantB)
+	if len(gotB) != 1 || gotB[0] != "fcm-b" {
+		t.Fatalf("tenantB tokens = %v, want [fcm-b]", gotB)
 	}
 }

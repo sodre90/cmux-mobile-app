@@ -53,8 +53,8 @@ func runServe(args []string) int {
 		}
 	}
 	if pusher != nil {
-		rl.SetSessionHook(func(ctx context.Context, sess *yamux.Session) {
-			relay.MonitorAgent(ctx, sess, cfg.RelayToken, store, pusher)
+		rl.SetSessionHook(func(ctx context.Context, tenantID string, sess *yamux.Session) {
+			relay.MonitorAgent(ctx, tenantID, sess, cfg.RelayToken, store, pusher)
 		})
 	}
 

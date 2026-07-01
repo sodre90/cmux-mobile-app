@@ -21,14 +21,15 @@ type Pusher interface {
 }
 
 // MonitorAgent subscribes to the agent's /events over the tunnel and fans
-// blocking prompts out to FCM. It returns when ctx is cancelled or the session
-// dies. relayToken authenticates to the agent's trusted handler.
-func MonitorAgent(ctx context.Context, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) {
+// blocking prompts out to FCM, scoped to tenantID's own devices only. It
+// returns when ctx is cancelled or the session dies. relayToken authenticates
+// to the agent's trusted handler.
+func MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) {
 	if push == nil {
 		return
 	}
 	for ctx.Err() == nil {
-		if err := subscribeOnce(sess, relayToken, store, push); err != nil && sess.IsClosed() {
+		if err := subscribeOnce(tenantID, sess, relayToken, store, push); err != nil && sess.IsClosed() {
 			return
 		}
 		select {
@@ -39,7 +40,7 @@ func MonitorAgent(ctx context.Context, sess *yamux.Session, relayToken string, s
 	}
 }
 
-func subscribeOnce(sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) error {
+func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, store *auth.Store, push Pusher) error {
 	d := websocket.Dialer{
 		NetDial: func(_, _ string) (net.Conn, error) { return sess.Open() },
 	}
@@ -54,13 +55,13 @@ func subscribeOnce(sess *yamux.Session, relayToken string, store *auth.Store, pu
 			return err
 		}
 		if f.NeedsAttention {
-			fanout(store, push, f)
+			fanout(tenantID, store, push, f)
 		}
 	}
 }
 
-func fanout(store *auth.Store, push Pusher, f server.EventFrame) {
-	tokens := store.FCMTokens()
+func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame) {
+	tokens := store.TenantFCMTokens(tenantID)
 	if len(tokens) == 0 {
 		return
 	}
@@ -81,10 +82,10 @@ func fanout(store *auth.Store, push Pusher, f server.EventFrame) {
 	for _, tok := range tokens {
 		if err := push.Send(ctx, tok, "Agent needs your attention", body, data); err != nil {
 			failed++
-			log.Printf("relay: attention push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
+			log.Printf("relay: attention push failed (tenant=%q kind=%s ws=%s): %v", tenantID, f.Kind, f.WorkspaceID, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("relay: attention push (kind=%s label=%q ws=%s) sent=%d failed=%d", f.Kind, body, f.WorkspaceID, sent, failed)
+	log.Printf("relay: attention push (tenant=%q kind=%s label=%q ws=%s) sent=%d failed=%d", tenantID, f.Kind, body, f.WorkspaceID, sent, failed)
 }
