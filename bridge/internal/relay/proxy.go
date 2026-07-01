@@ -35,6 +35,15 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			req.Header.Set("X-Relay-Token", relayToken)
 		},
 		Transport: &http.Transport{
+			// Security-load-bearing, not a performance knob: DialContext below
+			// resolves the target tenant from the request context on every
+			// call. http.Transport pools/reuses idle connections keyed only by
+			// the (constant, identical-for-every-tenant) placeholder host set
+			// in Director above, so without DisableKeepAlives a connection
+			// dialed for one tenant could be handed to a different tenant's
+			// request — a cross-tenant leak this repo's adversarial test
+			// (internal/relay/multitenant_test.go) exists to catch. Do not
+			// remove this to "improve" performance.
 			DisableKeepAlives: true,
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				dev, ok := auth.DeviceFromContext(ctx)

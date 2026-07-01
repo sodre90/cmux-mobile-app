@@ -205,6 +205,11 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	}
 	certPEM, serial, err := r.ca.SignCSR([]byte(rq.CSR), agentCNPrefix+tenantID, agentCertValidity)
 	if err != nil {
+		// The tenant row was already created above; a bad CSR must not leave
+		// it active-but-unusable, so revoke it rather than orphan it.
+		if !r.store.RevokeTenant(tenantID) {
+			log.Printf("relay: failed to revoke orphaned tenant %q after invalid CSR", tenantID)
+		}
 		writeJSONErr(w, http.StatusBadRequest, "invalid_csr")
 		return
 	}

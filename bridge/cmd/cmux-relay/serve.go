@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,29 @@ func defaultConfigPath() string {
 	return cli.ConfigPath("cmux-relay", "config.toml")
 }
 
+// isLoopbackAddr reports whether addr (a "host:port" listen address, as
+// cfg.Listen always is) resolves to a loopback-only interface. It fails
+// closed: any host it can't positively confirm as loopback (including an
+// empty host meaning "all interfaces", or a hostname that doesn't parse as
+// an IP) is treated as NOT loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false // ":8765" binds all interfaces — not loopback.
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // unresolvable/non-IP host — fail closed.
+	}
+	return ip.IsLoopback()
+}
+
 func runServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfigPath(), "path to config.toml")
@@ -32,6 +56,10 @@ func runServe(args []string) int {
 	cfg, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
 		log.Printf("serve: %v", err)
+		return 1
+	}
+	if !isLoopbackAddr(cfg.Listen) && cfg.EdgeToken == "" {
+		log.Printf("serve: refusing to start: listen address %q is not loopback-only and edge_token is unset — nginx is trusted to set X-Client-Cert-CN, so binding non-loopback without edge_token lets anyone who can reach this address forge that header and hijack any tenant's tunnel; set edge_token in config.toml or bind to loopback", cfg.Listen)
 		return 1
 	}
 	signer, err := ca.LoadOrCreate(cfg.CACert, cfg.CAKey)

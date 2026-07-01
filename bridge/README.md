@@ -199,6 +199,13 @@ cmux-relay tenants revoke <id>     # devices stop authenticating immediately;
                                    # the agent is refused on its next reconnect
 ```
 
+Note: revocation is checked live on every connect/request, so new agent-tunnel
+connects and all device authentication are blocked immediately. It does not,
+however, forcibly close an agent that is already connected — that agent's
+existing tunnel and its push-monitor goroutine keep running until the
+connection ends on its own (a network blip, the agent process restarting, or
+the relay itself restarting).
+
 Self-service phone pairing (a QR code instead of hand-run `openssl`/`.p12`)
 and end-to-end content encryption are tracked in a follow-up design, not yet
 implemented — see
