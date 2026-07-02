@@ -105,9 +105,9 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/healthz   # 200
 
 The image builds on the host (don't ship it across architectures). The port is
 published on loopback only; the device store persists in the `relay-data`
-volume. Pair devices with `podman exec cmux-relay cmux-relay pair --config
-/etc/cmux-relay/config.toml --tenant <id> --name phone` (tenant IDs from
-`cmux-relay tenants list`).
+volume. Pair devices by running `cmux-bridge pair-device` on the Mac agent
+(see [Pair a device](#pair-a-device) below) — the relay side needs no manual
+step.
 
 ## Agent (Mac)
 
@@ -168,28 +168,42 @@ first time *it* starts:
 
 ## Pair a device
 
-Pairing is still operator-driven — run this on the **home server**, where the
-relay owns the device token store. Every device belongs to exactly one
-tenant, so first find the tenant ID (the Mac agent printed its own when it
-self-registered; see [Agent client certificate](#agent-client-certificate)):
+Pairing is self-service now — no operator step, and no hand-rolled `.p12`
+client certificate. On the **home server**, once the Mac agent has
+registered (see [Agent client certificate](#agent-client-certificate)
+above):
 
 ```bash
-cmux-relay tenants list
+cmux-bridge pair-device --config ~/.config/cmux-bridge/agent.toml
 ```
 
-Then mint a token for that tenant:
+This asks the relay for a fresh, single-use pairing code, then prints a QR
+code (and the code itself, for manual entry) to the terminal:
 
-```bash
-cmux-relay pair --tenant <id> --name phone
+```
+Scan this QR code with the cmux app (code expires 2026-07-02T15:32:00Z):
+
+█▀▀▀▀▀█ ▀▄█▀▀▄██ █▀▀▀▀▀█
+█ ███ █ █▀▄ ▀▀▄█ █ ███ █
+█ ▀▀▀ █ █▄▄▀▀▄▀█ █ ▀▀▀ █
+▀▀▀▀▀▀▀ █▄▀ ▀ █▄▀ ▀▀▀▀▀▀▀
+
+Or enter this code manually: 7F3K9QRT
 ```
 
-This prints a long-lived **device token**. Paste it into the app once; the app
-sends it as `Authorization: Bearer <token>` on every request. The device's own
-client cert (`.p12`) is still hand-rolled with `openssl` exactly as before
-(see [android/README.md](../android/README.md#2-client-certificate-p12)) —
-just sign it with the relay's own CA files (`~/.config/cmux-relay/ca.crt` /
-`ca.key` by default) instead of a separately hand-rolled CA. List/revoke
-devices and tenants:
+The QR payload carries a one-time pairing URL, the code, and the agent's
+public key. The app (see the separate Android QR-scanning work) scans it,
+generates its own keypair, and calls the relay directly to redeem the code —
+no client certificate needed for that call. `pair-device` polls in the
+background and, once the phone redeems the code, derives a shared secret
+with the device (X25519 + HKDF) and saves it locally: content sent between
+this agent and that device is now end-to-end encrypted, so the relay
+operator (or anyone who compromises the relay host) can route messages but
+not read them.
+
+`pair-device` never displays a raw device token to the operator — only the
+phone that scanned the QR code ever sees it. List/revoke devices and tenants
+exactly as before:
 
 ```bash
 cmux-relay devices                # list devices (tokens redacted)
@@ -206,17 +220,18 @@ existing tunnel and its push-monitor goroutine keep running until the
 connection ends on its own (a network blip, the agent process restarting, or
 the relay itself restarting).
 
-Self-service phone pairing (a QR code instead of hand-run `openssl`/`.p12`)
-and end-to-end content encryption are tracked in a follow-up design, not yet
-implemented — see
-[`docs/superpowers/specs/2026-07-01-multi-tenant-relay-design.md`](../docs/superpowers/specs/2026-07-01-multi-tenant-relay-design.md).
+There is no manual-pairing fallback: `auth.Issue` always requires a device
+public key, so a phone paired under the old `cmux-relay pair` flow loses
+relay access the moment this ships and must be re-paired via `pair-device`.
 
 ## Edge: nginx mutual TLS
 
 See `deploy/nginx-cmux-relay.conf`. Point your home-server DNS name at nginx,
-require a client certificate (`ssl_verify_client on`), and `proxy_pass` to
-`http://127.0.0.1:8765`. The `map $http_upgrade $connection_upgrade` block (http
-context) is required for the agent tunnel and the terminal/event WebSockets.
+accept an optional client certificate (`ssl_verify_client optional` — agents
+present one, self-service-paired devices don't; the relay tells them apart by
+CN), and `proxy_pass` to `http://127.0.0.1:8765`. The `map $http_upgrade
+$connection_upgrade` block (http context) is required for the agent tunnel
+and the terminal/event WebSockets.
 
 ## Push (optional)
 
