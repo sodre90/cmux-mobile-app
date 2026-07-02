@@ -90,7 +90,7 @@ func runServe(args []string) int {
 	defer cancel()
 
 	// No SIGHUP/reload handling needed: the store reads live from SQLite on
-	// every request, so a separate `cmux-relay pair`/`tenants` process's
+	// every request, so a separate `cmux-relay devices`/`tenants` process's
 	// writes are visible immediately without a restart or reload signal.
 
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: rl.Handler()}
