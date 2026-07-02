@@ -1723,7 +1723,7 @@ class PairingClientTest {
     fun pairThrowsPairingCodeInvalidOn410() {
         server.enqueue(MockResponse().setResponseCode(410).setBody("""{"error":"pairing_code_invalid"}"""))
         val (phonePriv, phonePub) = generateX25519KeyPair()
-        val client = TestablePairingClient(http, phonePriv, phonePub, {}, {}, {})
+        val client = TestablePairingClient(http, phonePriv, phonePub, { _, _ -> }, {}, {})
         val qr = PairingQr(
             pairUrl = server.url("/devices/pair").toString(), code = "X",
             agentPubkey = Base64.getEncoder().encodeToString(ByteArray(32)),
