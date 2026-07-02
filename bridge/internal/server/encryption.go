@@ -100,7 +100,10 @@ func (w *encryptingResponseWriter) flush() {
 		writeEncryptionErr(w.ResponseWriter, http.StatusInternalServerError, "encrypt_failed")
 		return
 	}
+	// This is the sole point a body is encrypted; the marker is set here and
+	// only here so the client decrypts iff the marker is present.
 	w.ResponseWriter.Header().Set("Content-Type", "application/json")
+	w.ResponseWriter.Header().Set("X-Cmux-Encrypted", "1")
 	w.ResponseWriter.WriteHeader(w.status)
 	_, _ = w.ResponseWriter.Write(envelope)
 }

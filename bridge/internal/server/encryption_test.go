@@ -71,6 +71,9 @@ func TestEncryptionMiddlewareRejectsMissingDeviceID(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", rr.Code)
 	}
+	if got := rr.Header().Get("X-Cmux-Encrypted"); got != "" {
+		t.Fatalf("plaintext error must have no X-Cmux-Encrypted marker, got %q", got)
+	}
 }
 
 func TestEncryptionMiddlewareRejectsUnknownDeviceID(t *testing.T) {
@@ -89,6 +92,9 @@ func TestEncryptionMiddlewareRejectsUnknownDeviceID(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("X-Cmux-Encrypted"); got != "" {
+		t.Fatalf("plaintext error must have no X-Cmux-Encrypted marker, got %q", got)
 	}
 }
 
@@ -131,6 +137,9 @@ func TestEncryptionMiddlewareDecryptsRequestEncryptsResponse(t *testing.T) {
 	}
 	if rr.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	if rr.Header().Get("X-Cmux-Encrypted") != "1" {
+		t.Fatalf("want X-Cmux-Encrypted: 1, got %q", rr.Header().Get("X-Cmux-Encrypted"))
 	}
 	if strings.Contains(rr.Body.String(), `"ok"`) {
 		t.Fatalf("response body must be encrypted, not plaintext: %s", rr.Body.String())
@@ -178,6 +187,68 @@ func TestEncryptionMiddlewareSkipsWebSocketUpgrade(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if !called {
 		t.Fatal("a WebSocket upgrade request must reach the handler untouched, not be body-encrypted")
+	}
+}
+
+// TestEncryptionMiddlewareEncryptsAndMarksNon2xxHandlerBody proves that a
+// handler returning a non-2xx status still has its body encrypted and marked,
+// which means status code alone cannot tell the client whether the body is
+// encrypted -- only the X-Cmux-Encrypted marker can.
+func TestEncryptionMiddlewareEncryptsAndMarksNon2xxHandlerBody(t *testing.T) {
+	sessions, deviceID, secret := pairedSessions(t)
+	s := &Server{sessions: sessions}
+	h := s.encryptionMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"nope"}`))
+	}))
+
+	plaintextReq := []byte(`{"hello":"world"}`)
+	ct, err := e2e.Seal(secret, e2e.Nonce(e2e.DirDeviceToAgent, 0), plaintextReq)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	envelope, err := json.Marshal(struct {
+		V  int    `json:"v"`
+		N  uint64 `json:"n"`
+		CT string `json:"ct"`
+	}{V: 1, N: 0, CT: base64.StdEncoding.EncodeToString(ct)})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/x", bytes.NewReader(envelope))
+	req.Header.Set("X-Device-ID", deviceID)
+	req.ContentLength = int64(len(envelope))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rr.Code)
+	}
+	if rr.Header().Get("X-Cmux-Encrypted") != "1" {
+		t.Fatalf("want X-Cmux-Encrypted: 1 on non-2xx encrypted body, got %q", rr.Header().Get("X-Cmux-Encrypted"))
+	}
+	if strings.Contains(rr.Body.String(), `"error"`) {
+		t.Fatalf("response body must be encrypted, not plaintext: %s", rr.Body.String())
+	}
+	var respEnv struct {
+		V  int    `json:"v"`
+		N  uint64 `json:"n"`
+		CT string `json:"ct"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &respEnv); err != nil {
+		t.Fatalf("unmarshal response envelope: %v", err)
+	}
+	respCT, err := base64.StdEncoding.DecodeString(respEnv.CT)
+	if err != nil {
+		t.Fatalf("decode response ct: %v", err)
+	}
+	respPlain, err := e2e.Open(secret, e2e.Nonce(e2e.DirAgentToDevice, respEnv.N), respCT)
+	if err != nil {
+		t.Fatalf("decrypt response: %v", err)
+	}
+	if string(respPlain) != `{"error":"nope"}` {
+		t.Fatalf("decrypted response = %q, want {\"error\":\"nope\"}", respPlain)
 	}
 }
 
