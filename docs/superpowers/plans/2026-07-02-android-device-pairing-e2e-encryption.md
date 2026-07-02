@@ -932,6 +932,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 /** In-memory PairedSession double -- avoids needing Android Keystore in tests. */
 class FakeSession(private var secret: ByteArray?) : PairedSession {
@@ -964,7 +965,7 @@ class EnvelopeTest {
         // which always encrypts as DIR_DEVICE_TO_AGENT (what the phone SENDS).
         val n = receiver.nextSendCounter() // reuse counter machinery for a manual envelope
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, n), plaintext)
-        val envelope = """{"v":1,"n":$n,"ct":"${android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP)}"}"""
+        val envelope = """{"v":1,"n":$n,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
 
         val decrypted = decryptBody(sender, cipher, envelope.toByteArray(Charsets.UTF_8))
         assertArrayEquals(plaintext, decrypted)
@@ -983,7 +984,7 @@ class EnvelopeTest {
         val json = kotlinx.serialization.json.Json.parseToJsonElement(envelopeBytes.toString(Charsets.UTF_8)).jsonObject
         val n = json["n"]!!.jsonPrimitive.long
         val ctB64 = json["ct"]!!.jsonPrimitive.content
-        val ct = android.util.Base64.decode(ctB64, android.util.Base64.NO_WRAP)
+        val ct = Base64.getDecoder().decode(ctB64)
 
         val opened = cipher.open(secret, nonce(DIR_DEVICE_TO_AGENT, n), ct)
         assertArrayEquals(plaintext, opened)
@@ -999,7 +1000,7 @@ class EnvelopeTest {
         val secret = ByteArray(32) { it.toByte() }
         val receiver = FakeSession(secret)
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, 0L), "x".toByteArray())
-        val envelope = """{"v":1,"n":0,"ct":"${android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP)}"}"""
+        val envelope = """{"v":1,"n":0,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
 
         decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // first: fine
         decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // replay: must throw
@@ -1008,6 +1009,8 @@ class EnvelopeTest {
 ```
 
 Note: this test uses `kotlinx.serialization.json.Json.parseToJsonElement` directly rather than the app's `BridgeJson`/typed DTOs, so it stays independent of `Envelope.kt`'s internal envelope data class shape. Add these imports at the top: `import kotlinx.serialization.json.jsonObject`, `import kotlinx.serialization.json.jsonPrimitive`, `import kotlinx.serialization.json.long`, `import kotlinx.serialization.json.content`.
+
+**Use `java.util.Base64`, not `android.util.Base64`, anywhere this file (or `Envelope.kt` itself) is exercised by a JVM unit test.** Verified empirically: AGP's unit-test classpath uses a stub `android.jar` that throws `RuntimeException: Method ... not mocked` on any real `android.util.Base64` call, and this project's `build.gradle.kts` does not set `testOptions.unitTests.isReturnDefaultValues = true` (which wouldn't fix this anyway — it returns nulls/defaults, not working Base64 logic). `java.util.Base64` is a real JDK class (not an Android stub), available since API 26 (matches this project's `minSdk = 26`), and `Base64.getEncoder()`/`Base64.getDecoder()` (the "basic" codec, no line wrapping) produce byte-for-byte identical output to `android.util.Base64` with the `NO_WRAP` flag (no `URL_SAFE`, no `NO_PADDING`) — so the wire format is unaffected. `Identity.kt` (Task 4) and `Session.kt` (Task 6) correctly keep `android.util.Base64` since neither has a unit test that exercises it.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1021,9 +1024,9 @@ Create `android/app/src/main/java/com/sodre90/cmuxremote/data/e2e/Envelope.kt`:
 ```kotlin
 package com.sodre90.cmuxremote.data.e2e
 
-import android.util.Base64
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.serialization.Serializable
+import java.util.Base64
 
 @Serializable
 private data class BodyEnvelope(val v: Int, val n: Long, val ct: String)
@@ -1042,7 +1045,7 @@ fun encryptBody(session: PairedSession, cipher: Cipher, plaintext: ByteArray): B
     val secret = session.sharedSecret() ?: throw NotPairedException()
     val n = session.nextSendCounter()
     val ct = cipher.seal(secret, nonce(DIR_DEVICE_TO_AGENT, n), plaintext)
-    val envelope = BodyEnvelope(v = 1, n = n, ct = Base64.encodeToString(ct, Base64.NO_WRAP))
+    val envelope = BodyEnvelope(v = 1, n = n, ct = Base64.getEncoder().encodeToString(ct))
     return BridgeJson.encodeToString(BodyEnvelope.serializer(), envelope).toByteArray(Charsets.UTF_8)
 }
 
@@ -1062,7 +1065,7 @@ fun decryptBody(session: PairedSession, cipher: Cipher, envelopeBytes: ByteArray
     val secret = session.sharedSecret() ?: throw NotPairedException()
     if (!session.canAcceptRecvCounter(envelope.n)) throw DecryptFailedException()
     val ct = try {
-        Base64.decode(envelope.ct, Base64.NO_WRAP)
+        Base64.getDecoder().decode(envelope.ct)
     } catch (e: Exception) {
         throw DecryptFailedException()
     }
@@ -1243,6 +1246,10 @@ would fail immediately with a spurious `decrypt_failed`. The implementation
 below explicitly detects and skips `Upgrade: websocket` requests; the test
 in Step 1 asserts this directly.
 
+The test file's `encryptFrameAsBody` helper below uses `java.util.Base64`,
+not `android.util.Base64` — see Task 7's note on why (AGP's unit-test stub
+`android.jar` throws on real `android.util.Base64` calls).
+
 - [ ] **Step 1: Write the failing test**
 
 Create `android/app/src/test/java/com/sodre90/cmuxremote/data/e2e/E2eInterceptorTest.kt`:
@@ -1265,6 +1272,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 class E2eInterceptorTest {
@@ -1339,7 +1347,7 @@ class E2eInterceptorTest {
     private fun encryptFrameAsBody(json: String, session: PairedSession): String {
         val n = session.nextSendCounter()
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, n), json.toByteArray(Charsets.UTF_8))
-        return """{"v":1,"n":$n,"ct":"${android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP)}"}"""
+        return """{"v":1,"n":$n,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
     }
 }
 ```
@@ -1595,6 +1603,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.util.Base64
 
 /** Records what PairingClient persisted -- stands in for real Settings/Session/Identity. */
 private class FakeIdentity(val priv: ByteArray, val pub: ByteArray)
@@ -1637,7 +1646,7 @@ class PairingClientTest {
         val qr = PairingQr(
             pairUrl = server.url("/devices/pair").toString(),
             code = "CODE1",
-            agentPubkey = android.util.Base64.encodeToString(agentPub, android.util.Base64.NO_WRAP),
+            agentPubkey = Base64.getEncoder().encodeToString(agentPub),
             expiresAt = "2099-01-01T00:00:00Z",
             tenantId = "t1",
         )
@@ -1664,7 +1673,7 @@ class PairingClientTest {
         val client = TestablePairingClient(http, phonePriv, phonePub, {}, {}, {})
         val qr = PairingQr(
             pairUrl = server.url("/devices/pair").toString(), code = "X",
-            agentPubkey = android.util.Base64.encodeToString(ByteArray(32), android.util.Base64.NO_WRAP),
+            agentPubkey = Base64.getEncoder().encodeToString(ByteArray(32)),
             expiresAt = "2099-01-01T00:00:00Z", tenantId = "t",
         )
         try {
@@ -1714,10 +1723,10 @@ Create `android/app/src/main/java/com/sodre90/cmuxremote/data/pairing/PairingCli
 ```kotlin
 package com.sodre90.cmuxremote.data.pairing
 
-import android.util.Base64
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.e2e.Identity
 import com.sodre90.cmuxremote.data.e2e.Session
+import java.util.Base64
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.coroutines.Dispatchers
@@ -1790,7 +1799,7 @@ internal suspend fun pairInternal(
     val payload = DevicePairRequest(
         code = qr.code,
         name = "phone",
-        devicePubkey = Base64.encodeToString(phonePublicKey, Base64.NO_WRAP),
+        devicePubkey = Base64.getEncoder().encodeToString(phonePublicKey),
     )
     val request = Request.Builder()
         .url(qr.pairUrl)
@@ -1805,7 +1814,7 @@ internal suspend fun pairInternal(
             response.body?.string().orEmpty(),
         )
 
-        val agentPublicKey = Base64.decode(qr.agentPubkey, Base64.NO_WRAP)
+        val agentPublicKey = Base64.getDecoder().decode(qr.agentPubkey)
         val sharedSecret = deriveSharedSecret(phonePrivateKey, agentPublicKey)
 
         onSetPairing(agentPublicKey, sharedSecret)
