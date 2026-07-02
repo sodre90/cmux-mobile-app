@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,227 @@ func TestNewPairingCodeRequiresAgentCN(t *testing.T) {
 	}
 }
 
+func TestDevicePairRedeemsCode(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var got devicePairResp
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Token == "" {
+		t.Fatal("expected a non-empty device token")
+	}
+	if got.TenantID != tenantID {
+		t.Fatalf("TenantID = %q, want %q", got.TenantID, tenantID)
+	}
+	dev, ok := store.Verify(got.Token)
+	if !ok {
+		t.Fatal("returned token should verify")
+	}
+	if dev.Name != "my-phone" || dev.DevicePubkey != "device-pubkey-b64" || dev.TenantID != tenantID {
+		t.Fatalf("unexpected device: %+v", dev)
+	}
+}
+
+func TestDevicePairDefaultsName(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got devicePairResp
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	dev, ok := store.Verify(got.Token)
+	if !ok || dev.Name != "phone" {
+		t.Fatalf("expected default name %q, got device: %+v ok=%v", "phone", dev, ok)
+	}
+}
+
+func TestDevicePairRejectsUnknownCode(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"bogus","device_pubkey":"x"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("want 410, got %d", resp.StatusCode)
+	}
+}
+
+func TestDevicePairRejectsNoDevicePubkey(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing device_pubkey, got %d", resp.StatusCode)
+	}
+}
+
+func TestDevicePairWorksWithNoClientCert(t *testing.T) {
+	// /devices/pair must be reachable by a phone presenting no client cert at
+	// all (X-Client-Cert-Cn absent) -- this is the whole point of the
+	// self-service flow. notAgent/auth.Require must never gate this route.
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/pair", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately no X-Client-Cert-Cn header.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 with no client cert, got %d", resp.StatusCode)
+	}
+}
+
+func TestNewPairingCodeRejectsUnverifiedCert(t *testing.T) {
+	// The regression test for the cross-tenant impersonation gap: once
+	// ssl_verify_client is optional, nginx forwards X-Client-Cert-CN for any
+	// presented certificate, verified or not. A correct CN with no (or a
+	// failed) X-Client-Cert-Verify must still be rejected.
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	for _, verify := range []string{"", "FAILED:self-signed certificate", "NONE"} {
+		req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", nil)
+		req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+		if verify != "" {
+			req.Header.Set("X-Client-Cert-Verify", verify)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("X-Client-Cert-Verify=%q: want 403 for an unverified cert with a correct CN, got %d", verify, resp.StatusCode)
+		}
+	}
+}
+
+func TestHandleTunnelRejectsUnverifiedAgentCert(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/agent/tunnel", nil)
+	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	// Deliberately no X-Client-Cert-Verify: SUCCESS -- a spoofed self-signed
+	// cert with the right CN must not be enough to open a tunnel.
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for an unverified agent cert, got %d", resp.StatusCode)
+	}
+}
+
 func TestNewPairingCodeIssuesCode(t *testing.T) {
 	store, err := auth.Open(t.TempDir() + "/r.db")
 	if err != nil {
@@ -46,6 +268,7 @@ func TestNewPairingCodeIssuesCode(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", nil)
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +305,7 @@ func TestNewPairingCodeRejectsRevokedTenant(t *testing.T) {
 
 	req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", nil)
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +337,7 @@ func TestPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 	poll := func() pairingCodeStatusResp {
 		req, _ := http.NewRequest("GET", srv.URL+"/agent/pairing-code/"+code, nil)
 		req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+		req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -158,6 +383,7 @@ func TestPairingCodeStatusUnknownCodeIs404(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", srv.URL+"/agent/pairing-code/bogus", nil)
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +417,7 @@ func TestPairingCodeStatusScopedToOwnTenant(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", srv.URL+"/agent/pairing-code/"+code, nil)
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantB)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

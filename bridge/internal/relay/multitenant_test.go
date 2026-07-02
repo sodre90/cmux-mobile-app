@@ -47,7 +47,10 @@ func TestRelayIsolatesTenants(t *testing.T) {
 
 	dial := func(tenantID string, h http.Handler) {
 		u := "ws" + strings.TrimPrefix(relayHTTP.URL, "http") + "/agent/tunnel"
-		sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{"X-Client-Cert-Cn": {"CN=agent:" + tenantID}})
+		sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{
+			"X-Client-Cert-Cn":     {"CN=agent:" + tenantID},
+			"X-Client-Cert-Verify": {"SUCCESS"},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,6 +109,7 @@ func TestRelayRevokedTenantCannotReconnectOrServeDevices(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", relayHTTP.URL+"/agent/tunnel", nil)
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -66,7 +66,10 @@ func TestRelayEndToEndSessions(t *testing.T) {
 	defer relayHTTP.Close()
 
 	u := "ws" + strings.TrimPrefix(relayHTTP.URL, "http") + "/agent/tunnel"
-	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{"X-Client-Cert-Cn": {"CN=agent:" + tenantID}})
+	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{
+		"X-Client-Cert-Cn":     {"CN=agent:" + tenantID},
+		"X-Client-Cert-Verify": {"SUCCESS"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
