@@ -16,8 +16,8 @@ import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.sessions.singlePaneTarget
-import com.sodre90.cmuxremote.ui.settings.SettingsScreen
-import com.sodre90.cmuxremote.ui.settings.SettingsViewModel
+import com.sodre90.cmuxremote.ui.pairing.PairingScreen
+import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
@@ -64,12 +64,12 @@ fun CmuxNavHost(
 
     NavHost(navController = navController, startDestination = start) {
         composable(Routes.SETTINGS) {
-            val vm: SettingsViewModel = viewModel(
-                factory = viewModelFactory { initializer { SettingsViewModel(container.settings) } },
+            val vm: PairingViewModel = viewModel(
+                factory = viewModelFactory { initializer { PairingViewModel(container) } },
             )
-            SettingsScreen(
+            PairingScreen(
                 vm = vm,
-                onSaved = {
+                onPaired = {
                     navController.navigate(Routes.SESSIONS) {
                         popUpTo(Routes.SETTINGS) { inclusive = true }
                     }

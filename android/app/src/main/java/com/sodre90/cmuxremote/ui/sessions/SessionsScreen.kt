@@ -57,7 +57,7 @@ fun SessionsScreen(
                 actions = {
                     TextButton(onClick = onOpenInbox) { Text("Inbox") }
                     TextButton(onClick = { vm.refresh() }) { Text("Refresh") }
-                    TextButton(onClick = onSettings) { Text("Settings") }
+                    TextButton(onClick = onSettings) { Text("Re-pair device") }
                 },
             )
         },
