@@ -26,6 +26,17 @@ class Settings(context: Context) {
         )
     }
 
+    init {
+        // An upgrading install may still have the pre-pairing manual-setup
+        // format's client-cert key on disk. Wipe the whole prefs file once
+        // and force re-pairing. Self-terminating: nothing writes this key
+        // again once cleared (Task 18 removes the code path that ever did),
+        // so this branch never fires on later launches.
+        if (prefs.contains(KEY_P12)) {
+            prefs.edit().clear().apply()
+        }
+    }
+
     var baseUrl: String?
         get() = prefs.getString(KEY_BASE_URL, null)
         set(value) = prefs.edit().putString(KEY_BASE_URL, value).apply()
