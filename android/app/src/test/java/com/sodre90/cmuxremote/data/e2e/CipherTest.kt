@@ -1,5 +1,8 @@
 package com.sodre90.cmuxremote.data.e2e
 
+import com.goterl.lazysodium.LazySodiumJava
+import com.goterl.lazysodium.SodiumJava
+import com.goterl.lazysodium.utils.LibraryLoader
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -15,6 +18,8 @@ private fun hex(s: String): ByteArray {
 private fun hexOf(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
 
 class CipherTest {
+
+    private val cipher = Cipher(LazySodiumJava(SodiumJava(LibraryLoader.Mode.SYSTEM_ONLY)))
 
     @Test
     fun nonceLaysOutDirectionAndCounter() {
@@ -60,5 +65,37 @@ class CipherTest {
         assertEquals(32, priv.size)
         assertEquals(32, pub.size)
         assertArrayEquals(pub, x25519PublicKeyFromPrivate(priv))
+    }
+
+    @Test
+    fun sealMatchesGoFixedVector() {
+        // Mirrors bridge/internal/e2e/cipher_test.go TestFixedCipherVector.
+        val key = ByteArray(32) { it.toByte() }
+        val plaintext = "cmux-bridge e2e test vector".toByteArray(Charsets.UTF_8)
+        val n = nonce(DIR_AGENT_TO_DEVICE, 42L)
+
+        val ct = cipher.seal(key, n, plaintext)
+
+        val want = "3adf930c2c38c2dc6de9e1fab5be816f607fea9f2d9e503a7f22277d65a588c593c28255c0dc93cac7a52a"
+        assertEquals(want, hexOf(ct))
+
+        val pt = cipher.open(key, n, ct)
+        assertArrayEquals(plaintext, pt)
+    }
+
+    @Test(expected = DecryptFailedException::class)
+    fun openRejectsWrongKey() {
+        val key1 = ByteArray(32)
+        val key2 = ByteArray(32).also { it[0] = 0xff.toByte() }
+        val n = nonce(DIR_AGENT_TO_DEVICE, 0L)
+        val ct = cipher.seal(key1, n, "secret".toByteArray())
+        cipher.open(key2, n, ct)
+    }
+
+    @Test(expected = DecryptFailedException::class)
+    fun openRejectsWrongDirection() {
+        val key = ByteArray(32)
+        val ct = cipher.seal(key, nonce(DIR_AGENT_TO_DEVICE, 0L), "secret".toByteArray())
+        cipher.open(key, nonce(DIR_DEVICE_TO_AGENT, 0L), ct)
     }
 }

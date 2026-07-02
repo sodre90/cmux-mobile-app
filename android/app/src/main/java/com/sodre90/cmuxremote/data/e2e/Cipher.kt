@@ -1,5 +1,7 @@
 package com.sodre90.cmuxremote.data.e2e
 
+import com.goterl.lazysodium.LazySodium
+import com.goterl.lazysodium.interfaces.AEAD
 import org.bouncycastle.crypto.agreement.X25519Agreement
 import org.bouncycastle.crypto.digests.SHA256Digest
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator
@@ -88,4 +90,41 @@ fun deriveSharedSecret(myPrivateKeyRaw: ByteArray, theirPublicKeyRaw: ByteArray)
     val out = ByteArray(32)
     hkdf.generateBytes(out, 0, 32)
     return out
+}
+
+class DecryptFailedException : Exception("decrypt_failed")
+
+/**
+ * XChaCha20-Poly1305 AEAD via lazysodium (BouncyCastle has no XChaCha
+ * implementation -- see Global Constraints). [sodium] is injected so
+ * production code passes a LazySodiumAndroid instance and tests pass
+ * LazySodiumJava; both implement the same AEAD.Native interface.
+ */
+class Cipher(sodium: LazySodium) {
+    private val aead = sodium as AEAD.Native
+
+    /** key must be 32 bytes, nonce must be 24 bytes (see [nonce]). */
+    fun seal(key: ByteArray, nonce: ByteArray, plaintext: ByteArray): ByteArray {
+        val ciphertext = ByteArray(plaintext.size + 16) // 16-byte Poly1305 tag
+        val ciphertextLen = LongArray(1)
+        val ok = aead.cryptoAeadXChaCha20Poly1305IetfEncrypt(
+            ciphertext, ciphertextLen, plaintext, plaintext.size.toLong(),
+            null, 0, null, nonce, key,
+        )
+        check(ok) { "xchacha20poly1305 seal failed" }
+        return ciphertext.copyOf(ciphertextLen[0].toInt())
+    }
+
+    /** Throws [DecryptFailedException] on any AEAD verification failure --
+     *  wrong key, wrong nonce/direction, or corrupted ciphertext. */
+    fun open(key: ByteArray, nonce: ByteArray, ciphertext: ByteArray): ByteArray {
+        val plaintext = ByteArray(ciphertext.size)
+        val plaintextLen = LongArray(1)
+        val ok = aead.cryptoAeadXChaCha20Poly1305IetfDecrypt(
+            plaintext, plaintextLen, null, ciphertext, ciphertext.size.toLong(),
+            null, 0, nonce, key,
+        )
+        if (!ok) throw DecryptFailedException()
+        return plaintext.copyOf(plaintextLen[0].toInt())
+    }
 }
