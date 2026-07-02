@@ -47,18 +47,41 @@ also ships.
   barcode-scanning` (on-device, no Play Services account/network dependency
   for the model) bound to a `CameraX` `ImageAnalysis` use case, restricted to
   `QR_CODE` format.
-- **Crypto library: BouncyCastle, not Tink.** Tink was the first candidate
-  considered and rejected after checking its docs: Tink's public `Aead`
-  interface generates/manages its own nonces internally and prepends its own
-  framing to ciphertext — there is no supported way to hand it a
-  caller-constructed nonce. This plan's wire format requires exactly that
-  (the direction+counter nonce is constructed by the caller and its counter
-  component is transmitted separately from the ciphertext). BouncyCastle's
-  lightweight API directly supports `draft-irtf-cfrg-xchacha-03`
-  XChaCha20-Poly1305 with explicit 24-byte nonces, plus raw X25519 ECDH
-  (`X25519Agreement`) and HKDF-SHA256 (`HKDFBytesGenerator`) — covering all
-  three primitives this spec needs with full byte-level control, which is
-  required to reproduce the Go side's fixed test vectors exactly.
+- **Crypto library: BouncyCastle for X25519 + HKDF, lazysodium-android for
+  the AEAD cipher — not Tink, and not BouncyCastle alone.** Tink was the
+  first candidate considered and rejected after checking its docs: Tink's
+  public `Aead` interface generates/manages its own nonces internally and
+  prepends its own framing to ciphertext — there is no supported way to hand
+  it a caller-constructed nonce, which this plan's wire format requires (the
+  direction+counter nonce is constructed by the caller and its counter
+  component is transmitted separately from the ciphertext). BouncyCastle was
+  evaluated next and **empirically verified** (a small Java program run
+  directly against `bcprov-jdk18on`, both version 1.79 and the current
+  latest 1.84) to correctly reproduce the Go side's fixed X25519 public keys
+  and the HKDF-derived shared secret byte-for-byte, using the lightweight
+  API's `X25519PrivateKeyParameters`/`X25519Agreement` and
+  `HKDFBytesGenerator`. However, that same verification found BouncyCastle
+  has **no XChaCha20-Poly1305 implementation at all**, in either version:
+  its only ChaCha-Poly1305 AEAD class rejects any nonce other than 96 bits
+  (`IllegalArgumentException: Nonce must be 96 bits`), and neither jar
+  contains an XChaCha or HChaCha20 class, nor a JCE-registered
+  `"XChaCha20-Poly1305"` transformation — contradicting an earlier,
+  incorrect assumption based on release-notes text that turned out not to
+  describe anything actually shipped in this artifact. This plan therefore
+  uses **`com.goterl:lazysodium-android`** (a JNA binding to the real
+  libsodium C library) for the XChaCha20-Poly1305 seal/open calls only —
+  confirmed via its docs to expose exactly the needed caller-supplied
+  key/nonce API (`lazySodium.encrypt(plaintext, ad, nonce, key,
+  AEAD.Method.XCHACHA20_POLY1305_IETF)`, plus a detached-tag variant for
+  ciphertext/tag-separated formats). This is not a fallback of convenience —
+  libsodium's `crypto_aead_xchacha20poly1305_ietf` is the reference
+  implementation `golang.org/x/crypto/chacha20poly1305.NewX` was built to
+  interoperate with. The trade-off is a second crypto dependency (one
+  pure-JVM, one JNI/native) instead of one, and hand-rolling the AEAD
+  construction (e.g. HChaCha20 subkey derivation on top of BouncyCastle's
+  raw `ChaCha7539Engine`) was explicitly rejected as carrying the same
+  custom-crypto-implementation risk already ruled out when Tink was
+  dropped.
 - **Wiring point: OkHttp `Interceptor` + thin WS wrapper.** An
   `E2eInterceptor` transparently encrypts/decrypts `BridgeClient` request/
   response bodies (mirrors the existing `BearerInterceptor` pattern already
@@ -110,16 +133,17 @@ New Kotlin package `android/app/src/main/java/com/sodre90/cmuxremote/data/e2e/`:
   the Go agent's `~/.config/cmux-bridge/identity.key`, since Android app
   private storage plus platform-backed encryption is the idiomatic
   equivalent.
-- **`Cipher.kt`** — BouncyCastle-backed primitives: X25519 ECDH
-  (`X25519Agreement`), HKDF-SHA256 shared-secret derivation with
-  `buildInfo(pubA, pubB)` sorting the two 32-byte public keys
+- **`Cipher.kt`** — X25519 ECDH (BouncyCastle's `X25519Agreement`) and
+  HKDF-SHA256 shared-secret derivation (BouncyCastle's `HKDFBytesGenerator`)
+  with `buildInfo(pubA, pubB)` sorting the two 32-byte public keys
   lexicographically before concatenation into the info string (must be
   byte-identical to the Go side's `buildInfo`, since both peers derive the
-  same secret independently), and XChaCha20-Poly1305 seal/open using the
-  `Nonce(direction, counter)` construction (24 bytes: `n[15] = direction`,
-  `n[16:24] = big-endian counter`; `DirAgentToDevice = 0x00`,
-  `DirDeviceToAgent = 0x01`) — a direct Kotlin port of
-  `bridge/internal/e2e/cipher.go`.
+  same secret independently); XChaCha20-Poly1305 seal/open via
+  lazysodium-android's `AEAD.Method.XCHACHA20_POLY1305_IETF`, called with
+  the `Nonce(direction, counter)` construction (24 bytes: `n[15] =
+  direction`, `n[16:24] = big-endian counter`; `DirAgentToDevice = 0x00`,
+  `DirDeviceToAgent = 0x01`) — a Kotlin port of `bridge/internal/e2e/
+  cipher.go` split across the two libraries verified for each piece.
 - **`Session.kt`** — the phone's single paired-device session state: the
   derived shared secret, a durable monotonic send counter, and the sliding-
   window receive-acceptance state described above. Persisted in
