@@ -10,6 +10,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
+	"github.com/sodre90/cmux-bridge/internal/e2e"
 )
 
 // Server holds the dependencies shared by all handlers.
@@ -19,6 +20,10 @@ type Server struct {
 	store        *auth.Store
 	hub          *hub
 	terminalPoll time.Duration // how often WS /terminal re-replays for output
+	// sessions is nil unless SetSessions is called (only by runAgent's
+	// production wiring). Nil means the plaintext code path every existing
+	// test exercises; non-nil enables the opt-in e2e encryption layer.
+	sessions *e2e.Store
 }
 
 // New constructs a Server.
