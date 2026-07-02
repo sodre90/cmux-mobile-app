@@ -1133,6 +1133,7 @@ package com.sodre90.cmuxremote.data.e2e
 import com.goterl.lazysodium.LazySodiumJava
 import com.goterl.lazysodium.SodiumJava
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.fail
 import org.junit.Test
 import java.nio.ByteBuffer
 
@@ -1176,8 +1177,12 @@ class FrameTest {
         decryptFrame(FakeSession(ByteArray(32)), cipher, ByteArray(4))
     }
 
-    @Test(expected = DecryptFailedException::class)
+    @Test
     fun decryptFrameRejectsReplayedCounter() {
+        // Deliberately NOT @Test(expected = ...) around the whole method:
+        // that form can't distinguish "first call succeeded, second call
+        // correctly rejected the replay" from "first call itself threw for
+        // the wrong reason" -- only the second call is allowed to throw.
         val secret = ByteArray(32) { it.toByte() }
         val session = FakeSession(secret)
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, 0L), "x".toByteArray())
@@ -1185,8 +1190,32 @@ class FrameTest {
         ByteBuffer.wrap(frame, 0, 8).putLong(0L)
         ct.copyInto(frame, 8)
 
-        decryptFrame(session, cipher, frame) // first: fine
-        decryptFrame(session, cipher, frame) // replay: must throw
+        decryptFrame(session, cipher, frame) // first: must succeed
+
+        try {
+            decryptFrame(session, cipher, frame) // replay: must throw
+            fail("expected DecryptFailedException on replay")
+        } catch (e: DecryptFailedException) {
+            // expected
+        }
+    }
+
+    @Test(expected = DecryptFailedException::class)
+    fun decryptFrameRejectsWrongDirectionFrame() {
+        // The single highest-risk failure mode per Global Constraints: a
+        // direction-tag swap must be a hard decrypt failure, not a silently
+        // wrong result (mirrors Task 7's decryptBodyRejectsWrongDirectionCiphertext).
+        // Seal with DIR_DEVICE_TO_AGENT (the phone's OWN outgoing direction)
+        // -- decryptFrame only ever opens with DIR_AGENT_TO_DEVICE, so this
+        // frame must fail to decrypt.
+        val secret = ByteArray(32) { it.toByte() }
+        val session = FakeSession(secret)
+        val ct = cipher.seal(secret, nonce(DIR_DEVICE_TO_AGENT, 0L), "x".toByteArray())
+        val frame = ByteArray(8 + ct.size)
+        ByteBuffer.wrap(frame, 0, 8).putLong(0L)
+        ct.copyInto(frame, 8)
+
+        decryptFrame(session, cipher, frame)
     }
 }
 ```
@@ -1239,7 +1268,7 @@ fun decryptFrame(session: PairedSession, cipher: Cipher, frame: ByteArray): Byte
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.FrameTest"`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
