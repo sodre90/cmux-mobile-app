@@ -353,17 +353,63 @@ git commit -m "android: add X25519 + HKDF-SHA256 e2e primitives"
 **Files:**
 - Modify: `android/app/src/main/java/com/sodre90/cmuxremote/data/e2e/Cipher.kt`
 - Modify: `android/app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.kt`
+- Modify: `android/app/build.gradle.kts`
 
 **Interfaces:**
 - Consumes: nothing new from earlier tasks.
 - Produces: `class Cipher(sodium: LazySodium)` with `fun seal(key: ByteArray, nonce: ByteArray, plaintext: ByteArray): ByteArray` and `fun open(key: ByteArray, nonce: ByteArray, ciphertext: ByteArray): ByteArray` (throws `DecryptFailedException` on AEAD failure), plus `class DecryptFailedException : Exception("decrypt_failed")` — consumed by `Envelope.kt` (Task 7), `Frame.kt` (Task 8), `PairingClient.kt` indirectly via `AppContainer` (Task 16).
 
-- [ ] **Step 1: Write the failing test**
+**Why this task also touches `build.gradle.kts`:** `lazysodium-java`'s default construction (`SodiumJava()`) extracts its bundled native library from its own jar at runtime via `com.goterl:resource-loader`. Verified empirically that this extraction throws `ResourceLoaderException` specifically when run under Gradle's `testDebugUnitTest` worker JVM (a classloader/URL-parsing interaction — a real reproducible bug, not a project misconfiguration; a plain `java -cp` invocation of the identical jars loads fine). No newer `resource-loader` version exists to fix it (2.1.0 is latest on Maven Central as of plan-writing). The fix verified to work end-to-end: construct `SodiumJava` with `LibraryLoader.Mode.SYSTEM_ONLY` (bypasses the buggy bundled-extraction code path entirely) and have Gradle itself extract the correct native library for the current OS/arch from the already-resolved `lazysodium-java` jar into a build directory, then point the test JVM's `jna.library.path` at it — no system-installed libsodium required, no personal/hardcoded paths, works identically for any contributor or CI.
 
-Append to `android/app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.kt`, inside the `CipherTest` class (add these imports at the top of the file first: `import com.goterl.lazysodium.LazySodiumJava` and `import com.goterl.lazysodium.SodiumJava`):
+- [ ] **Step 1: Add the native-library extraction task to build.gradle.kts**
+
+Edit `android/app/build.gradle.kts`, adding this after the `dependencies { ... }` block (top level, alongside `android { ... }`):
 
 ```kotlin
-    private val cipher = Cipher(LazySodiumJava(SodiumJava()))
+val lazysodiumNativeLibDir = layout.buildDirectory.dir("native-libs/lazysodium")
+
+val extractLazysodiumNativeLib by tasks.registering(Copy::class) {
+    val lazysodiumJar = configurations.detachedConfiguration(
+        dependencies.create("com.goterl:lazysodium-java:${libs.versions.lazysodium.get()}"),
+    ).resolve().single { it.name.startsWith("lazysodium-java") }
+
+    val osName = System.getProperty("os.name").lowercase()
+    val osArch = System.getProperty("os.arch").lowercase()
+    val resourceDir = when {
+        osName.contains("mac") && (osArch == "aarch64" || osArch == "arm64") -> "mac_arm"
+        osName.contains("mac") -> "mac"
+        osName.contains("linux") -> "linux64"
+        osName.contains("windows") -> "windows64"
+        else -> error("lazysodium-java: no bundled native library known for os.name=$osName os.arch=$osArch")
+    }
+    val libFileName = when {
+        osName.contains("windows") -> "libsodium.dll"
+        osName.contains("mac") -> "libsodium.dylib"
+        else -> "libsodium.so"
+    }
+
+    from(zipTree(lazysodiumJar)) {
+        include("$resourceDir/$libFileName")
+    }
+    into(lazysodiumNativeLibDir)
+    eachFile { path = name }
+    includeEmptyDirs = false
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(extractLazysodiumNativeLib)
+    systemProperty("jna.library.path", lazysodiumNativeLibDir.get().asFile.absolutePath)
+}
+```
+
+`tasks.withType<Test>()` only matches the JVM unit-test task type (`testDebugUnitTest`/`testReleaseUnitTest`) — it does not affect Android instrumented tests or any production code path; the app's own runtime encryption always uses `lazysodium-android`'s separate, unaffected bundling.
+
+- [ ] **Step 2: Write the failing test**
+
+Append to `android/app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.kt`, inside the `CipherTest` class (add these imports at the top of the file first: `import com.goterl.lazysodium.LazySodiumJava`, `import com.goterl.lazysodium.SodiumJava`, and `import com.goterl.lazysodium.utils.LibraryLoader`):
+
+```kotlin
+    private val cipher = Cipher(LazySodiumJava(SodiumJava(LibraryLoader.Mode.SYSTEM_ONLY)))
 
     @Test
     fun sealMatchesGoFixedVector() {
@@ -398,12 +444,12 @@ Append to `android/app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.
     }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.CipherTest"`
 Expected: FAIL — compilation error (`Unresolved reference: Cipher`, `Unresolved reference: DecryptFailedException`).
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 4: Write the implementation**
 
 Append to `android/app/src/main/java/com/sodre90/cmuxremote/data/e2e/Cipher.kt` (add `import com.goterl.lazysodium.LazySodium` and `import com.goterl.lazysodium.interfaces.AEAD` at the top first):
 
@@ -446,15 +492,15 @@ class Cipher(sodium: LazySodium) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.CipherTest"`
 Expected: PASS (6 tests total).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-cd android && git add app/src/main/java/com/sodre90/cmuxremote/data/e2e/Cipher.kt app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.kt
+cd android && git add app/build.gradle.kts app/src/main/java/com/sodre90/cmuxremote/data/e2e/Cipher.kt app/src/test/java/com/sodre90/cmuxremote/data/e2e/CipherTest.kt
 git commit -m "android: add XChaCha20-Poly1305 AEAD via lazysodium"
 ```
 
