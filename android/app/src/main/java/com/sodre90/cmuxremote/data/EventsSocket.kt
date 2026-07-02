@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
@@ -33,6 +34,15 @@ class EventsSocket(
                     .mapCatching { BridgeJson.decodeFromString(EventFrame.serializer(), it.toString(Charsets.UTF_8)) }
                     .getOrNull()
                     ?.let { trySend(it) }
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+                close()
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                close(t)
             }
         })
         awaitClose { socket.cancel() }
