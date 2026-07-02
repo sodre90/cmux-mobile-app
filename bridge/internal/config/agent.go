@@ -22,8 +22,6 @@ type AgentConfig struct {
 	// BootstrapURL is the relay's no-mTLS registration endpoint
 	// (e.g. https://cmux.example.com:8444/tenants/register), used exactly
 	// once, on first run, when ClientCert/ClientKey/CACert don't exist yet.
-	// The same bootstrap vhost also serves /devices/pair (see
-	// cmd/cmux-bridge/pair.go), derived from this URL.
 	BootstrapURL string `toml:"bootstrap_url"`
 	// IdentityKey is the path to this agent's X25519 e2e identity private key
 	// (internal/e2e.Identity), created on first use by `cmux-bridge

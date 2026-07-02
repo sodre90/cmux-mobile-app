@@ -220,18 +220,22 @@ var upgrader = websocket.Upgrader{
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	var deviceID string
 	if s.sessions != nil {
-		// Status codes match internal/server/encryption.go's
-		// encryptionMiddleware and handleTerminal: a missing header is 401
-		// unknown_device, a present-but-unrecognized device id is 409
-		// not_paired (see the spec's error-handling section).
+		// A present X-Device-ID means this is a device subscriber (the
+		// relay's proxy Director injects it on every device-originated
+		// request) -- gate on it being paired and encrypt its frames below.
+		// A missing X-Device-ID means this is the relay's own internal
+		// push-monitor subscription (internal/relay/pushmon.go dials
+		// directly over the tunnel with only X-Relay-Token, which
+		// RequireRelayToken has already checked by this point in
+		// TrustedHandler) -- serve it plaintext so FCM fan-out keeps
+		// working. This exposes no more than the relay already saw before
+		// e2e encryption existed; only device-bound frames are e2e.
 		deviceID = r.Header.Get("X-Device-ID")
-		if deviceID == "" {
-			http.Error(w, "unknown_device", http.StatusUnauthorized)
-			return
-		}
-		if _, ok := s.sessions.SharedSecret(deviceID); !ok {
-			http.Error(w, "not_paired", http.StatusConflict)
-			return
+		if deviceID != "" {
+			if _, ok := s.sessions.SharedSecret(deviceID); !ok {
+				http.Error(w, "not_paired", http.StatusConflict)
+				return
+			}
 		}
 	}
 	c, err := upgrader.Upgrade(w, r, nil)
@@ -261,9 +265,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeEventFrame sends f as a plain JSON text frame when encryption is
-// disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
+// disabled (s.sessions == nil) or the caller is the relay's own internal
+// push-monitor subscription (deviceID == ""), or as a binary e2e-encrypted
+// frame otherwise.
 func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f EventFrame) error {
-	if s.sessions == nil {
+	if s.sessions == nil || deviceID == "" {
 		return c.WriteJSON(f)
 	}
 	raw, err := json.Marshal(f)

@@ -51,19 +51,6 @@ func httpsBaseFromRelayURL(relayURL string) (string, error) {
 	return u.String(), nil
 }
 
-// devicePairURLFromBootstrap converts the agent's bootstrap registration URL
-// (e.g. "https://cmux.example.com:8444/tenants/register") into the no-mTLS
-// device-pairing endpoint the same bootstrap vhost serves
-// (e.g. "https://cmux.example.com:8444/devices/pair").
-func devicePairURLFromBootstrap(bootstrapURL string) (string, error) {
-	u, err := url.Parse(bootstrapURL)
-	if err != nil {
-		return "", fmt.Errorf("parse bootstrap_url: %w", err)
-	}
-	u.Path = "/devices/pair"
-	return u.String(), nil
-}
-
 func requestPairingCode(client *http.Client, agentBase string) (code, expiresAt, tenantID string, err error) {
 	resp, err := client.Post(agentBase+"/agent/pairing-code", "application/json", nil)
 	if err != nil {
@@ -180,8 +167,8 @@ func runPairDevice(args []string) int {
 		log.Printf("pair-device: %v", err)
 		return 1
 	}
-	if cfg.RelayURL == "" || cfg.BootstrapURL == "" {
-		log.Printf("pair-device: relay_url and bootstrap_url are both required")
+	if cfg.RelayURL == "" {
+		log.Printf("pair-device: relay_url is required")
 		return 1
 	}
 	agentBase, err := httpsBaseFromRelayURL(cfg.RelayURL)
@@ -189,11 +176,10 @@ func runPairDevice(args []string) int {
 		log.Printf("pair-device: %v", err)
 		return 1
 	}
-	devicePairURL, err := devicePairURLFromBootstrap(cfg.BootstrapURL)
-	if err != nil {
-		log.Printf("pair-device: %v", err)
-		return 1
-	}
+	// /devices/pair is public on the same main vhost as the agent-facing
+	// pairing-code endpoints (see Global Constraints in the plan) -- the
+	// bootstrap vhost only serves /tenants/register.
+	devicePairURL := agentBase + "/devices/pair"
 	tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
 	if err != nil {
 		log.Printf("pair-device: tls: %v", err)

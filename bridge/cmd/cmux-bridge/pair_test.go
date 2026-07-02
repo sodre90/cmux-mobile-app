@@ -138,13 +138,3 @@ func TestHttpsBaseFromRelayURL(t *testing.T) {
 		t.Fatal("expected an error for a non-ws(s) scheme")
 	}
 }
-
-func TestDevicePairURLFromBootstrap(t *testing.T) {
-	got, err := devicePairURLFromBootstrap("https://cmux.example.com:8444/tenants/register")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "https://cmux.example.com:8444/devices/pair"; got != want {
-		t.Fatalf("devicePairURLFromBootstrap = %q, want %q", got, want)
-	}
-}
