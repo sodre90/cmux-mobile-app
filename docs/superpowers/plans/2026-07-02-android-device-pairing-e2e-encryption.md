@@ -688,6 +688,23 @@ class ReplayWindowTest {
         w = w.commit(101L) // small jump; 100 still within window (101-100=1)
         assertFalse(w.canAccept(100L))
     }
+
+    @Test
+    fun negativeCounterIsRejectedNotTreatedAsFreshWindow() {
+        // Protocol counters are always non-negative. `highestSeen < 0` is the
+        // internal "no history yet" sentinel -- without this guard, a
+        // negative n reaching canAccept on a fresh window would exploit that
+        // same check and be silently accepted instead of rejected, and if
+        // ever committed would leave highestSeen permanently negative,
+        // disabling replay protection for that state forever after.
+        val w = ReplayWindow()
+        assertFalse(w.canAccept(-1L))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun commitRejectsNegativeCounter() {
+        ReplayWindow().commit(-1L)
+    }
 }
 ```
 
@@ -715,8 +732,11 @@ private const val WINDOW_SIZE = 64
 class ReplayWindow(val highestSeen: Long = -1L, val windowBits: Long = 0L) {
 
     /** Read-only: does NOT record [n] as seen. Call [commit] separately, and
-     *  only after the corresponding ciphertext has verified. */
+     *  only after the corresponding ciphertext has verified. Protocol
+     *  counters are always non-negative -- reject negative n outright rather
+     *  than let it collide with the `highestSeen < 0` "no history" sentinel. */
     fun canAccept(n: Long): Boolean {
+        if (n < 0) return false
         if (highestSeen < 0) return true
         if (n > highestSeen) return true
         val age = highestSeen - n
@@ -725,8 +745,11 @@ class ReplayWindow(val highestSeen: Long = -1L, val windowBits: Long = 0L) {
         return (windowBits and bit) == 0L
     }
 
-    /** Records [n] as seen, sliding the window forward if [n] is a new high. */
+    /** Records [n] as seen, sliding the window forward if [n] is a new high.
+     *  [n] must be non-negative and must already have passed [canAccept] --
+     *  callers never commit a counter they haven't just verified. */
     fun commit(n: Long): ReplayWindow {
+        require(n >= 0) { "counter must be non-negative" }
         if (highestSeen < 0) {
             return ReplayWindow(n, 1L)
         }
@@ -745,7 +768,7 @@ class ReplayWindow(val highestSeen: Long = -1L, val windowBits: Long = 0L) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.ReplayWindowTest"`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
