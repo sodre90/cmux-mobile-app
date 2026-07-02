@@ -205,18 +205,18 @@ class CipherTest {
         val devicePub = x25519PublicKeyFromPrivate(devicePriv)
 
         assertEquals(
-            "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a20",
+            "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209",
             hexOf(agentPub),
         )
         assertEquals(
-            "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d5",
+            "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59",
             hexOf(devicePub),
         )
 
         val agentSide = deriveSharedSecret(agentPriv, devicePub)
         val deviceSide = deriveSharedSecret(devicePriv, agentPub)
 
-        val want = "0c657b7b4a6f6eede1d9f03bad4f9c898e9291c22eeb4cd09f12df79394837d"
+        val want = "0c657b7b4a6f6eede1d9f03bad4f9c898e9291c22eeb4cd09f12df79394837d6"
         assertEquals(want, hexOf(agentSide))
         assertEquals(want, hexOf(deviceSide))
     }
