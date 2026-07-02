@@ -33,6 +33,9 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			req.URL.Scheme = "http"
 			req.URL.Host = "agent" // ignored by the stream dialer below
 			req.Header.Set("X-Relay-Token", relayToken)
+			if dev, ok := auth.DeviceFromContext(req.Context()); ok {
+				req.Header.Set("X-Device-ID", dev.TokenHash)
+			}
 		},
 		Transport: &http.Transport{
 			// Security-load-bearing, not a performance knob: DialContext below
