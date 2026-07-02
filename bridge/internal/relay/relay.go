@@ -26,6 +26,9 @@ const agentCNPrefix = "agent:"
 // after this window an agent must re-register, minting a new tenant ID.
 const agentCertValidity = 365 * 24 * time.Hour
 
+// pairingCodeTTL is how long a self-service pairing code stays redeemable.
+const pairingCodeTTL = 10 * time.Minute
+
 // Relay is the home-server rendezvous: it accepts Mac agents' tunnels and
 // reverse-proxies authenticated app requests over them.
 type Relay struct {
@@ -88,6 +91,23 @@ func tenantFromAgentCN(cn string) (tenantID string, ok bool) {
 	return id, true
 }
 
+// agentOnly extracts the calling agent's tenant ID from its mTLS CN,
+// rejecting any request that isn't a valid, currently-active agent. Used by
+// the agent-facing pairing-code endpoints below, which authenticate via mTLS
+// CN rather than auth.Require's device bearer token.
+//
+// NOTE: this check is CN-only for now. Task 8 hardens it to also require
+// nginx's X-Client-Cert-Verify == "SUCCESS" once ssl_verify_client stops
+// being mandatory — see that task's Global-Constraint-driven rewrite. Do not
+// copy this CN-only pattern into new code once Task 8 lands.
+func (r *Relay) agentOnly(req *http.Request) (string, bool) {
+	tenantID, ok := tenantFromAgentCN(r.clientCN(req))
+	if !ok || !r.store.TenantActive(tenantID) {
+		return "", false
+	}
+	return tenantID, true
+}
+
 func (r *Relay) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -95,6 +115,8 @@ func (r *Relay) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
+	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(r.handleNewPairingCode))
+	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(r.handlePairingCodeStatus))
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))
@@ -150,6 +172,71 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	log.Printf("relay: agent tunnel down (tenant=%q)", tenantID)
 	r.reg.Clear(tenantID, sess)
 	cancel()
+}
+
+type pairingCodeResp struct {
+	Code      string `json:"code"`
+	ExpiresAt string `json:"expires_at"`
+	TenantID  string `json:"tenant_id"`
+}
+
+// handleNewPairingCode lets an already-registered agent request a fresh
+// single-use pairing code to embed in a QR code (see
+// cmd/cmux-bridge/pair.go). Agent-CN-gated: only a request presenting a
+// valid, active agent's mTLS certificate may call this. TenantID is echoed
+// back so the QR payload can carry it for display, even though /devices/pair
+// itself never needs it in the request (see the Global Constraint on that
+// endpoint's simplified request/response shapes) — the pairing code alone is
+// resolved to a tenant server-side.
+func (r *Relay) handleNewPairingCode(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := r.agentOnly(req)
+	if !ok {
+		writeJSONErr(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	code, err := r.store.NewPairingCode(tenantID, pairingCodeTTL)
+	if err != nil {
+		log.Printf("relay: new pairing code: %v", err)
+		writeJSONErr(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(pairingCodeResp{
+		Code:      code,
+		ExpiresAt: time.Now().Add(pairingCodeTTL).UTC().Format(time.RFC3339),
+		TenantID:  tenantID,
+	})
+}
+
+type pairingCodeStatusResp struct {
+	Redeemed     bool   `json:"redeemed"`
+	DevicePubkey string `json:"device_pubkey,omitempty"`
+	TokenHash    string `json:"token_hash,omitempty"`
+}
+
+// handlePairingCodeStatus lets the agent that requested a pairing code poll
+// for its redemption. Scoped to the caller's own tenant (via agentOnly), so
+// one tenant's agent can never observe another tenant's pairing codes.
+func (r *Relay) handlePairingCodeStatus(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := r.agentOnly(req)
+	if !ok {
+		writeJSONErr(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	code := req.PathValue("code")
+	pubkey, hash, redeemed, ok := r.store.PairingCodeStatus(tenantID, code)
+	if !ok {
+		writeJSONErr(w, http.StatusNotFound, "not_found")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(pairingCodeStatusResp{
+		Redeemed:     redeemed,
+		DevicePubkey: pubkey,
+		TokenHash:    hash,
+	})
 }
 
 type registerReq struct {
