@@ -218,6 +218,22 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	var deviceID string
+	if s.sessions != nil {
+		// Status codes match internal/server/encryption.go's
+		// encryptionMiddleware and handleTerminal: a missing header is 401
+		// unknown_device, a present-but-unrecognized device id is 409
+		// not_paired (see the spec's error-handling section).
+		deviceID = r.Header.Get("X-Device-ID")
+		if deviceID == "" {
+			http.Error(w, "unknown_device", http.StatusUnauthorized)
+			return
+		}
+		if _, ok := s.sessions.SharedSecret(deviceID); !ok {
+			http.Error(w, "not_paired", http.StatusConflict)
+			return
+		}
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -238,10 +254,27 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	for f := range ch {
 		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.WriteJSON(f); err != nil {
+		if err := s.writeEventFrame(c, deviceID, f); err != nil {
 			return
 		}
 	}
+}
+
+// writeEventFrame sends f as a plain JSON text frame when encryption is
+// disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
+func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f EventFrame) error {
+	if s.sessions == nil {
+		return c.WriteJSON(f)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	frame, err := s.sessions.EncryptFrame(deviceID, raw)
+	if err != nil {
+		return err
+	}
+	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
 
 // ---- small helpers ----
