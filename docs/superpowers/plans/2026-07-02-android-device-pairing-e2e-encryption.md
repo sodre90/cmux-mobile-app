@@ -2742,7 +2742,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -2756,10 +2755,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -2777,6 +2778,13 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 
+// NB: TopAppBar is still Material3-experimental, so PairingScreen needs
+// @OptIn(ExperimentalMaterial3Api::class) like every other *Screen here.
+// Do NOT add a top-level `import androidx.annotation.OptIn` -- it shadows
+// kotlin.OptIn (needed for the Material3 opt-in above) and forces the
+// CameraX opt-in below to be fully qualified anyway; qualify it at the one
+// call site instead of importing.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingScreen(vm: PairingViewModel, onPaired: () -> Unit) {
     val context = LocalContext.current
@@ -2839,6 +2847,16 @@ private fun CameraPreview(onQrDetected: (String) -> Unit) {
             BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
         )
     }
+    // Bound once resolved (async); unbound in onDispose below so the camera is
+    // released as soon as this leaves composition (e.g. once pairing starts)
+    // rather than staying held open for the lifetime of the whole Activity --
+    // bindToLifecycle only reacts to lifecycleOwner's ON_STOP/ON_DESTROY, not
+    // to this composable being removed from the tree.
+    var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose { boundCameraProvider?.unbindAll() }
+    }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -2860,6 +2878,7 @@ private fun CameraPreview(onQrDetected: (String) -> Unit) {
                     cameraProvider.bindToLifecycle(
                         lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis,
                     )
+                    boundCameraProvider = cameraProvider
                 },
                 ContextCompat.getMainExecutor(ctx),
             )
@@ -2868,7 +2887,7 @@ private fun CameraPreview(onQrDetected: (String) -> Unit) {
     )
 }
 
-@OptIn(ExperimentalGetImage::class)
+@androidx.annotation.OptIn(ExperimentalGetImage::class)
 private fun processImageProxy(scanner: BarcodeScanner, imageProxy: ImageProxy, onQrDetected: (String) -> Unit) {
     val mediaImage = imageProxy.image
     if (mediaImage == null) {
