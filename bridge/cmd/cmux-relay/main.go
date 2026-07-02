@@ -15,8 +15,6 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		os.Exit(runServe(os.Args[2:]))
-	case "pair":
-		os.Exit(runPair(os.Args[2:]))
 	case "devices":
 		os.Exit(runDevices(os.Args[2:]))
 	case "tenants":
@@ -30,5 +28,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cmux-relay <serve|pair|devices|tenants|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cmux-relay <serve|devices|tenants|version> [flags]")
 }

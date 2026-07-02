@@ -1,10 +1,14 @@
+// bridge/internal/auth/store_test.go
 package auth
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+const testPubkey = "test-device-pubkey-b64"
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
@@ -71,7 +75,7 @@ func TestListTenants(t *testing.T) {
 func TestIssueVerifyRevoke(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	tok, err := s.Issue(tenant, "phone")
+	tok, err := s.Issue(tenant, "phone", testPubkey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +85,12 @@ func TestIssueVerifyRevoke(t *testing.T) {
 	}
 	if dev.TenantID != tenant {
 		t.Fatalf("Verify TenantID = %q want %q", dev.TenantID, tenant)
+	}
+	if dev.DevicePubkey != testPubkey {
+		t.Fatalf("Verify DevicePubkey = %q want %q", dev.DevicePubkey, testPubkey)
+	}
+	if dev.TokenHash == "" || len(dev.TokenHash) != 64 {
+		t.Fatalf("Verify TokenHash should be a full 64-char hex digest, got %q", dev.TokenHash)
 	}
 	if _, ok := s.Verify("bogus"); ok {
 		t.Fatal("bogus token must not verify")
@@ -99,10 +109,18 @@ func TestIssueVerifyRevoke(t *testing.T) {
 	}
 }
 
+func TestIssueRequiresDevicePubkey(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	if _, err := s.Issue(tenant, "phone", ""); err == nil {
+		t.Fatal("Issue with an empty device pubkey must return an error")
+	}
+}
+
 func TestVerifyFailsClosedWhenTenantRevoked(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	tok, _ := s.Issue(tenant, "phone")
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	s.RevokeTenant(tenant)
 	if _, ok := s.Verify(tok); ok {
 		t.Fatal("a device token must stop verifying once its tenant is revoked")
@@ -112,7 +130,7 @@ func TestVerifyFailsClosedWhenTenantRevoked(t *testing.T) {
 func TestTokensAreHashedAtRest(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	tok, _ := s.Issue(tenant, "phone")
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE token_hash = ?`, tok).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -129,14 +147,14 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, gotTenant, ok := s.RedeemPairingCode(code, "phone")
+	tok, gotTenant, ok := s.RedeemPairingCode(code, "phone", testPubkey)
 	if !ok || tok == "" {
 		t.Fatal("first redeem should succeed")
 	}
 	if gotTenant != tenant {
 		t.Fatalf("redeemed tenant = %q want %q", gotTenant, tenant)
 	}
-	if _, _, ok := s.RedeemPairingCode(code, "phone"); ok {
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
 		t.Fatal("reuse of a code must fail")
 	}
 	if _, ok := s.Verify(tok); !ok {
@@ -144,12 +162,75 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	}
 }
 
+func TestRedeemPairingCodeRequiresDevicePubkey(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := s.RedeemPairingCode(code, "phone", ""); ok {
+		t.Fatal("redeeming with an empty device pubkey must fail")
+	}
+}
+
 func TestPairingCodeExpiry(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
 	code, _ := s.NewPairingCode(tenant, -time.Second) // already expired
-	if _, _, ok := s.RedeemPairingCode(code, "phone"); ok {
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
 		t.Fatal("expired code must fail")
+	}
+}
+
+func TestPairingCodeStatusReflectsRedemption(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, redeemed, ok := s.PairingCodeStatus(tenant, code); !ok || redeemed {
+		t.Fatalf("fresh code should exist and be unredeemed, got redeemed=%v ok=%v", redeemed, ok)
+	}
+
+	tok, _, ok := s.RedeemPairingCode(code, "phone", testPubkey)
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+
+	pub, hash, redeemed, ok := s.PairingCodeStatus(tenant, code)
+	if !ok || !redeemed {
+		t.Fatalf("code should report redeemed, got ok=%v redeemed=%v", ok, redeemed)
+	}
+	if pub != testPubkey {
+		t.Fatalf("PairingCodeStatus pubkey = %q want %q", pub, testPubkey)
+	}
+	wantHash := hashToken(tok)
+	if hash != wantHash {
+		t.Fatalf("PairingCodeStatus tokenHash = %q want %q", hash, wantHash)
+	}
+}
+
+func TestPairingCodeStatusUnknownCode(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	if _, _, _, ok := s.PairingCodeStatus(tenant, "nonexistent"); ok {
+		t.Fatal("unknown code should report ok=false")
+	}
+}
+
+func TestPairingCodeStatusScopedToTenant(t *testing.T) {
+	s := newStore(t)
+	tenantA := newTenant(t, s)
+	tenantB := newTenant(t, s)
+	code, err := s.NewPairingCode(tenantA, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok := s.PairingCodeStatus(tenantB, code); ok {
+		t.Fatal("a pairing code must not be visible under a different tenant id")
 	}
 }
 
@@ -160,7 +241,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	tenant := newTenant(t, s)
-	tok, _ := s.Issue(tenant, "phone")
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	s2, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
@@ -173,13 +254,16 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 func TestListShowsHashSuffixNotRawToken(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	tok, _ := s.Issue(tenant, "phone")
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	list := s.List()
 	if len(list) != 1 {
 		t.Fatalf("want 1 device, got %d", len(list))
 	}
 	if list[0].HashSuffix == "" || len(list[0].HashSuffix) != 6 {
 		t.Fatalf("want a 6-char hash suffix, got %q", list[0].HashSuffix)
+	}
+	if list[0].DevicePubkey != testPubkey {
+		t.Fatalf("List DevicePubkey = %q want %q", list[0].DevicePubkey, testPubkey)
 	}
 	for _, want := range []string{tok, tok[len(tok)-6:]} {
 		if list[0].HashSuffix == want {
@@ -192,8 +276,8 @@ func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
 	s := newStore(t)
 	tenantA := newTenant(t, s)
 	tenantB := newTenant(t, s)
-	tokA, _ := s.Issue(tenantA, "phone-a")
-	tokB, _ := s.Issue(tenantB, "phone-b")
+	tokA, _ := s.Issue(tenantA, "phone-a", testPubkey)
+	tokB, _ := s.Issue(tenantB, "phone-b", testPubkey)
 
 	if got := s.TenantFCMTokens(tenantA); len(got) != 0 {
 		t.Fatalf("expected no FCM tokens yet, got %v", got)
@@ -236,5 +320,42 @@ func TestOpenCreatesParentDirectory(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("fresh store should have zero tenants, got %d", len(list))
+	}
+}
+
+func TestMigrationAddsDevicePubkeyColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	// Simulate a pre-migration database file: apply only the original schema
+	// (no device_pubkey / pairing-code columns), bypassing Open (which always
+	// applies both schema and migrations).
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Opening through the real Open must apply the migration without error,
+	// even though the file already exists and predates the new columns.
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on pre-migration db: %v", err)
+	}
+	tenant, err := s.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := s.Issue(tenant, "phone", testPubkey)
+	if err != nil {
+		t.Fatalf("Issue after migration: %v", err)
+	}
+	dev, ok := s.Verify(tok)
+	if !ok {
+		t.Fatal("issued token should verify after migration")
+	}
+	if dev.DevicePubkey != testPubkey {
+		t.Fatalf("DevicePubkey = %q, want %q", dev.DevicePubkey, testPubkey)
 	}
 }

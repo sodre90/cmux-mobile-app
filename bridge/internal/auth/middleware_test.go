@@ -14,7 +14,7 @@ func protected(t *testing.T) (*Store, http.Handler, string) {
 		t.Fatal(err)
 	}
 	tenant, _ := s.CreateTenant()
-	tok, _ := s.Issue(tenant, "phone")
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	h := Require(s, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dev, ok := DeviceFromContext(r.Context())
 		if !ok || dev.Name != "phone" {

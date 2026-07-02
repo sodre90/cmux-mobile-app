@@ -64,7 +64,7 @@ func TestMonitorAgentPushesAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	tenant, _ := store.CreateTenant()
-	tok, _ := store.Issue(tenant, "phone")
+	tok, _ := store.Issue(tenant, "phone", "test-device-pubkey-b64")
 	store.SetFCMToken(tok, "fcm-123")
 
 	fp := &fakePusher{}
@@ -121,8 +121,8 @@ func TestMonitorAgentScopesPushToOwnTenant(t *testing.T) {
 	}
 	tenantA, _ := store.CreateTenant()
 	tenantB, _ := store.CreateTenant()
-	tokA, _ := store.Issue(tenantA, "phone-a")
-	tokB, _ := store.Issue(tenantB, "phone-b")
+	tokA, _ := store.Issue(tenantA, "phone-a", "test-device-pubkey-a")
+	tokB, _ := store.Issue(tenantB, "phone-b", "test-device-pubkey-b")
 	store.SetFCMToken(tokA, "fcm-a")
 	store.SetFCMToken(tokB, "fcm-b")
 

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,42 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
 );
 `
 
+// migrations is applied unconditionally after schema on every Open, one
+// statement at a time, so it is a no-op on a database that already has these
+// columns (including a database created fresh by schema above, once a future
+// edit folds them into the base CREATE TABLE) and additive on one that
+// predates device-pubkey pairing.
+//
+// This deliberately does not use "ALTER TABLE ... ADD COLUMN IF NOT EXISTS":
+// modernc.org/sqlite v1.53.0 reports sqlite_version() 3.53.2 (which upstream
+// SQLite has supported that clause on since 3.35.0), but its parser rejects
+// it with a syntax error regardless — a real gap between the reported and
+// actual grammar of this particular Go port. So each statement below runs
+// individually, and applyMigrations treats the "duplicate column name" error
+// SQLite returns for a column that already exists as success rather than a
+// failure.
+var migrations = []string{
+	`ALTER TABLE devices ADD COLUMN device_pubkey TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE pairing_codes ADD COLUMN device_pubkey TEXT`,
+	`ALTER TABLE pairing_codes ADD COLUMN token_hash TEXT`,
+	`ALTER TABLE pairing_codes ADD COLUMN redeemed_at TEXT`,
+}
+
+// applyMigrations runs each migration statement, tolerating a "duplicate
+// column name" error (meaning a prior Open already applied it) as a no-op.
+// Any other error aborts and is returned.
+func applyMigrations(db *sql.DB) error {
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // Tenant is a registered Mac-agent identity. Devices belong to exactly one.
 type Tenant struct {
 	ID        string
@@ -56,9 +93,18 @@ type Device struct {
 	Name     string
 	FCM      string
 	Created  time.Time
-	// HashSuffix is the last 6 hex characters of the token's SHA-256 hash —
-	// enough for an operator to eyeball which device is which; the store
-	// never holds anything the raw token can be recovered from.
+	// DevicePubkey is the device's base64-encoded X25519 public key, submitted
+	// at pairing time (internal/e2e). Every device has one — Issue and
+	// RedeemPairingCode both reject an empty value.
+	DevicePubkey string
+	// TokenHash is the full SHA-256 hex digest of the raw token — used as the
+	// internal/e2e.Store session key, and injected as X-Device-ID by the
+	// relay's proxy Director (internal/relay/proxy.go) so the agent can tell
+	// which device is speaking without ever seeing the raw bearer token.
+	TokenHash string
+	// HashSuffix is the last 6 hex characters of TokenHash — enough for an
+	// operator to eyeball which device is which in `cmux-relay devices list`
+	// output without printing the full hash.
 	HashSuffix string
 }
 
@@ -70,10 +116,9 @@ type Store struct {
 }
 
 // Open opens (creating if absent) the SQLite database at path and applies the
-// schema. Safe to call from multiple short-lived processes (the relay server
-// and the `cmux-relay` CLI) against the same file — SQLite handles the
-// locking, so there is no in-memory cache to fall out of sync (unlike the
-// previous JSON-file store, this needs no reload-on-SIGHUP mechanism).
+// schema and migrations. Safe to call from multiple short-lived processes
+// (the relay server and the `cmux-relay` CLI) against the same file — SQLite
+// handles the locking, so there is no in-memory cache to fall out of sync.
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create dir for store: %w", err)
@@ -89,6 +134,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+	if err := applyMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -185,17 +234,23 @@ func (s *Store) RecordAgentCert(tenantID, serial string) error {
 	return err
 }
 
-// Issue creates a new device bearer token for tenantID. The raw token is
-// returned once, here — only its hash is ever persisted.
-func (s *Store) Issue(tenantID, name string) (string, error) {
+// Issue creates a new device bearer token for tenantID, bound to
+// devicePubkey (the device's base64 X25519 public key). The raw token is
+// returned once, here — only its hash is ever persisted. devicePubkey is
+// required: there is no manual-pairing fallback path in this version, so a
+// device is never issued a token without an e2e identity to encrypt to.
+func (s *Store) Issue(tenantID, name, devicePubkey string) (string, error) {
+	if devicePubkey == "" {
+		return "", fmt.Errorf("issue device token: device_pubkey is required")
+	}
 	tok, err := randomHex(32)
 	if err != nil {
 		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err = s.db.Exec(`INSERT INTO devices (token_hash, tenant_id, name, created_at) VALUES (?, ?, ?, ?)`,
-		hashToken(tok), tenantID, name, now())
+	_, err = s.db.Exec(`INSERT INTO devices (token_hash, tenant_id, name, device_pubkey, created_at) VALUES (?, ?, ?, ?, ?)`,
+		hashToken(tok), tenantID, name, devicePubkey, now())
 	if err != nil {
 		return "", fmt.Errorf("issue device token: %w", err)
 	}
@@ -214,17 +269,18 @@ func (s *Store) Verify(token string) (Device, bool) {
 	defer s.mu.Unlock()
 	hash := hashToken(token)
 	row := s.db.QueryRow(`
-		SELECT d.tenant_id, d.name, d.fcm_token, d.created_at
+		SELECT d.tenant_id, d.name, d.fcm_token, d.device_pubkey, d.created_at
 		FROM devices d JOIN tenants t ON t.id = d.tenant_id
 		WHERE d.token_hash = ? AND t.revoked_at IS NULL`, hash)
 	var dev Device
 	var fcm sql.NullString
 	var created string
-	if err := row.Scan(&dev.TenantID, &dev.Name, &fcm, &created); err != nil {
+	if err := row.Scan(&dev.TenantID, &dev.Name, &fcm, &dev.DevicePubkey, &created); err != nil {
 		return Device{}, false
 	}
 	dev.FCM = fcm.String
 	dev.Created, _ = time.Parse(time.RFC3339, created)
+	dev.TokenHash = hash
 	dev.HashSuffix = hash[len(hash)-6:]
 	return dev, true
 }
@@ -233,7 +289,7 @@ func (s *Store) Verify(token string) (Device, bool) {
 func (s *Store) List() []Device {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT token_hash, tenant_id, name, fcm_token, created_at FROM devices ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT token_hash, tenant_id, name, fcm_token, device_pubkey, created_at FROM devices ORDER BY created_at`)
 	if err != nil {
 		return nil
 	}
@@ -244,11 +300,12 @@ func (s *Store) List() []Device {
 		var hash string
 		var fcm sql.NullString
 		var created string
-		if err := rows.Scan(&hash, &dev.TenantID, &dev.Name, &fcm, &created); err != nil {
+		if err := rows.Scan(&hash, &dev.TenantID, &dev.Name, &fcm, &dev.DevicePubkey, &created); err != nil {
 			continue
 		}
 		dev.FCM = fcm.String
 		dev.Created, _ = time.Parse(time.RFC3339, created)
+		dev.TokenHash = hash
 		dev.HashSuffix = hash[len(hash)-6:]
 		out = append(out, dev)
 	}
@@ -327,53 +384,78 @@ func (s *Store) NewPairingCode(tenantID string, ttl time.Duration) (string, erro
 	return code, nil
 }
 
-// RedeemPairingCode exchanges a valid, unexpired code for a freshly issued
-// device token scoped to that code's tenant. The code is consumed regardless
-// of outcome, to prevent reuse. The validate-and-delete is atomic at the
-// database level (wrapped in a transaction) to prevent double-redemption
-// across concurrent OS processes.
-func (s *Store) RedeemPairingCode(code, name string) (token, tenantID string, ok bool) {
+// RedeemPairingCode consumes a single-use pairing code, issuing a fresh
+// device token bound to devicePubkey. Unlike the old CLI-driven flow this
+// replaces, this is non-destructive: the pairing_codes row is UPDATEd (not
+// deleted) so the issuing agent's poll (PairingCodeStatus) can retrieve the
+// device's token hash and public key after redemption — the raw token itself
+// is returned only here, to the caller (the phone), and never persisted.
+// Atomic at the database level via a transaction, so two concurrent
+// redemption attempts on the same code can't both succeed.
+func (s *Store) RedeemPairingCode(code, name, devicePubkey string) (token, tenantID string, ok bool) {
+	if devicePubkey == "" {
+		return "", "", false
+	}
 	s.mu.Lock()
-	// Start an explicit transaction to atomically validate and consume the code.
+	defer s.mu.Unlock()
+
 	tx, err := s.db.Begin()
 	if err != nil {
-		s.mu.Unlock()
 		return "", "", false
 	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	var expiresAt string
-	err = tx.QueryRow(`SELECT tenant_id, expires_at FROM pairing_codes WHERE code = ?`, code).
-		Scan(&tenantID, &expiresAt)
-	if err != nil {
-		tx.Rollback()
-		s.mu.Unlock()
+	var redeemedAt sql.NullString
+	err = tx.QueryRow(`SELECT tenant_id, expires_at, redeemed_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&tenantID, &expiresAt, &redeemedAt)
+	if err != nil || redeemedAt.Valid {
+		return "", "", false
+	}
+	exp, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil || time.Now().After(exp) {
 		return "", "", false
 	}
 
-	_, err = tx.Exec(`DELETE FROM pairing_codes WHERE code = ?`, code)
+	tok, err := randomHex(32)
 	if err != nil {
-		tx.Rollback()
-		s.mu.Unlock()
 		return "", "", false
 	}
-
+	hash := hashToken(tok)
+	if _, err := tx.Exec(`INSERT INTO devices (token_hash, tenant_id, name, device_pubkey, created_at) VALUES (?, ?, ?, ?, ?)`,
+		hash, tenantID, name, devicePubkey, now()); err != nil {
+		return "", "", false
+	}
+	if _, err := tx.Exec(`UPDATE pairing_codes SET device_pubkey = ?, token_hash = ?, redeemed_at = ? WHERE code = ?`,
+		devicePubkey, hash, now(), code); err != nil {
+		return "", "", false
+	}
 	if err := tx.Commit(); err != nil {
-		s.mu.Unlock()
-		return "", "", false
-	}
-	s.mu.Unlock()
-
-	// Validation happens after transaction and lock release to allow other
-	// processes to proceed. By this time the code is atomically deleted.
-	exp, _ := time.Parse(time.RFC3339, expiresAt)
-	if time.Now().After(exp) {
-		return "", "", false
-	}
-
-	// Issue a new token. This acquires and releases the lock separately.
-	tok, err := s.Issue(tenantID, name)
-	if err != nil {
 		return "", "", false
 	}
 	return tok, tenantID, true
+}
+
+// PairingCodeStatus reports whether code exists under tenantID, and if so
+// whether it has been redeemed. Once redeemed, it returns the redeeming
+// device's public key and full token hash — never the raw token, which was
+// already handed to the phone directly by RedeemPairingCode and is never
+// persisted. Used by `cmux-bridge pair-device`'s poll loop to learn a
+// device's identity once the phone completes /devices/pair. Scoped to
+// tenantID so one tenant's agent can never observe another tenant's pairing
+// codes, even by guessing.
+func (s *Store) PairingCodeStatus(tenantID, code string) (devicePubkey, tokenHash string, redeemed, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var gotTenant string
+	var pubkey, hash, redeemedAt sql.NullString
+	err := s.db.QueryRow(`SELECT tenant_id, device_pubkey, token_hash, redeemed_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&gotTenant, &pubkey, &hash, &redeemedAt)
+	if err != nil || gotTenant != tenantID {
+		return "", "", false, false
+	}
+	if !redeemedAt.Valid {
+		return "", "", false, true
+	}
+	return pubkey.String, hash.String, true, true
 }

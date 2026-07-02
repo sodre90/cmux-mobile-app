@@ -38,8 +38,8 @@ func TestRelayIsolatesTenants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devA, _ := store.Issue(tenantA, "phone-a")
-	devB, _ := store.Issue(tenantB, "phone-b")
+	devA, _ := store.Issue(tenantA, "phone-a", "test-device-pubkey-a")
+	devB, _ := store.Issue(tenantB, "phone-b", "test-device-pubkey-b")
 
 	rl := New(store, nil, relayTok)
 	relayHTTP := httptest.NewServer(rl.Handler())
@@ -97,7 +97,7 @@ func TestRelayRevokedTenantCannotReconnectOrServeDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, _ := store.Issue(tenantID, "phone")
+	devTok, _ := store.Issue(tenantID, "phone", "test-device-pubkey-b64")
 	store.RevokeTenant(tenantID)
 
 	rl := New(store, nil, "relay-secret")

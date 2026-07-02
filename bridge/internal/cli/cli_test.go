@@ -33,7 +33,7 @@ func TestLoadStoreOpensConfiguredStore(t *testing.T) {
 	}
 	// Issuing a token should persist to the configured path.
 	tenant, _ := store.CreateTenant()
-	if _, err := store.Issue(tenant, "phone"); err != nil {
+	if _, err := store.Issue(tenant, "phone", "test-device-pubkey-b64"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(storePath); err != nil {

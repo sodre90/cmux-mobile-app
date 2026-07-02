@@ -51,7 +51,7 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, err := store.Issue(tenantID, "phone")
+	devTok, err := store.Issue(tenantID, "phone", "test-device-pubkey-b64")
 	if err != nil {
 		t.Fatal(err)
 	}

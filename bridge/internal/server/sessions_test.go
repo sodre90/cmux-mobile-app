@@ -43,7 +43,7 @@ func newTestServer(t *testing.T, script string) (*Server, string) {
 		t.Fatal(err)
 	}
 	tenant, _ := store.CreateTenant()
-	tok, _ := store.Issue(tenant, "phone")
+	tok, _ := store.Issue(tenant, "phone", "test-device-pubkey-b64")
 	s := New(config.Config{}, &cmux.Client{Bin: bin}, store)
 	return s, tok
 }

@@ -60,7 +60,7 @@ func TestRelayEndToEndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, _ := relayStore.Issue(tenantID, "phone")
+	devTok, _ := relayStore.Issue(tenantID, "phone", "test-device-pubkey-b64")
 	rl := New(relayStore, nil, relayTok)
 	relayHTTP := httptest.NewServer(rl.Handler())
 	defer relayHTTP.Close()
