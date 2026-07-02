@@ -2499,6 +2499,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
@@ -2523,11 +2524,26 @@ class EventsSocket(
                     .getOrNull()
                     ?.let { trySend(it) }
             }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+                close()
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                close(t)
+            }
         })
         awaitClose { socket.cancel() }
     }
 }
 ```
+
+Note: this restores the `onClosing`/`onFailure` overrides that the prior
+`EventsSocket.kt` already had (and that the sibling `TerminalSocket.kt`,
+Task 14, keeps) — without them, `connect()`'s flow silently stops emitting
+on a server close or network failure instead of completing/erroring, so
+a collector has no way to detect the connection dropped and reconnect.
 
 - [ ] **Step 4: Run test to verify it passes**
 
