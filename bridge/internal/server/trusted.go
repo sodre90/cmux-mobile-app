@@ -39,11 +39,13 @@ func (s *Server) routes(wrap func(http.Handler) http.Handler) http.Handler {
 }
 
 // TrustedHandler is the handler the Mac agent serves over the relay tunnel:
-// device-bearer auth is replaced by the relay-token check.
+// device-bearer auth is replaced by the relay-token check, and the opt-in
+// e2e encryption layer (SetSessions) wraps the whole route set.
 func (s *Server) TrustedHandler(relayToken string) http.Handler {
-	return s.routes(func(h http.Handler) http.Handler {
+	base := s.routes(func(h http.Handler) http.Handler {
 		return RequireRelayToken(relayToken, h)
 	})
+	return s.encryptionMiddleware(base)
 }
 
 // authWrap is the production device-bearer middleware used by Handler.

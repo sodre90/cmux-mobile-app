@@ -218,6 +218,26 @@ var upgrader = websocket.Upgrader{
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	var deviceID string
+	if s.sessions != nil {
+		// A present X-Device-ID means this is a device subscriber (the
+		// relay's proxy Director injects it on every device-originated
+		// request) -- gate on it being paired and encrypt its frames below.
+		// A missing X-Device-ID means this is the relay's own internal
+		// push-monitor subscription (internal/relay/pushmon.go dials
+		// directly over the tunnel with only X-Relay-Token, which
+		// RequireRelayToken has already checked by this point in
+		// TrustedHandler) -- serve it plaintext so FCM fan-out keeps
+		// working. This exposes no more than the relay already saw before
+		// e2e encryption existed; only device-bound frames are e2e.
+		deviceID = r.Header.Get("X-Device-ID")
+		if deviceID != "" {
+			if _, ok := s.sessions.SharedSecret(deviceID); !ok {
+				http.Error(w, "not_paired", http.StatusConflict)
+				return
+			}
+		}
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -238,10 +258,29 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	for f := range ch {
 		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.WriteJSON(f); err != nil {
+		if err := s.writeEventFrame(c, deviceID, f); err != nil {
 			return
 		}
 	}
+}
+
+// writeEventFrame sends f as a plain JSON text frame when encryption is
+// disabled (s.sessions == nil) or the caller is the relay's own internal
+// push-monitor subscription (deviceID == ""), or as a binary e2e-encrypted
+// frame otherwise.
+func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f EventFrame) error {
+	if s.sessions == nil || deviceID == "" {
+		return c.WriteJSON(f)
+	}
+	raw, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	frame, err := s.sessions.EncryptFrame(deviceID, raw)
+	if err != nil {
+		return err
+	}
+	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
 
 // ---- small helpers ----

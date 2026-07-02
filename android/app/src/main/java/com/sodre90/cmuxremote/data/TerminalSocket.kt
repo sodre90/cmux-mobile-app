@@ -1,5 +1,9 @@
 package com.sodre90.cmuxremote.data
 
+import com.sodre90.cmuxremote.data.e2e.Cipher
+import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.decryptFrame
+import com.sodre90.cmuxremote.data.e2e.encryptFrame
 import com.sodre90.cmuxremote.model.BridgeJson
 import com.sodre90.cmuxremote.model.TerminalDown
 import com.sodre90.cmuxremote.model.TerminalUp
@@ -11,15 +15,21 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 
 /**
  * Bidirectional `WS /terminal/{surfaceId}`: [connect] streams server frames
  * (replay snapshot then output updates), [send] pushes input/paste/resize.
+ * Every frame is XChaCha20-Poly1305-encrypted binary (see data/e2e/Frame.kt) --
+ * plaintext JSON-over-WS is no longer the wire format.
  */
 class TerminalSocket(
     private val http: OkHttpClient,
     baseUrl: String,
     surfaceId: String,
+    private val session: PairedSession,
+    private val cipher: Cipher,
 ) {
     private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId"
 
@@ -29,8 +39,9 @@ class TerminalSocket(
     fun connect(): Flow<TerminalDown> = callbackFlow {
         val request = Request.Builder().url(url).build()
         val ws = http.newWebSocket(request, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                runCatching { BridgeJson.decodeFromString(TerminalDown.serializer(), text) }
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
+                    .mapCatching { BridgeJson.decodeFromString(TerminalDown.serializer(), it.toString(Charsets.UTF_8)) }
                     .onFailure { android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}") }
                     .getOrNull()
                     ?.let { trySend(it) }
@@ -54,7 +65,8 @@ class TerminalSocket(
 
     /** Sends a client->server message; no-op if the socket is not open. */
     fun send(up: TerminalUp) {
-        socket?.send(BridgeJson.encodeToString(TerminalUp.serializer(), up))
+        val plaintext = BridgeJson.encodeToString(TerminalUp.serializer(), up).toByteArray(Charsets.UTF_8)
+        socket?.send(encryptFrame(session, cipher, plaintext).toByteString())
     }
 
     fun close() {

@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // TerminalDown is a server->client terminal message. Grid carries the cmux
@@ -34,6 +36,23 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing surface id", http.StatusBadRequest)
 		return
 	}
+	var deviceID string
+	if s.sessions != nil {
+		// Status codes match internal/server/encryption.go's
+		// encryptionMiddleware: a missing header is 401 unknown_device, a
+		// present-but-unrecognized device id is 409 not_paired (see the
+		// spec's error-handling section) — the two point the app at
+		// different recovery UX.
+		deviceID = r.Header.Get("X-Device-ID")
+		if deviceID == "" {
+			http.Error(w, "unknown_device", http.StatusUnauthorized)
+			return
+		}
+		if _, ok := s.sessions.SharedSecret(deviceID); !ok {
+			http.Error(w, "not_paired", http.StatusConflict)
+			return
+		}
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -52,7 +71,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	fr.Type = "replay"
 	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := c.WriteJSON(fr); err != nil {
+	if err := s.writeTerminalFrame(c, deviceID, fr); err != nil {
 		log.Printf("terminal %s: initial write failed after %s: %v", id, time.Since(start), err)
 		return
 	}
@@ -61,7 +80,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	lastGrid := fr.Grid
 
 	// Read loop (client input) runs in its own goroutine; it only reads.
-	go s.terminalReadLoop(ctx, cancel, c, id)
+	go s.terminalReadLoop(ctx, cancel, c, id, deviceID)
 
 	// Output poll loop is the sole writer after the initial replay.
 	t := time.NewTicker(s.terminalPoll)
@@ -83,7 +102,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			lastGrid = next.Grid
 			next.Type = "output"
 			_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.WriteJSON(next); err != nil {
+			if err := s.writeTerminalFrame(c, deviceID, next); err != nil {
 				log.Printf("terminal %s: output write failed after %s: %v", id, time.Since(start), err)
 				return
 			}
@@ -91,15 +110,47 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c interface {
-	ReadJSON(any) error
-}, id string) {
+// writeTerminalFrame sends fr as a plain JSON text frame when encryption is
+// disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
+func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr TerminalDown) error {
+	if s.sessions == nil {
+		return c.WriteJSON(fr)
+	}
+	raw, err := json.Marshal(fr)
+	if err != nil {
+		return err
+	}
+	frame, err := s.sessions.EncryptFrame(deviceID, raw)
+	if err != nil {
+		return err
+	}
+	return c.WriteMessage(websocket.BinaryMessage, frame)
+}
+
+func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string) {
 	defer cancel()
 	for {
 		var up TerminalUp
-		if err := c.ReadJSON(&up); err != nil {
-			log.Printf("terminal %s: read loop ended: %v", id, err)
-			return
+		if s.sessions == nil {
+			if err := c.ReadJSON(&up); err != nil {
+				log.Printf("terminal %s: read loop ended: %v", id, err)
+				return
+			}
+		} else {
+			_, raw, err := c.ReadMessage()
+			if err != nil {
+				log.Printf("terminal %s: read loop ended: %v", id, err)
+				return
+			}
+			plain, err := s.sessions.DecryptFrame(deviceID, raw)
+			if err != nil {
+				log.Printf("terminal %s: decrypt failed: %v", id, err)
+				return
+			}
+			if err := json.Unmarshal(plain, &up); err != nil {
+				log.Printf("terminal %s: bad frame json: %v", id, err)
+				return
+			}
 		}
 		switch up.Type {
 		case "input":

@@ -15,6 +15,8 @@ func main() {
 	switch os.Args[1] {
 	case "agent":
 		os.Exit(runAgent(os.Args[2:]))
+	case "pair-device":
+		os.Exit(runPairDevice(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("cmux-bridge", version.String())
 	default:
@@ -24,5 +26,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <agent|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <agent|pair-device|version> [flags]")
 }

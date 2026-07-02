@@ -16,6 +16,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
+	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 )
@@ -98,6 +99,7 @@ func runAgent(args []string) int {
 	defer cancel()
 
 	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, nil)
+	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 

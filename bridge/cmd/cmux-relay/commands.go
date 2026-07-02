@@ -10,37 +10,6 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cli"
 )
 
-func runPair(args []string) int {
-	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath(), "path to config.toml")
-	tenant := fs.String("tenant", "", "tenant id this device belongs to (see: cmux-relay tenants list)")
-	name := fs.String("name", "phone", "a label for this device")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if *tenant == "" {
-		fmt.Fprintln(os.Stderr, "pair: -tenant is required (see: cmux-relay tenants list)")
-		return 2
-	}
-	_, store, err := cli.LoadStore(*cfgPath)
-	if err != nil {
-		log.Printf("pair: %v", err)
-		return 1
-	}
-	if !store.TenantActive(*tenant) {
-		fmt.Fprintf(os.Stderr, "pair: no active tenant %q\n", *tenant)
-		return 1
-	}
-	tok, err := store.Issue(*tenant, *name)
-	if err != nil {
-		log.Printf("pair: %v", err)
-		return 1
-	}
-	fmt.Printf("\nDevice token for %q (tenant %s, paste into the app once):\n\n    %s\n\n", *name, *tenant, tok)
-	fmt.Println("Keep it secret. Revoke later with: cmux-relay devices revoke <token>")
-	return 0
-}
-
 func runDevices(args []string) int {
 	fs := flag.NewFlagSet("devices", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfigPath(), "path to config.toml")

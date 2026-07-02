@@ -35,9 +35,11 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	gotTok := make(chan string, 1)
+	gotDeviceID := make(chan string, 1)
 	go func() {
 		_ = http.Serve(agentSess, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotTok <- r.Header.Get("X-Relay-Token")
+			gotDeviceID <- r.Header.Get("X-Device-ID")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ok"))
 		}))
@@ -51,9 +53,13 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, err := store.Issue(tenantID, "phone")
+	devTok, err := store.Issue(tenantID, "phone", "test-device-pubkey-b64")
 	if err != nil {
 		t.Fatal(err)
+	}
+	dev, ok := store.Verify(devTok)
+	if !ok {
+		t.Fatal("issued token should verify")
 	}
 
 	reg := NewRegistry()
@@ -70,5 +76,8 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 	}
 	if tok := <-gotTok; tok != "relay-secret" {
 		t.Fatalf("X-Relay-Token not injected: %q", tok)
+	}
+	if id := <-gotDeviceID; id != dev.TokenHash {
+		t.Fatalf("X-Device-ID = %q, want %q", id, dev.TokenHash)
 	}
 }

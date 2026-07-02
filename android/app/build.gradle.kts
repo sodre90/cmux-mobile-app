@@ -46,6 +46,11 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
 }
 
 dependencies {
@@ -66,6 +71,16 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    implementation(libs.bouncycastle)
+    implementation(libs.lazysodium.android) {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+    implementation(libs.jna) { artifact { type = "aar" } }
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
 
     debugImplementation(libs.androidx.ui.tooling)
 
@@ -74,4 +89,41 @@ dependencies {
     testImplementation(libs.okhttp.tls)
     testImplementation(libs.kotlinx.serialization.json)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.lazysodium.java)
+    testImplementation(libs.jna)
+}
+
+val lazysodiumNativeLibDir = layout.buildDirectory.dir("native-libs/lazysodium")
+
+val extractLazysodiumNativeLib by tasks.registering(Copy::class) {
+    val lazysodiumJar = configurations.detachedConfiguration(
+        dependencies.create("com.goterl:lazysodium-java:${libs.versions.lazysodium.get()}"),
+    ).resolve().single { it.name.startsWith("lazysodium-java") }
+
+    val osName = System.getProperty("os.name").lowercase()
+    val osArch = System.getProperty("os.arch").lowercase()
+    val resourceDir = when {
+        osName.contains("mac") && (osArch == "aarch64" || osArch == "arm64") -> "mac_arm"
+        osName.contains("mac") -> "mac"
+        osName.contains("linux") -> "linux64"
+        osName.contains("windows") -> "windows64"
+        else -> error("lazysodium-java: no bundled native library known for os.name=$osName os.arch=$osArch")
+    }
+    val libFileName = when {
+        osName.contains("windows") -> "libsodium.dll"
+        osName.contains("mac") -> "libsodium.dylib"
+        else -> "libsodium.so"
+    }
+
+    from(zipTree(lazysodiumJar)) {
+        include("$resourceDir/$libFileName")
+    }
+    into(lazysodiumNativeLibDir)
+    eachFile { path = name }
+    includeEmptyDirs = false
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(extractLazysodiumNativeLib)
+    systemProperty("jna.library.path", lazysodiumNativeLibDir.get().asFile.absolutePath)
 }

@@ -60,13 +60,16 @@ func TestRelayEndToEndSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devTok, _ := relayStore.Issue(tenantID, "phone")
+	devTok, _ := relayStore.Issue(tenantID, "phone", "test-device-pubkey-b64")
 	rl := New(relayStore, nil, relayTok)
 	relayHTTP := httptest.NewServer(rl.Handler())
 	defer relayHTTP.Close()
 
 	u := "ws" + strings.TrimPrefix(relayHTTP.URL, "http") + "/agent/tunnel"
-	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{"X-Client-Cert-Cn": {"CN=agent:" + tenantID}})
+	sess, err := tunnel.Dial(context.Background(), u, nil, http.Header{
+		"X-Client-Cert-Cn":     {"CN=agent:" + tenantID},
+		"X-Client-Cert-Verify": {"SUCCESS"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
