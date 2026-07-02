@@ -929,8 +929,7 @@ package com.sodre90.cmuxremote.data.e2e
 import com.goterl.lazysodium.LazySodiumJava
 import com.goterl.lazysodium.SodiumJava
 import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.util.Base64
 
@@ -995,15 +994,40 @@ class EnvelopeTest {
         encryptBody(FakeSession(null), cipher, "x".toByteArray())
     }
 
-    @Test(expected = DecryptFailedException::class)
+    @Test
     fun decryptBodyRejectsReplayedCounter() {
+        // Deliberately NOT @Test(expected = ...) around the whole method: that
+        // form can't distinguish "first call succeeded, second call correctly
+        // rejected the replay" from "first call itself threw for the wrong
+        // reason" -- only the second call is allowed to throw.
         val secret = ByteArray(32) { it.toByte() }
         val receiver = FakeSession(secret)
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, 0L), "x".toByteArray())
         val envelope = """{"v":1,"n":0,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
 
-        decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // first: fine
-        decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // replay: must throw
+        decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // first: must succeed
+
+        try {
+            decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8)) // replay: must throw
+            fail("expected DecryptFailedException on replay")
+        } catch (e: DecryptFailedException) {
+            // expected
+        }
+    }
+
+    @Test(expected = DecryptFailedException::class)
+    fun decryptBodyRejectsWrongDirectionCiphertext() {
+        // The single highest-risk failure mode per Global Constraints: a
+        // direction-tag swap must be a hard decrypt failure, not a silently
+        // wrong result. Seal with DIR_DEVICE_TO_AGENT (the phone's OWN
+        // outgoing direction) -- decryptBody only ever opens with
+        // DIR_AGENT_TO_DEVICE, so this ciphertext must fail to decrypt.
+        val secret = ByteArray(32) { it.toByte() }
+        val receiver = FakeSession(secret)
+        val ct = cipher.seal(secret, nonce(DIR_DEVICE_TO_AGENT, 0L), "x".toByteArray())
+        val envelope = """{"v":1,"n":0,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
+
+        decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8))
     }
 }
 ```
@@ -1078,7 +1102,7 @@ fun decryptBody(session: PairedSession, cipher: Cipher, envelopeBytes: ByteArray
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.EnvelopeTest"`
-Expected: PASS (4 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
