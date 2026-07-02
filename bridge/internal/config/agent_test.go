@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,46 @@ func TestConfigRelayFields(t *testing.T) {
 	}
 	if cfg.CACert == "" || cfg.CAKey == "" {
 		t.Fatal("CACert/CAKey should default, not be empty")
+	}
+}
+
+func TestLoadAgentDefaultsIdentityAndSessionStorePaths(t *testing.T) {
+	cfg, err := LoadAgent(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdentityKey == "" || strings.Contains(cfg.IdentityKey, "~") {
+		t.Fatalf("IdentityKey default not expanded: %q", cfg.IdentityKey)
+	}
+	if cfg.SessionStore == "" || strings.Contains(cfg.SessionStore, "~") {
+		t.Fatalf("SessionStore default not expanded: %q", cfg.SessionStore)
+	}
+	if !strings.HasSuffix(cfg.IdentityKey, "identity.key") {
+		t.Fatalf("IdentityKey = %q", cfg.IdentityKey)
+	}
+	if !strings.HasSuffix(cfg.SessionStore, "sessions.json") {
+		t.Fatalf("SessionStore = %q", cfg.SessionStore)
+	}
+}
+
+func TestLoadAgentParsesIdentityAndSessionStorePaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	body := `
+identity_key   = "/c/identity.key"
+session_store  = "/c/sessions.json"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdentityKey != "/c/identity.key" {
+		t.Fatalf("IdentityKey = %q", cfg.IdentityKey)
+	}
+	if cfg.SessionStore != "/c/sessions.json" {
+		t.Fatalf("SessionStore = %q", cfg.SessionStore)
 	}
 }
