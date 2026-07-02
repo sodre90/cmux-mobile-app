@@ -14,8 +14,9 @@ type deviceSession struct {
 	DevicePubKey   string `json:"device_pubkey"`
 	SharedSecret   string `json:"shared_secret"`
 	SendCounter    uint64 `json:"send_counter"`
-	RecvCounter    uint64 `json:"recv_counter"`
-	RecvCounterSet bool   `json:"recv_counter_set"`
+	RecvHighest    uint64 `json:"recv_highest"`
+	RecvHighestSet bool   `json:"recv_highest_set"`
+	RecvWindowBits uint64 `json:"recv_window_bits"`
 }
 
 type fileFormat struct {
@@ -119,6 +120,47 @@ func (s *Store) NextSendCounter(deviceID string) (uint64, error) {
 	return n, nil
 }
 
+const replayWindowSize = 64
+
+// canAcceptRecvCounter reports whether n is new (never committed) and
+// within the last replayWindowSize counters of the current high-water
+// mark. Mirrors the Android Session.ReplayWindow algorithm exactly (see
+// android/app/src/main/java/com/sodre90/cmuxremote/data/e2e/ReplayWindow.kt)
+// -- both sides must tolerate the same degree of cross-channel reordering,
+// since a phone's HTTP responses, /terminal WS, and /events WS frames all
+// draw from one agent-side send counter with no cross-channel ordering
+// guarantee.
+func canAcceptRecvCounter(highest uint64, highestSet bool, windowBits uint64, n uint64) bool {
+	if !highestSet || n > highest {
+		return true
+	}
+	age := highest - n
+	if age >= replayWindowSize {
+		return false
+	}
+	return windowBits&(1<<age) == 0
+}
+
+// commitRecvCounter records n as seen, sliding the window forward if n is a
+// new high-water mark.
+func commitRecvCounter(highest uint64, highestSet bool, windowBits uint64, n uint64) (newHighest, newWindowBits uint64) {
+	if !highestSet {
+		return n, 1
+	}
+	if n > highest {
+		shift := n - highest
+		if shift >= replayWindowSize {
+			return n, 1
+		}
+		return n, (windowBits << shift) | 1
+	}
+	age := highest - n
+	if age >= replayWindowSize {
+		return highest, windowBits
+	}
+	return highest, windowBits | (1 << age)
+}
+
 func (s *Store) ValidateRecvCounter(deviceID string, n uint64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -130,10 +172,7 @@ func (s *Store) ValidateRecvCounter(deviceID string, n uint64) (bool, error) {
 	if !ok {
 		return false, fmt.Errorf("unknown device %q", deviceID)
 	}
-	if d.RecvCounterSet && n <= d.RecvCounter {
-		return false, nil
-	}
-	return true, nil
+	return canAcceptRecvCounter(d.RecvHighest, d.RecvHighestSet, d.RecvWindowBits, n), nil
 }
 
 func (s *Store) CommitRecvCounter(deviceID string, n uint64) error {
@@ -147,11 +186,8 @@ func (s *Store) CommitRecvCounter(deviceID string, n uint64) error {
 	if !ok {
 		return fmt.Errorf("unknown device %q", deviceID)
 	}
-	if d.RecvCounterSet && n <= d.RecvCounter {
-		return nil
-	}
-	d.RecvCounter = n
-	d.RecvCounterSet = true
+	d.RecvHighest, d.RecvWindowBits = commitRecvCounter(d.RecvHighest, d.RecvHighestSet, d.RecvWindowBits, n)
+	d.RecvHighestSet = true
 	f.Devices[deviceID] = d
 	return s.save(f)
 }

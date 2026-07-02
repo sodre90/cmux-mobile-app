@@ -98,6 +98,70 @@ func TestValidateAndCommitRecvCounter(t *testing.T) {
 	}
 }
 
+func TestOutOfOrderWithinWindowIsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	if err := s.CommitRecvCounter("dev1", 10); err != nil {
+		t.Fatalf("CommitRecvCounter(10): %v", err)
+	}
+
+	// 7 arrives late (e.g. a slower HTTP response overtaken by a faster WS
+	// frame) but was never seen and is within the last 64 counters -- must
+	// be accepted, not rejected as "old."
+	valid, err := s.ValidateRecvCounter("dev1", 7)
+	if err != nil || !valid {
+		t.Fatalf("expected counter 7 valid (out-of-order, within window), got valid=%v err=%v", valid, err)
+	}
+	if err := s.CommitRecvCounter("dev1", 7); err != nil {
+		t.Fatalf("CommitRecvCounter(7): %v", err)
+	}
+
+	valid, err = s.ValidateRecvCounter("dev1", 7)
+	if err != nil {
+		t.Fatalf("ValidateRecvCounter replay check: %v", err)
+	}
+	if valid {
+		t.Fatal("expected counter 7 to now be rejected as a replay")
+	}
+
+	valid, err = s.ValidateRecvCounter("dev1", 10)
+	if err != nil {
+		t.Fatalf("ValidateRecvCounter: %v", err)
+	}
+	if valid {
+		t.Fatal("expected counter 10 to still be rejected as a replay (it was committed first)")
+	}
+}
+
+func TestTooOldOutsideWindowIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	if err := s.CommitRecvCounter("dev1", 1000); err != nil {
+		t.Fatalf("CommitRecvCounter(1000): %v", err)
+	}
+
+	valid, err := s.ValidateRecvCounter("dev1", 1000-64) // exactly at the boundary: too old
+	if err != nil {
+		t.Fatalf("ValidateRecvCounter: %v", err)
+	}
+	if valid {
+		t.Fatal("expected counter 1000-64 to be rejected as outside the window")
+	}
+
+	valid, err = s.ValidateRecvCounter("dev1", 1000-63) // one inside the boundary: still fine
+	if err != nil || !valid {
+		t.Fatalf("expected counter 1000-63 valid (just inside window), got valid=%v err=%v", valid, err)
+	}
+}
+
 func TestCrossProcessVisibilityNoInMemoryCache(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
