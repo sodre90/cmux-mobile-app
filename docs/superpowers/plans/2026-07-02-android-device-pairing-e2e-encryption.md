@@ -1102,7 +1102,7 @@ fun decryptBody(session: PairedSession, cipher: Cipher, envelopeBytes: ByteArray
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.e2e.EnvelopeTest"`
-Expected: PASS (6 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
