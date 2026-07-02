@@ -13,6 +13,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -43,7 +44,7 @@ class E2eInterceptorTest {
     fun encryptsRequestBodyAndDecryptsResponseBody() {
         val serverSideSession = FakeSession(secret) // stands in for the agent's own counters
         val agentReply = encryptFrameAsBody("""{"ok":true}""", serverSideSession)
-        server.enqueue(MockResponse().setBody(agentReply))
+        server.enqueue(MockResponse().setHeader("X-Cmux-Encrypted", "1").setBody(agentReply))
 
         val client = clientFor(FakeSession(secret))
         val request = Request.Builder()
@@ -84,6 +85,55 @@ class E2eInterceptorTest {
         val got = received.poll(5, TimeUnit.SECONDS)
         assertEquals("hello", got) // not intercepted/mangled as if it were an HTTP body
         ws.cancel()
+    }
+
+    @Test
+    fun passesThroughUnmarkedPlaintextErrorResponse() {
+        server.enqueue(
+            MockResponse().setResponseCode(503).setBody("""{"error":"agent_offline"}"""),
+        )
+
+        val client = clientFor(FakeSession(secret))
+        val request = Request.Builder().url(server.url("/sessions")).build()
+        val response = client.newCall(request).execute()
+
+        assertEquals(503, response.code)
+        assertEquals("""{"error":"agent_offline"}""", response.body!!.string())
+    }
+
+    @Test
+    fun doesNotEncryptDeviceRegisterRequest() {
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+
+        val client = clientFor(FakeSession(secret))
+        val request = Request.Builder()
+            .url(server.url("/devices/register"))
+            .post("""{"fcm_token":"t"}""".toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        val response = client.newCall(request).execute()
+
+        assertEquals("""{"ok":true}""", response.body!!.string())
+
+        val recorded = server.takeRequest()
+        val sentBody = recorded.body.readUtf8()
+        assertTrue(sentBody.contains("fcm_token"))
+        assertFalse(sentBody.contains("\"v\":1"))
+    }
+
+    @Test
+    fun markedButUndecryptableResponseIsHardError() {
+        server.enqueue(
+            MockResponse().setHeader("X-Cmux-Encrypted", "1").setBody("not-an-envelope"),
+        )
+
+        val client = clientFor(FakeSession(secret))
+        val request = Request.Builder().url(server.url("/sessions")).build()
+        try {
+            client.newCall(request).execute()
+            throw AssertionError("expected IOException was not thrown")
+        } catch (e: java.io.IOException) {
+            // expected: marker present but body not decryptable => hard fail
+        }
     }
 
     /** Encodes [json] the way a Go agent's EncryptBody would, so the test client's

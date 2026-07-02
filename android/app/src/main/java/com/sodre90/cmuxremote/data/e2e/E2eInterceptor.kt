@@ -16,14 +16,24 @@ import java.io.IOException
  */
 class E2eInterceptor(private val session: PairedSession, private val cipher: Cipher) : Interceptor {
 
+    companion object {
+        // Paths terminated at the relay itself (not proxied to the agent), so
+        // the relay decodes them as plaintext. Do NOT encrypt request bodies for
+        // these. Add any future relay-terminated endpoints here to avoid silent
+        // regressions. (/devices/pair uses a separate un-intercepted client.)
+        private val RELAY_TERMINATED_PATHS = setOf("/devices/register")
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val original = chain.request()
         if (original.header("Upgrade")?.equals("websocket", ignoreCase = true) == true) {
             return chain.proceed(original)
         }
 
+        val isRelayTerminated = RELAY_TERMINATED_PATHS.any { original.url.encodedPath.endsWith(it) }
+
         val requestBody = original.body
-        val request = if (requestBody != null) {
+        val request = if (requestBody != null && !isRelayTerminated) {
             val plaintext = Buffer().also { requestBody.writeTo(it) }.readByteArray()
             val encrypted = try {
                 encryptBody(session, cipher, plaintext)
@@ -38,6 +48,9 @@ class E2eInterceptor(private val session: PairedSession, private val cipher: Cip
         }
 
         val response = chain.proceed(request)
+        if (response.header("X-Cmux-Encrypted") != "1") {
+            return response
+        }
         val responseBody = response.body ?: return response
         val plaintext = try {
             decryptBody(session, cipher, responseBody.bytes())
