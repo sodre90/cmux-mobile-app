@@ -94,11 +94,13 @@ mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning"
 
 - [ ] **Step 2: Add dependencies to build.gradle.kts**
 
-Edit `android/app/build.gradle.kts`, in the `dependencies { ... }` block, after `implementation(libs.firebase.messaging)`:
+Edit `android/app/build.gradle.kts`, in the `dependencies { ... }` block, after `implementation(libs.firebase.messaging)`. `lazysodium-android` transitively pulls `net.java.dev.jna:jna` as a plain jar, which collides with the explicit AAR variant of the same coordinate below (`checkDebugDuplicateClasses` fails on duplicate `com.sun.jna.*` classes without this exclude — verified empirically):
 
 ```kotlin
     implementation(libs.bouncycastle)
-    implementation(libs.lazysodium.android)
+    implementation(libs.lazysodium.android) {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
     implementation(libs.jna) { artifact { type = "aar" } }
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
@@ -114,7 +116,19 @@ After `testImplementation(libs.kotlinx.coroutines.test)`:
     testImplementation(libs.jna)
 ```
 
-- [ ] **Step 3: Add camera permission and feature to the manifest**
+- [ ] **Step 3: Exclude a duplicate packaged resource**
+
+`org.bouncycastle:bcprov-jdk18on:1.84` and `org.jspecify:jspecify:1.0.0` (pulled in transitively by several AndroidX libraries already in this project, e.g. `androidx.exifinterface`, `androidx.lifecycle`) both ship `META-INF/versions/9/OSGI-INF/MANIFEST.MF`, which fails `mergeDebugJavaResource` as a resource collision (verified empirically). Edit `android/app/build.gradle.kts`, adding a `packaging { ... }` block inside `android { ... }`, after the existing `buildFeatures { compose = true }`:
+
+```kotlin
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+```
+
+- [ ] **Step 4: Add camera permission and feature to the manifest**
 
 Edit `android/app/src/main/AndroidManifest.xml`, after `<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />`:
 
@@ -123,12 +137,12 @@ Edit `android/app/src/main/AndroidManifest.xml`, after `<uses-permission android
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 ```
 
-- [ ] **Step 4: Verify the build still resolves and compiles**
+- [ ] **Step 5: Verify the build still resolves and compiles**
 
 Run: `cd android && ./gradlew :app:assembleDebug`
 Expected: `BUILD SUCCESSFUL` (no source changes yet, so this only proves the new dependencies resolve and don't conflict).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd android && git add gradle/libs.versions.toml app/build.gradle.kts app/src/main/AndroidManifest.xml
