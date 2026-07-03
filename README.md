@@ -120,11 +120,16 @@ Defense in depth, all the way to the cmux socket:
   cursor keys. Input/paste/resize go upstream; replay + live output come down.
 - **Agent inbox** — answer blocking prompts (permission requests, plan approvals,
   questions) via `POST /feed/{id}/reply`.
+- **Rename a workspace** — long-press a workspace on the phone to set its
+  persistent display title in cmux, via `POST /sessions/{id}/rename`.
+- **Custom sort order** — drag workspaces into any order via the handle on each
+  row; purely a phone-local display preference, not synced anywhere.
 - **Optional push** — FCM "an agent needs you" notifications, off by default and
   requiring no Firebase config to build.
 
-The bridge performs **only** read methods, terminal input/replay, and feed
-replies — it never creates, closes, or restores workspaces or terminals.
+The bridge performs **only** read methods, terminal input/replay, feed
+replies, and workspace rename — it never creates, closes, or restores
+workspaces or terminals.
 
 ## Repository layout
 

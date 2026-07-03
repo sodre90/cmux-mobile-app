@@ -281,6 +281,7 @@ routes require `Authorization: Bearer <device-token>`. A `503 {"error":
 | GET  | `/events` (WS) | agent feed + notifications; `needs_attention` flags blocking prompts |
 | GET  | `/terminal/{id}` (WS) | replay + live output (down); input/paste/resize (up) |
 | POST | `/feed/{id}/reply` | answer a prompt: `{kind, request_id, params}` |
+| POST | `/sessions/{id}/rename` | set a workspace's title in cmux: `{title}` |
 | POST | `/devices/register` | store this device's FCM token: `{fcm_token}` |
 
 Terminal frames carry cmux's `render_grid` (`format: "cmux.render-grid.v1"`)
@@ -291,9 +292,11 @@ verbatim; the client renders it as a styled cell grid.
 
 ## Safety
 
-The bridge calls **only** read methods, terminal input/replay, and feed replies.
-It never creates, closes, or restores workspaces/terminals. Tests use a fake
-`cmux` binary and never touch the real socket.
+The bridge calls **only** read methods, terminal input/replay, feed replies,
+and workspace rename (cmux's own documented `workspace.rename` RPC, the same
+one behind `cmux rename-workspace` / Cmd+Shift+R). It never creates, closes,
+or restores workspaces/terminals. Tests use a fake `cmux` binary and never
+touch the real socket.
 
 ## Licensing
 
