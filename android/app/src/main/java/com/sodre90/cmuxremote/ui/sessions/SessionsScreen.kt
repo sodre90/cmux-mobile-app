@@ -39,6 +39,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -76,12 +77,13 @@ fun SessionsScreen(
                 title = { Text("cmux sessions") },
                 actions = {
                     TextButton(onClick = onOpenInbox) { Text("Inbox") }
-                    TextButton(onClick = { vm.refresh() }) { Text("Refresh") }
+                    TextButton(onClick = { vm.silentRefresh() }) { Text("Refresh") }
                     TextButton(onClick = onSettings) { Text("Re-pair device") }
                 },
             )
         },
     ) { inner ->
+        val isRefreshing by vm.isRefreshing.collectAsState()
         Box(modifier = Modifier.fillMaxSize().padding(inner)) {
             when (val s = state) {
                 is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -90,7 +92,13 @@ fun SessionsScreen(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
-                is UiState.Ready -> WorkspaceList(vm, s.data, onOpenTerminal)
+                is UiState.Ready -> PullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = { vm.silentRefresh() },
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    WorkspaceList(vm, s.data, onOpenTerminal)
+                }
             }
         }
     }

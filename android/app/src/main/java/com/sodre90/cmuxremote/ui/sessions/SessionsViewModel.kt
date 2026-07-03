@@ -7,12 +7,19 @@ import com.sodre90.cmuxremote.data.BridgeClient
 import com.sodre90.cmuxremote.data.BridgeException
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+@OptIn(FlowPreview::class)
 class SessionsViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
@@ -23,8 +30,23 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
+    // True while a pull-to-refresh or event-triggered refetch is in flight;
+    // drives PullToRefreshBox's spinner without dropping the already-rendered
+    // list into UiState.Loading (see [silentRefresh]).
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    // Coalesces bursts of cmux feed events (e.g. many PreToolUse frames during
+    // one agent turn) into a single refetch instead of hammering `cmux rpc`.
+    private val refreshRequests =
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     init {
         refresh()
+        viewModelScope.launch {
+            refreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { silentRefresh() }
+        }
+        subscribeToEvents()
     }
 
     /** The phone-local custom sort order (see [com.sodre90.cmuxremote.data.WorkspaceOrderStore]). */
@@ -86,6 +108,54 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** Refetches the session list without dropping it into [UiState.Loading] --
+     *  used by pull-to-refresh and by [subscribeToEvents]'s change-triggered
+     *  refetch, neither of which should flash the full-screen spinner over an
+     *  already-rendered list. Skips if a refresh is already in flight so a
+     *  burst of events collapses onto one request. */
+    fun silentRefresh() {
+        val client = container.bridgeClient() ?: run { _actionError.value = "Bridge not configured"; return }
+        if (_isRefreshing.value) return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                _state.value = UiState.Ready(fetchSessionsWithPairingRetry(client))
+                _actionError.value = null
+            } catch (e: Exception) {
+                _actionError.value = e.message ?: "Failed to refresh sessions"
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
+    }
+
+    // Re-fetch on cmux agent activity: SessionStart/SessionEnd change which
+    // workspaces exist, Notification/Stop change attention + preview. Mirrors
+    // InboxViewModel's reconnect-with-backoff loop over the same /events
+    // socket.
+    private fun subscribeToEvents() {
+        val events = container.eventsSocket() ?: return
+        viewModelScope.launch {
+            var backoff = INITIAL_BACKOFF_MS
+            while (isActive) {
+                try {
+                    events.connect().collect { frame ->
+                        backoff = INITIAL_BACKOFF_MS
+                        if (frame.type != "heartbeat") refreshRequests.tryEmit(Unit)
+                    }
+                } catch (ex: CancellationException) {
+                    throw ex
+                } catch (_: Exception) {
+                    // Transient drop; reconnect below.
+                }
+                if (!isActive) break
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
+                refreshRequests.tryEmit(Unit) // catch up on anything missed while disconnected
+            }
+        }
+    }
+
     // Right after pairing, the phone can call this before the Mac agent's
     // pair-device poll loop has derived and stored the e2e session -- the
     // relay authenticates the device's token fine, but the agent replies 409
@@ -106,5 +176,8 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     private companion object {
         const val NOT_PAIRED_RETRY_ATTEMPTS = 3
         const val NOT_PAIRED_RETRY_DELAY_MS = 500L
+        const val INITIAL_BACKOFF_MS = 1_000L
+        const val MAX_BACKOFF_MS = 5_000L
+        const val EVENT_REFRESH_DEBOUNCE_MS = 800L
     }
 }
