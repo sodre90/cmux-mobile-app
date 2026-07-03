@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 	"tailscale.com/client/tailscale"
+	"tailscale.com/ipn/ipnstate"
 )
 
 func defaultAgentConfigPath() string {
@@ -92,25 +94,79 @@ func ensureDirectTenant(store *auth.Store) (string, error) {
 	return store.CreateTenant()
 }
 
+// directListenPort extracts the port from cfg.DirectListen, which is always
+// documented and configured in ":PORT" form (e.g. ":8443" -- see
+// bridge/README.md and bridge/deploy/agent.example.toml, and
+// internal/config/agent_test.go's TestLoadAgentParsesDirectFields). A bare
+// leading-colon address has no host part, so net.SplitHostPort happily
+// returns an empty host and just the port.
+func directListenPort(listenAddr string) (string, error) {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "", fmt.Errorf("direct_listen %q: %w", listenAddr, err)
+	}
+	return port, nil
+}
+
+// selfTailscaleIPv4 returns this node's own Tailscale IPv4 address from a
+// tailscale status snapshot. A node can have both an IPv4 and IPv6 tailnet
+// address; we bind to the IPv4 one, matching `tailscale ip -4` (the
+// convention bridge/README.md's setup steps already use). Returns an error
+// if Tailscale isn't up yet or hasn't assigned this node an IPv4 address --
+// callers must fail closed on that, not fall back to binding all
+// interfaces, since Tailscale's own network ACLs are the actual
+// access-control boundary for the direct-mode listener.
+func selfTailscaleIPv4(st *ipnstate.Status) (netip.Addr, error) {
+	if st == nil || st.Self == nil {
+		return netip.Addr{}, errors.New("no Self status -- is Tailscale up?")
+	}
+	for _, ip := range st.Self.TailscaleIPs {
+		if ip.Is4() {
+			return ip, nil
+		}
+	}
+	return netip.Addr{}, errors.New("no Tailscale IPv4 address assigned yet -- is Tailscale up?")
+}
+
 // serveDirect runs the direct (Tailscale) listener until ctx is canceled or
 // the listener fails. It never affects the relay dial loop running
 // alongside it in runAgent. store/tenantID back both the pairing routes and
 // (via handler, already bound to the same store through Server.store)
 // authenticated requests -- one auth.Store, opened once, for the whole
 // listener.
+//
+// It binds ONLY to this Mac's own Tailscale IPv4 address, never to all
+// interfaces: the design's whole premise is that Tailscale's own network
+// ACLs are the access-control boundary for these routes (some of which,
+// like the pairing endpoints, are otherwise unauthenticated), so listening
+// on 0.0.0.0/[::] here would let any LAN-adjacent device reach them too.
 func serveDirect(ctx context.Context, listenAddr string, store *auth.Store, tenantID string, handler http.Handler) error {
 	mux := http.NewServeMux()
 	server.MountDirectPairing(mux, store, tenantID)
 	mux.Handle("/", handler)
 
-	tcpLn, err := net.Listen("tcp", listenAddr)
+	port, err := directListenPort(listenAddr)
 	if err != nil {
-		return fmt.Errorf("direct mode: listen %s: %w", listenAddr, err)
+		return fmt.Errorf("direct mode: %w", err)
 	}
 	lc := &tailscale.LocalClient{}
+	st, err := lc.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("direct mode: tailscale status: %w", err)
+	}
+	ip, err := selfTailscaleIPv4(st)
+	if err != nil {
+		return fmt.Errorf("direct mode: %w", err)
+	}
+	bindAddr := net.JoinHostPort(ip.String(), port)
+
+	tcpLn, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		return fmt.Errorf("direct mode: listen %s: %w", bindAddr, err)
+	}
 	tlsLn := tls.NewListener(tcpLn, &tls.Config{GetCertificate: lc.GetCertificate})
 
-	log.Printf("agent: direct listener up on %s", listenAddr)
+	log.Printf("agent: direct listener up on %s (tailscale-only)", bindAddr)
 	errCh := make(chan error, 1)
 	go func() { errCh <- http.Serve(tlsLn, mux) }()
 	select {

@@ -7,12 +7,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"tailscale.com/ipn/ipnstate"
 )
 
 func TestNextBackoffCaps(t *testing.T) {
@@ -116,5 +118,64 @@ func TestRunDirectListenerAutoCreatesTenantOnce(t *testing.T) {
 	}
 	if again != tenantID {
 		t.Fatalf("ensureDirectTenant not idempotent: got %q then %q", tenantID, again)
+	}
+}
+
+func TestDirectListenPortExtractsPort(t *testing.T) {
+	port, err := directListenPort(":8443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != "8443" {
+		t.Fatalf("port = %q, want 8443", port)
+	}
+}
+
+func TestDirectListenPortRejectsMalformedAddr(t *testing.T) {
+	if _, err := directListenPort("not-a-valid-addr"); err == nil {
+		t.Fatal("want error for an address with no port")
+	}
+}
+
+func TestSelfTailscaleIPv4PrefersIPv4(t *testing.T) {
+	st := &ipnstate.Status{
+		Self: &ipnstate.PeerStatus{
+			TailscaleIPs: []netip.Addr{
+				netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6 tailnet address, listed first
+				netip.MustParseAddr("100.64.1.2"),
+			},
+		},
+	}
+	ip, err := selfTailscaleIPv4(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ip.String() != "100.64.1.2" {
+		t.Fatalf("ip = %q, want 100.64.1.2", ip.String())
+	}
+}
+
+func TestSelfTailscaleIPv4NoSelfErrors(t *testing.T) {
+	if _, err := selfTailscaleIPv4(&ipnstate.Status{}); err == nil {
+		t.Fatal("want error when Status.Self is nil (tailscale not up)")
+	}
+}
+
+func TestSelfTailscaleIPv4NilStatusErrors(t *testing.T) {
+	if _, err := selfTailscaleIPv4(nil); err == nil {
+		t.Fatal("want error for a nil status")
+	}
+}
+
+func TestSelfTailscaleIPv4NoIPv4Errors(t *testing.T) {
+	st := &ipnstate.Status{
+		Self: &ipnstate.PeerStatus{
+			TailscaleIPs: []netip.Addr{
+				netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6-only, e.g. IPv4 not yet assigned
+			},
+		},
+	}
+	if _, err := selfTailscaleIPv4(st); err == nil {
+		t.Fatal("want error when the node has no Tailscale IPv4 address")
 	}
 }
