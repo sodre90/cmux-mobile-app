@@ -65,9 +65,15 @@ class CmuxMessagingService : FirebaseMessagingService() {
             putExtra(MainActivity.EXTRA_WORKSPACE_ID, workspaceId)
             putExtra(MainActivity.EXTRA_SURFACE_ID, surfaceId)
         }
+        // Stable per-workspace id -- the relay pushes once per NeedsAttention
+        // frame with no dedup, and cmux can emit more than one of those for a
+        // prompt that's still pending. Keying on workspaceId means a repeat
+        // push updates the same notification tile instead of stacking a new
+        // one for the same terminal.
+        val notificationId = (workspaceId ?: surfaceId ?: "attention").hashCode()
         val pending = PendingIntent.getActivity(
             this,
-            0,
+            notificationId,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
@@ -81,7 +87,7 @@ class CmuxMessagingService : FirebaseMessagingService() {
             .setAutoCancel(true)
             .build()
 
-        nm.notify(System.currentTimeMillis().toInt(), notification)
+        nm.notify(notificationId, notification)
     }
 
     companion object {
