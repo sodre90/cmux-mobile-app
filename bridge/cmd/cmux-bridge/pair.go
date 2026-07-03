@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
@@ -51,8 +52,14 @@ func httpsBaseFromRelayURL(relayURL string) (string, error) {
 	return u.String(), nil
 }
 
-func requestPairingCode(client *http.Client, agentBase string) (code, expiresAt, tenantID string, err error) {
-	resp, err := client.Post(agentBase+"/agent/pairing-code", "application/json", nil)
+func requestPairingCode(client *http.Client, agentBase, agentPubkeyB64 string) (code, expiresAt, tenantID string, err error) {
+	payload, err := json.Marshal(struct {
+		AgentPubkey string `json:"agent_pubkey"`
+	}{AgentPubkey: agentPubkeyB64})
+	if err != nil {
+		return "", "", "", err
+	}
+	resp, err := client.Post(agentBase+"/agent/pairing-code", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -99,7 +106,8 @@ func pollPairingCode(client *http.Client, agentBase, code string) (devicePubkey,
 // device's token hash — the same key the relay's proxy Director injects as
 // X-Device-ID on every subsequent request from that device.
 func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *e2e.Identity, sessions *e2e.Store, out io.Writer, pollPeriod time.Duration, deadline time.Time) error {
-	code, expiresAt, tenantID, err := requestPairingCode(client, agentBase)
+	agentPubkeyB64 := base64.StdEncoding.EncodeToString(identity.PublicKey().Bytes())
+	code, expiresAt, tenantID, err := requestPairingCode(client, agentBase, agentPubkeyB64)
 	if err != nil {
 		return fmt.Errorf("request pairing code: %w", err)
 	}
@@ -107,7 +115,7 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 	qr := pairingQR{
 		PairURL:     devicePairURL,
 		Code:        code,
-		AgentPubkey: base64.StdEncoding.EncodeToString(identity.PublicKey().Bytes()),
+		AgentPubkey: agentPubkeyB64,
 		ExpiresAt:   expiresAt,
 		TenantID:    tenantID,
 	}

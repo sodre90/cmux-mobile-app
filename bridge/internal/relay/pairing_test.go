@@ -41,7 +41,7 @@ func TestDevicePairRedeemsCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestDevicePairDefaultsName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestDevicePairRejectsNoDevicePubkey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestDevicePairWorksWithNoClientCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestNewPairingCodeIssuesCode(t *testing.T) {
 	srv := httptest.NewServer(rl.Handler())
 	defer srv.Close()
 
-	req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", nil)
+	req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", strings.NewReader(`{"agent_pubkey":"agent-pubkey-b64"}`))
 	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
 	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
 	resp, err := http.DefaultClient.Do(req)
@@ -286,6 +286,32 @@ func TestNewPairingCodeIssuesCode(t *testing.T) {
 	}
 	if body.TenantID != tenantID {
 		t.Fatalf("TenantID = %q, want %q", body.TenantID, tenantID)
+	}
+}
+
+func TestNewPairingCodeRejectsMissingAgentPubkey(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/agent/pairing-code", nil)
+	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing agent_pubkey, got %d", resp.StatusCode)
 	}
 }
 
@@ -329,7 +355,7 @@ func TestPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 	srv := httptest.NewServer(rl.Handler())
 	defer srv.Close()
 
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +433,7 @@ func TestPairingCodeStatusScopedToOwnTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantA, time.Minute)
+	code, err := store.NewPairingCode(tenantA, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +463,7 @@ func TestPairingCodeStatusRequiresAgentCN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := store.NewPairingCode(tenantID, time.Minute)
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,5 +480,123 @@ func TestPairingCodeStatusRequiresAgentCN(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403 for a non-agent CN, got %d", resp.StatusCode)
+	}
+}
+
+func TestPairingCodeInfoReturnsAgentPubkey(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	// Deliberately no X-Client-Cert-Cn -- a phone pairing manually has no
+	// cert yet, same as /devices/pair itself.
+	resp, err := http.Get(srv.URL + "/devices/pair-info/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var body pairingCodeInfoResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AgentPubkey != "agent-pubkey-b64" {
+		t.Fatalf("AgentPubkey = %q, want %q", body.AgentPubkey, "agent-pubkey-b64")
+	}
+	if body.TenantID != tenantID {
+		t.Fatalf("TenantID = %q, want %q", body.TenantID, tenantID)
+	}
+	if body.ExpiresAt == "" {
+		t.Fatal("expected a non-empty ExpiresAt")
+	}
+}
+
+func TestPairingCodeInfoRejectsUnknownCode(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/devices/pair-info/bogus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("want 410, got %d", resp.StatusCode)
+	}
+}
+
+func TestPairingCodeInfoRejectsExpiredCode(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", -time.Second) // already expired
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/devices/pair-info/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("want 410 for an expired code, got %d", resp.StatusCode)
+	}
+}
+
+func TestPairingCodeInfoRejectsRedeemedCode(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64"); !ok {
+		t.Fatal("redeem should succeed")
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/devices/pair-info/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("want 410 for an already-redeemed code, got %d", resp.StatusCode)
 	}
 }

@@ -143,7 +143,7 @@ func TestTokensAreHashedAtRest(t *testing.T) {
 func TestPairingCodeSingleUse(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	code, err := s.NewPairingCode(tenant, time.Minute)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestPairingCodeSingleUse(t *testing.T) {
 func TestRedeemPairingCodeRequiresDevicePubkey(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	code, err := s.NewPairingCode(tenant, time.Minute)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestRedeemPairingCodeRequiresDevicePubkey(t *testing.T) {
 func TestPairingCodeExpiry(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	code, _ := s.NewPairingCode(tenant, -time.Second) // already expired
+	code, _ := s.NewPairingCode(tenant, testPubkey, -time.Second) // already expired
 	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
 		t.Fatal("expired code must fail")
 	}
@@ -186,7 +186,7 @@ func TestPairingCodeExpiry(t *testing.T) {
 func TestPairingCodeStatusReflectsRedemption(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
-	code, err := s.NewPairingCode(tenant, time.Minute)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,12 +225,70 @@ func TestPairingCodeStatusScopedToTenant(t *testing.T) {
 	s := newStore(t)
 	tenantA := newTenant(t, s)
 	tenantB := newTenant(t, s)
-	code, err := s.NewPairingCode(tenantA, time.Minute)
+	code, err := s.NewPairingCode(tenantA, testPubkey, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, ok := s.PairingCodeStatus(tenantB, code); ok {
 		t.Fatal("a pairing code must not be visible under a different tenant id")
+	}
+}
+
+func TestPairingCodeInfoReturnsAgentPubkeyUnscoped(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unlike PairingCodeStatus, PairingCodeInfo takes no tenant argument --
+	// the caller (a phone pairing manually) doesn't know its tenant yet.
+	agentPubkey, gotTenant, expiresAt, ok := s.PairingCodeInfo(code)
+	if !ok {
+		t.Fatal("fresh code should resolve")
+	}
+	if agentPubkey != testPubkey {
+		t.Fatalf("agentPubkey = %q, want %q", agentPubkey, testPubkey)
+	}
+	if gotTenant != tenant {
+		t.Fatalf("tenant = %q, want %q", gotTenant, tenant)
+	}
+	if expiresAt == "" {
+		t.Fatal("expected a non-empty expiresAt")
+	}
+}
+
+func TestPairingCodeInfoUnknownCode(t *testing.T) {
+	s := newStore(t)
+	if _, _, _, ok := s.PairingCodeInfo("nonexistent"); ok {
+		t.Fatal("unknown code should report ok=false")
+	}
+}
+
+func TestPairingCodeInfoExpiredCode(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, -time.Second) // already expired
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok := s.PairingCodeInfo(code); ok {
+		t.Fatal("expired code must not resolve")
+	}
+}
+
+func TestPairingCodeInfoRedeemedCode(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); !ok {
+		t.Fatal("redeem should succeed")
+	}
+	if _, _, _, ok := s.PairingCodeInfo(code); ok {
+		t.Fatal("an already-redeemed code must not resolve, matching single-use semantics")
 	}
 }
 
@@ -357,5 +415,37 @@ func TestMigrationAddsDevicePubkeyColumn(t *testing.T) {
 	}
 	if dev.DevicePubkey != testPubkey {
 		t.Fatalf("DevicePubkey = %q, want %q", dev.DevicePubkey, testPubkey)
+	}
+}
+
+func TestMigrationAddsAgentPubkeyColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	// Simulate a pre-migration database file: apply only the original schema
+	// (no agent_pubkey column), bypassing Open (which always applies both
+	// schema and migrations).
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on pre-migration db: %v", err)
+	}
+	tenant, err := s.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatalf("NewPairingCode after migration: %v", err)
+	}
+	agentPubkey, _, _, ok := s.PairingCodeInfo(code)
+	if !ok || agentPubkey != testPubkey {
+		t.Fatalf("PairingCodeInfo after migration = (%q, ok=%v), want (%q, true)", agentPubkey, ok, testPubkey)
 	}
 }

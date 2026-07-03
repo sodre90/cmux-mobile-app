@@ -63,6 +63,7 @@ var migrations = []string{
 	`ALTER TABLE pairing_codes ADD COLUMN device_pubkey TEXT`,
 	`ALTER TABLE pairing_codes ADD COLUMN token_hash TEXT`,
 	`ALTER TABLE pairing_codes ADD COLUMN redeemed_at TEXT`,
+	`ALTER TABLE pairing_codes ADD COLUMN agent_pubkey TEXT NOT NULL DEFAULT ''`,
 }
 
 // applyMigrations runs each migration statement, tolerating a "duplicate
@@ -371,13 +372,16 @@ func randomCode(n int) string {
 }
 
 // NewPairingCode generates a single-use pairing code, scoped to tenantID,
-// valid for ttl.
-func (s *Store) NewPairingCode(tenantID string, ttl time.Duration) (string, error) {
+// valid for ttl. agentPubkey (the requesting agent's base64 X25519 e2e
+// public key) is stored alongside it so PairingCodeInfo can hand it to a
+// phone pairing via manual entry instead of a scanned QR -- the QR carries
+// this same key directly, this is just the same data reachable by code alone.
+func (s *Store) NewPairingCode(tenantID, agentPubkey string, ttl time.Duration) (string, error) {
 	code := randomCode(8)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`INSERT INTO pairing_codes (code, tenant_id, expires_at) VALUES (?, ?, ?)`,
-		code, tenantID, time.Now().Add(ttl).UTC().Format(time.RFC3339))
+	_, err := s.db.Exec(`INSERT INTO pairing_codes (code, tenant_id, agent_pubkey, expires_at) VALUES (?, ?, ?, ?)`,
+		code, tenantID, agentPubkey, time.Now().Add(ttl).UTC().Format(time.RFC3339))
 	if err != nil {
 		return "", err
 	}
@@ -458,4 +462,29 @@ func (s *Store) PairingCodeStatus(tenantID, code string) (devicePubkey, tokenHas
 		return "", "", false, true
 	}
 	return pubkey.String, hash.String, true, true
+}
+
+// PairingCodeInfo resolves a pairing code to the agent's e2e public key and
+// tenant, for a phone pairing via manual entry instead of a scanned QR --
+// the QR carries this same data directly; this lets a phone without the QR
+// (no camera, or pairing remotely) resolve it from the code alone. Unlike
+// PairingCodeStatus this is NOT tenant-scoped: the caller doesn't know its
+// tenant yet, that's what it's trying to learn. Reports not-ok once the code
+// is expired or already redeemed, matching RedeemPairingCode's single-use
+// semantics -- a used-up code must not keep resolving.
+func (s *Store) PairingCodeInfo(code string) (agentPubkey, tenantID, expiresAt string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pubkey sql.NullString
+	var redeemedAt sql.NullString
+	err := s.db.QueryRow(`SELECT agent_pubkey, tenant_id, expires_at, redeemed_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&pubkey, &tenantID, &expiresAt, &redeemedAt)
+	if err != nil || redeemedAt.Valid {
+		return "", "", "", false
+	}
+	exp, err := time.Parse(time.RFC3339, expiresAt)
+	if err != nil || time.Now().After(exp) {
+		return "", "", "", false
+	}
+	return pubkey.String, tenantID, expiresAt, true
 }

@@ -205,6 +205,15 @@ this agent and that device is now end-to-end encrypted, so the relay
 operator (or anyone who compromises the relay host) can route messages but
 not read them.
 
+No camera handy, or pairing a phone remotely (e.g. over SSH)? The Android app
+also has a manual-entry form: enter the server URL (the same `https://` base
+the QR's `pair_url` uses) and the printed code. It resolves the agent's
+public key via `GET /devices/pair-info/{code}` — a public, unauthenticated
+endpoint that hands back exactly what the QR carries (`agent_pubkey`,
+`expires_at`, `tenant_id`), scoped to the code alone since the phone doesn't
+know its tenant yet. Same single-use code, same handshake, same e2e result —
+just without a scan.
+
 `pair-device` never displays a raw device token to the operator — only the
 phone that scanned the QR code ever sees it. List/revoke devices and tenants
 exactly as before:
