@@ -47,15 +47,23 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Sets a workspace's YOLO auto-reply mode, then reloads the list so the
-     *  new mode (persisted bridge-side) comes back fresh. */
+    /** Sets a workspace's YOLO auto-reply mode. Unlike [renameWorkspace], the
+     *  bridge echoes back nothing to reconcile (the mode is exactly what we
+     *  sent, not cmux-transformed), so this patches the already-loaded list
+     *  in place rather than dropping into [UiState.Loading] and reloading
+     *  the whole screen. */
     fun setYoloMode(id: String, mode: String) {
         val client = container.bridgeClient() ?: run { _actionError.value = "Bridge not configured"; return }
         viewModelScope.launch {
             try {
                 client.setYoloMode(id, mode)
                 _actionError.value = null
-                refresh()
+                val current = _state.value
+                if (current is UiState.Ready) {
+                    _state.value = UiState.Ready(
+                        current.data.map { if (it.id == id) it.copy(yoloMode = mode) else it }
+                    )
+                }
             } catch (e: Exception) {
                 _actionError.value = e.message ?: "Setting YOLO mode failed"
             }

@@ -217,13 +217,28 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (Str
     )
 }
 
+private data class YoloModeOption(val mode: String, val label: String, val description: String)
+
 // Picker order/labels for the YOLO mode dialog. Off first (the common,
-// unblocked-from-the-agent-inbox case).
+// unblocked-from-the-agent-inbox case). Descriptions mirror cmux's own Feed
+// permission-mode semantics (docs/feed.md's decision-semantics table).
 private val YoloModeOptions = listOf(
-    YoloMode.OFF to "Off",
-    YoloMode.ALWAYS to "Always",
-    YoloMode.ALL_TOOLS to "All tools",
-    YoloMode.BYPASS to "Bypass",
+    YoloModeOption(YoloMode.OFF, "Off", "You answer each permission prompt from the phone."),
+    YoloModeOption(
+        YoloMode.ALWAYS,
+        "Always",
+        "Auto-approves, applying the agent's suggested rule to future similar requests.",
+    ),
+    YoloModeOption(
+        YoloMode.ALL_TOOLS,
+        "All tools",
+        "Auto-approves any tool the agent asks to use, not just this one.",
+    ),
+    YoloModeOption(
+        YoloMode.BYPASS,
+        "Bypass",
+        "Skips permission checks for the rest of this session (Claude Code's --dangerously-skip-permissions).",
+    ),
 )
 
 @Composable
@@ -233,16 +248,23 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
         title = { Text("YOLO mode") },
         text = {
             Column {
-                YoloModeOptions.forEach { (mode, label) ->
+                YoloModeOptions.forEach { option ->
                     Row(
                         modifier = Modifier.fillMaxWidth()
-                            .clickable { onSelect(mode) }
+                            .clickable { onSelect(option.mode) }
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        RadioButton(selected = mode == current, onClick = { onSelect(mode) })
-                        Text(label)
+                        RadioButton(selected = option.mode == current, onClick = { onSelect(option.mode) })
+                        Column {
+                            Text(option.label)
+                            Text(
+                                option.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
