@@ -23,6 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -30,7 +31,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -83,17 +86,33 @@ private fun WorkspaceList(workspaces: List<Workspace>, onOpen: (String) -> Unit)
         return
     }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(workspaces, key = { it.id }) { ws ->
-            WorkspaceCard(
-                ws = ws,
-                expanded = expanded[ws.id] == true,
-                onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
-                onOpen = onOpen,
+    var sortByAttention by remember { mutableStateOf(false) }
+    val ordered = if (sortByAttention) sortedByAttention(workspaces) else workspaces
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Waiting first",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
             )
+            Switch(checked = sortByAttention, onCheckedChange = { sortByAttention = it })
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(ordered, key = { it.id }) { ws ->
+                WorkspaceCard(
+                    ws = ws,
+                    expanded = expanded[ws.id] == true,
+                    onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
+                    onOpen = onOpen,
+                )
+            }
         }
     }
 }
