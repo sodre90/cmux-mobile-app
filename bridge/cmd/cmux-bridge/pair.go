@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
@@ -12,12 +13,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
 
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"tailscale.com/client/tailscale"
 )
 
 // pairingQR is the JSON payload rendered into the QR code. The phone scans
@@ -167,6 +170,7 @@ func runPairDevice(args []string) int {
 	fs := flag.NewFlagSet("pair-device", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultAgentConfigPath(), "path to agent.toml")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to wait for the phone to scan and redeem the code")
+	direct := fs.Bool("direct", false, "pair against this Mac's own direct (Tailscale) listener instead of the relay")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -175,25 +179,50 @@ func runPairDevice(args []string) int {
 		log.Printf("pair-device: %v", err)
 		return 1
 	}
-	if cfg.RelayURL == "" {
-		log.Printf("pair-device: relay_url is required")
-		return 1
+
+	var agentBase string
+	var client *http.Client
+	if *direct {
+		if cfg.DirectListen == "" {
+			log.Printf("pair-device: --direct requires direct_listen to be set in %s", *cfgPath)
+			return 1
+		}
+		lc := &tailscale.LocalClient{}
+		st, err := lc.Status(context.Background())
+		if err != nil {
+			log.Printf("pair-device: tailscale status: %v", err)
+			return 1
+		}
+		if st.Self == nil || st.Self.DNSName == "" {
+			log.Printf("pair-device: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
+			return 1
+		}
+		host := strings.TrimSuffix(st.Self.DNSName, ".")
+		agentBase = "https://" + host + cfg.DirectListen
+		// The direct listener's cert is a real, publicly-trusted Let's
+		// Encrypt cert (tailscale cert) -- the default transport's system
+		// root CAs already validate it, no client cert needed at all.
+		client = &http.Client{}
+	} else {
+		if cfg.RelayURL == "" {
+			log.Printf("pair-device: relay_url is required (or pass --direct)")
+			return 1
+		}
+		agentBase, err = httpsBaseFromRelayURL(cfg.RelayURL)
+		if err != nil {
+			log.Printf("pair-device: %v", err)
+			return 1
+		}
+		tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
+		if err != nil {
+			log.Printf("pair-device: tls: %v", err)
+			return 1
+		}
+		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
 	}
-	agentBase, err := httpsBaseFromRelayURL(cfg.RelayURL)
-	if err != nil {
-		log.Printf("pair-device: %v", err)
-		return 1
-	}
-	// /devices/pair is public on the same main vhost as the agent-facing
-	// pairing-code endpoints (see Global Constraints in the plan) -- the
-	// bootstrap vhost only serves /tenants/register.
+	// /devices/pair is public on the same vhost as the agent-facing
+	// pairing-code endpoints in both modes.
 	devicePairURL := agentBase + "/devices/pair"
-	tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
-	if err != nil {
-		log.Printf("pair-device: tls: %v", err)
-		return 1
-	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
 
 	identity, err := e2e.LoadOrCreateIdentity(cfg.IdentityKey)
 	if err != nil {
