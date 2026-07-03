@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
 )
 
 func TestNextBackoffCaps(t *testing.T) {
@@ -87,5 +89,32 @@ func TestLoadTLSEmptyCAUsesSystemRoots(t *testing.T) {
 func TestLoadTLSMissingFileErrors(t *testing.T) {
 	if _, err := loadTLS("/no/cert", "/no/key", "/no/ca"); err == nil {
 		t.Fatal("want error for missing cert files")
+	}
+}
+
+func TestRunDirectListenerAutoCreatesTenantOnce(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "direct-auth.db")
+	store, err := auth.Open(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := ensureDirectTenant(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenantID == "" {
+		t.Fatal("expected a non-empty tenant id")
+	}
+
+	// Calling it again against the SAME store must reuse the existing
+	// tenant, not mint a second one -- otherwise toggling direct_listen
+	// on/off across restarts would orphan every previously paired device.
+	again, err := ensureDirectTenant(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != tenantID {
+		t.Fatalf("ensureDirectTenant not idempotent: got %q then %q", tenantID, again)
 	}
 }

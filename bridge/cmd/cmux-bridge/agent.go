@@ -6,13 +6,16 @@ import (
 	"crypto/x509"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
@@ -20,6 +23,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
+	"tailscale.com/client/tailscale"
 )
 
 func defaultAgentConfigPath() string {
@@ -71,6 +75,53 @@ func dialAndServe(ctx context.Context, relayURL string, tlsCfg *tls.Config, hand
 	return http.Serve(sess, handler)
 }
 
+// ensureDirectTenant returns direct mode's single implicit tenant id,
+// creating it once on first use. Idempotent across restarts: an existing
+// tenant is always reused, so toggling direct_listen off and back on never
+// orphans devices paired while it was on.
+func ensureDirectTenant(store *auth.Store) (string, error) {
+	tenants, err := store.ListTenants()
+	if err != nil {
+		return "", err
+	}
+	for _, t := range tenants {
+		if !t.Revoked {
+			return t.ID, nil
+		}
+	}
+	return store.CreateTenant()
+}
+
+// serveDirect runs the direct (Tailscale) listener until ctx is canceled or
+// the listener fails. It never affects the relay dial loop running
+// alongside it in runAgent. store/tenantID back both the pairing routes and
+// (via handler, already bound to the same store through Server.store)
+// authenticated requests -- one auth.Store, opened once, for the whole
+// listener.
+func serveDirect(ctx context.Context, listenAddr string, store *auth.Store, tenantID string, handler http.Handler) error {
+	mux := http.NewServeMux()
+	server.MountDirectPairing(mux, store, tenantID)
+	mux.Handle("/", handler)
+
+	tcpLn, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return fmt.Errorf("direct mode: listen %s: %w", listenAddr, err)
+	}
+	lc := &tailscale.LocalClient{}
+	tlsLn := tls.NewListener(tcpLn, &tls.Config{GetCertificate: lc.GetCertificate})
+
+	log.Printf("agent: direct listener up on %s", listenAddr)
+	errCh := make(chan error, 1)
+	go func() { errCh <- http.Serve(tlsLn, mux) }()
+	select {
+	case <-ctx.Done():
+		tlsLn.Close()
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
+}
+
 func runAgent(args []string) int {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultAgentConfigPath(), "path to agent.toml")
@@ -99,11 +150,34 @@ func runAgent(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, nil)
+	var directStore *auth.Store // nil unless direct mode is on; Handler()/authWrap stay unused in production either way
+	var directTenantID string
+	if cfg.DirectListen != "" {
+		var err error
+		directStore, err = auth.Open(cfg.DirectAuthStore)
+		if err != nil {
+			log.Printf("agent: direct mode: open auth store: %v", err)
+			return 1
+		}
+		directTenantID, err = ensureDirectTenant(directStore)
+		if err != nil {
+			log.Printf("agent: direct mode: ensure tenant: %v", err)
+			return 1
+		}
+	}
+	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, directStore)
 	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
 	srv.SetYoloStore(yolo.OpenStore(cfg.YoloStore))
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
+
+	if cfg.DirectListen != "" {
+		go func() {
+			if err := serveDirect(ctx, cfg.DirectListen, directStore, directTenantID, srv.DirectHandler()); err != nil && ctx.Err() == nil {
+				log.Printf("agent: direct listener ended: %v", err)
+			}
+		}()
+	}
 
 	backoff := time.Second
 	for ctx.Err() == nil {
