@@ -133,14 +133,19 @@ Defense in depth, all the way to the cmux socket:
   questions) via `POST /feed/{id}/reply`.
 - **Rename a workspace** — long-press a workspace on the phone to set its
   persistent display title in cmux, via `POST /sessions/{id}/rename`.
+- **YOLO mode** — long-press a workspace to set a per-workspace auto-reply
+  mode (Off/Always/All tools/Bypass) for permission prompts; the Mac agent
+  replies on cmux's behalf with no phone round-trip, and the mode is shown as
+  a badge on that workspace's row and in its terminal pane. `Bypass` mirrors
+  Claude Code's own `--dangerously-skip-permissions`.
 - **Custom sort order** — drag workspaces into any order via the handle on each
   row; purely a phone-local display preference, not synced anywhere.
 - **Optional push** — FCM "an agent needs you" notifications, off by default and
   requiring no Firebase config to build.
 
 The bridge performs **only** read methods, terminal input/replay, feed
-replies, and workspace rename — it never creates, closes, or restores
-workspaces or terminals.
+replies (including YOLO mode's automatic ones), and workspace rename — it
+never creates, closes, or restores workspaces or terminals.
 
 ## Repository layout
 

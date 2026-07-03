@@ -287,6 +287,7 @@ routes require `Authorization: Bearer <device-token>`. A `503 {"error":
 | GET  | `/feed/pending` | list pending blocking prompts (full question/option structure) |
 | POST | `/feed/{id}/reply` | answer a prompt: `{kind, request_id, params}` |
 | POST | `/sessions/{id}/rename` | set a workspace's title in cmux: `{title}` |
+| POST | `/sessions/{id}/yolo-mode` | set a workspace's auto-reply mode for permission prompts: `{mode}` (`""` \| `always` \| `all` \| `bypass`) |
 | POST | `/devices/register` | store this device's FCM token: `{fcm_token}` |
 | POST | `/devices/pair` | redeem a pairing code (no bearer token yet): `{code, name, device_pubkey}` |
 | GET  | `/devices/pair-info/{code}` | resolve a pairing code's agent pubkey for manual entry (no auth) |
@@ -294,16 +295,35 @@ routes require `Authorization: Bearer <device-token>`. A `503 {"error":
 Terminal frames carry cmux's `render_grid` (`format: "cmux.render-grid.v1"`)
 verbatim; the client renders it as a styled cell grid.
 
-> The exact `feed.*.reply` param names beyond `request_id` should be confirmed
-> against a live prompt; the client sends cmux-native params under `params`.
+`feed.*.reply`'s params beyond `request_id` (confirmed against cmux's own RPC
+contract strings, not guessed): `feed.permission.reply` takes
+`mode: "once" | "always" | "all" | "bypass" | "deny"`; `feed.exit_plan.reply`
+takes `mode: "ultraplan" | "manual" | "autoAccept" | "bypassPermissions"`;
+`feed.question.reply` takes `selections: [string]`.
 
 ## Safety
 
 The bridge calls **only** read methods, terminal input/replay, feed replies,
-and workspace rename (cmux's own documented `workspace.rename` RPC, the same
-one behind `cmux rename-workspace` / Cmd+Shift+R). It never creates, closes,
-or restores workspaces/terminals. Tests use a fake `cmux` binary and never
-touch the real socket.
+workspace rename (cmux's own documented `workspace.rename` RPC, the same
+one behind `cmux rename-workspace` / Cmd+Shift+R), and YOLO mode's
+auto-replies to permission prompts (`feed.permission.reply`, the same RPC a
+phone tap on Allow/Bypass in Feed sends — see below). It never creates,
+closes, or restores workspaces/terminals. Tests use a fake `cmux` binary and
+never touch the real socket.
+
+**YOLO mode** is an opt-in, per-workspace auto-reply for permission prompts,
+enabled via `POST /sessions/{id}/yolo-mode`. The mode (`always`/`all`/
+`bypass`) is persisted locally on the Mac agent (`~/.config/cmux-bridge/yolo.json`,
+keyed by workspace ID — never sent to cmux itself). When a workspace with a
+mode set gets a pending `permission`-kind feed item, the agent replies to it
+with that mode automatically, with no phone round-trip. `bypass` mirrors
+Claude Code's own `--dangerously-skip-permissions`: cmux's wrapper already
+launches Claude with `--allow-dangerously-skip-permissions`, so a single
+`bypass` reply switches that session into `bypassPermissions` for good.
+Correlating a pending item to a workspace is done by matching cwd — cmux
+pending items key on the agent's own session ID (`workstream_id`, e.g.
+`"claude-<uuid>"`), not the cmux workspace ID, so cwd is the only field both
+share (confirmed live; see `internal/server/yolo.go`).
 
 ## Licensing
 

@@ -106,30 +106,20 @@ func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
 	if f.WorkspaceID == "" {
 		return
 	}
-	raw, err := s.cmux.Rpc(ctx, "mobile.workspace.list", nil)
-	if err != nil {
+	ws, ok := s.findWorkspace(ctx, f.WorkspaceID)
+	if !ok {
 		return
 	}
-	workspaces, err := parseWorkspaces(raw)
-	if err != nil {
-		return
-	}
-	for _, ws := range workspaces {
-		if ws.ID != f.WorkspaceID {
-			continue
-		}
-		label := ws.Title
-		if ws.Preview != "" {
-			if label != "" {
-				label += ": " + ws.Preview
-			} else {
-				label = ws.Preview
-			}
-		}
+	label := ws.Title
+	if ws.Preview != "" {
 		if label != "" {
-			f.Title = label
+			label += ": " + ws.Preview
+		} else {
+			label = ws.Preview
 		}
-		return
+	}
+	if label != "" {
+		f.Title = label
 	}
 }
 
@@ -151,6 +141,7 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		if f, ok := classify(m); ok {
 			if f.NeedsAttention {
 				s.enrichTitle(ctx, &f)
+				s.maybeAutoResolve(ctx, f.WorkspaceID)
 			}
 			s.hub.broadcast(f)
 		}

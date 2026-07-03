@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -233,5 +234,71 @@ func TestIngestEventsKeepsFallbackTitleWhenWorkspaceNotFound(t *testing.T) {
 	}
 	if got.Title != "y" { // cwd basename fallback, unchanged when the lookup misses
 		t.Fatalf("title should fall back to cwd basename, got %q", got.Title)
+	}
+}
+
+func TestIngestEventsAutoResolvesWhenYoloEnabled(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeYoloScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	if err := s.yolo.SetMode("WS1", "bypass"); err != nil {
+		t.Fatal(err)
+	}
+
+	c := wsDial(t, srv.URL, tok)
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-11","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/tmp/proj","workspace_id":"WS1"}}`
+	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got EventFrame
+	if err := c.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+
+	// maybeAutoResolve spawns the reply in a goroutine (see yolo.go); poll
+	// rather than sleep-then-check so this doesn't flake under load.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, _ := os.ReadFile(logPath)
+		if strings.Contains(string(data), "feed.permission.reply") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected an auto-reply for the yolo-enabled workspace; log:\n%s", data)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestIngestEventsDoesNotAutoResolveWhenYoloOff(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeYoloScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	// WS1's yolo mode is left off (the default).
+
+	c := wsDial(t, srv.URL, tok)
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-12","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/tmp/proj","workspace_id":"WS1"}}`
+	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got EventFrame
+	if err := c.ReadJSON(&got); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond) // let a stray goroutine misbehave, if any
+	data, _ := os.ReadFile(logPath)
+	if strings.Contains(string(data), "feed.permission.reply") {
+		t.Fatalf("must not auto-reply when yolo mode is off; log:\n%s", data)
 	}
 }

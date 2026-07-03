@@ -25,11 +25,14 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -50,7 +53,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
+import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.yoloModeLabel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -114,6 +120,7 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
     }
 
     var renamingWorkspace by remember { mutableStateOf<Workspace?>(null) }
+    var yoloPickerWorkspace by remember { mutableStateOf<Workspace?>(null) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -140,7 +147,8 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
                         expanded = expanded[ws.id] == true,
                         onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
                         onOpen = onOpen,
-                        onLongPress = { renamingWorkspace = ws },
+                        onRename = { renamingWorkspace = ws },
+                        onYoloMode = { yoloPickerWorkspace = ws },
                         dragHandle = {
                             // Custom order is only meaningful when it's the
                             // visible order -- disabled while "Waiting first"
@@ -175,6 +183,17 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
             },
         )
     }
+
+    yoloPickerWorkspace?.let { ws ->
+        YoloModeDialog(
+            current = ws.yoloMode,
+            onDismiss = { yoloPickerWorkspace = null },
+            onSelect = { mode ->
+                vm.setYoloMode(ws.id, mode)
+                yoloPickerWorkspace = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -198,6 +217,41 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (Str
     )
 }
 
+// Picker order/labels for the YOLO mode dialog. Off first (the common,
+// unblocked-from-the-agent-inbox case).
+private val YoloModeOptions = listOf(
+    YoloMode.OFF to "Off",
+    YoloMode.ALWAYS to "Always",
+    YoloMode.ALL_TOOLS to "All tools",
+    YoloMode.BYPASS to "Bypass",
+)
+
+@Composable
+private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("YOLO mode") },
+        text = {
+            Column {
+                YoloModeOptions.forEach { (mode, label) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { onSelect(mode) }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        RadioButton(selected = mode == current, onClick = { onSelect(mode) })
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WorkspaceCard(
@@ -205,9 +259,11 @@ private fun WorkspaceCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     onOpen: (String) -> Unit,
-    onLongPress: () -> Unit,
+    onRename: () -> Unit,
+    onYoloMode: () -> Unit,
     dragHandle: @Composable () -> Unit,
 ) {
+    var showActionMenu by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
         // A left accent stripe flags agents that want attention: red when blocked
         // on a permission prompt, amber when idle waiting for input. IntrinsicSize
@@ -217,50 +273,69 @@ private fun WorkspaceCard(
                 Box(Modifier.fillMaxHeight().width(5.dp).background(accent))
             }
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .combinedClickable(
-                            onClick = {
-                                if (ws.terminals.isEmpty()) return@combinedClickable
-                                val direct = singlePaneTarget(ws)
-                                if (direct != null) onOpen(direct) else onToggle()
-                            },
-                            onLongClick = onLongPress,
-                        )
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                Box {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    if (ws.terminals.isEmpty()) return@combinedClickable
+                                    val direct = singlePaneTarget(ws)
+                                    if (direct != null) onOpen(direct) else onToggle()
+                                },
+                                onLongClick = { showActionMenu = true },
+                            )
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    // The workspace name, not the agent-status preview — the
+                                    // attention stripe already conveys waiting/permission state.
+                                    text = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                yoloModeLabel(ws.yoloMode)?.let { YoloBadge(it) }
+                            }
+                            Text(
+                                text = ws.cwd,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (ws.hasUnread) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.error,
+                                shape = CircleShape,
+                                modifier = Modifier.size(10.dp),
+                            ) {}
+                        }
                         Text(
-                            // The workspace name, not the agent-status preview — the
-                            // attention stripe already conveys waiting/permission state.
-                            text = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = ws.cwd,
-                            style = MaterialTheme.typography.bodySmall,
+                            text = paneCountLabel(ws.terminals.size),
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        )
+                        dragHandle()
+                    }
+                    DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            onClick = { showActionMenu = false; onRename() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("YOLO mode…") },
+                            onClick = { showActionMenu = false; onYoloMode() },
                         )
                     }
-                    if (ws.hasUnread) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.error,
-                            shape = CircleShape,
-                            modifier = Modifier.size(10.dp),
-                        ) {}
-                    }
-                    Text(
-                        text = paneCountLabel(ws.terminals.size),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    dragHandle()
                 }
                 if (expanded) {
                     ws.terminals.forEach { pane -> PaneRow(pane, onOpen) }

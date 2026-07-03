@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ type Workspace struct {
 	Preview   string         `json:"preview"`
 	HasUnread bool           `json:"has_unread"`
 	Attention string         `json:"attention,omitempty"`
+	YoloMode  string         `json:"yolo_mode,omitempty"`
 	Terminals []TerminalPane `json:"terminals"`
 }
 
@@ -31,6 +33,26 @@ type TerminalPane struct {
 	Kind    string `json:"kind"`
 }
 
+// findWorkspace fetches the live workspace list and returns the one matching
+// id, if any. Used by callers that need a single workspace's live fields
+// (CWD, title, preview) without re-deriving the whole list themselves.
+func (s *Server) findWorkspace(ctx context.Context, id string) (Workspace, bool) {
+	raw, err := s.cmux.Rpc(ctx, "mobile.workspace.list", nil)
+	if err != nil {
+		return Workspace{}, false
+	}
+	workspaces, err := parseWorkspaces(raw)
+	if err != nil {
+		return Workspace{}, false
+	}
+	for _, ws := range workspaces {
+		if ws.ID == id {
+			return ws, true
+		}
+	}
+	return Workspace{}, false
+}
+
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	raw, err := s.cmux.Rpc(r.Context(), "mobile.workspace.list", nil)
 	if err != nil {
@@ -41,6 +63,11 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux parse error"})
 		return
+	}
+	if s.yolo != nil {
+		for i := range workspaces {
+			workspaces[i].YoloMode = s.yolo.Mode(workspaces[i].ID)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces})
 }

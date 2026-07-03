@@ -19,6 +19,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
+	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
 func defaultAgentConfigPath() string {
@@ -100,6 +101,7 @@ func runAgent(args []string) int {
 
 	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, nil)
 	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
+	srv.SetYoloStore(yolo.OpenStore(cfg.YoloStore))
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 

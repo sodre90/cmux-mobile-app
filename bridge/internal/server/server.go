@@ -11,6 +11,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
 // Server holds the dependencies shared by all handlers.
@@ -24,7 +25,17 @@ type Server struct {
 	// production wiring). Nil means the plaintext code path every existing
 	// test exercises; non-nil enables the opt-in e2e encryption layer.
 	sessions *e2e.Store
+	// yolo is nil unless SetYoloStore is called (only by runAgent's production
+	// wiring). Nil means every workspace behaves as if YOLO mode is off (no
+	// stored modes, no auto-reply) -- the plaintext-equivalent default every
+	// existing test exercises.
+	yolo *yolo.Store
 }
+
+// SetYoloStore enables per-workspace YOLO auto-reply. Called only by
+// runAgent's production wiring; no test calls this, so pre-existing tests
+// continue to exercise the "always off" code path unchanged.
+func (s *Server) SetYoloStore(store *yolo.Store) { s.yolo = store }
 
 // New constructs a Server.
 func New(cfg config.Config, c *cmux.Client, s *auth.Store) *Server {

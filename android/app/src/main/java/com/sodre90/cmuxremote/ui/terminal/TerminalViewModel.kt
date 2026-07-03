@@ -37,7 +37,33 @@ class TerminalViewModel(
     val state: StateFlow<TerminalUiState> = _state.asStateFlow()
     private var job: Job? = null
 
-    init { connect() }
+    // Kept separate from [state] (which the live grid-frame loop replaces
+    // wholesale on every frame) so a fast terminal stream never clobbers this
+    // one-time, read-only lookup. This screen has no yolo-mode edit affordance
+    // -- that lives on the sessions list's long-press menu.
+    private val _yoloMode = MutableStateFlow("")
+    val yoloMode: StateFlow<String> = _yoloMode.asStateFlow()
+
+    init {
+        connect()
+        loadYoloMode(container, surfaceId)
+    }
+
+    // The terminal route is keyed by surface (pane) id, but YOLO mode is a
+    // workspace-level setting -- several panes can share one workspace -- so
+    // this finds the owning workspace via the existing sessions list rather
+    // than needing a new bridge endpoint or extra nav args.
+    private fun loadYoloMode(container: AppContainer, surfaceId: String) {
+        val client = container.bridgeClient() ?: return
+        viewModelScope.launch {
+            try {
+                val ws = client.sessions().firstOrNull { ws -> ws.terminals.any { it.id == surfaceId } }
+                _yoloMode.value = ws?.yoloMode.orEmpty()
+            } catch (_: Exception) {
+                // Best-effort display only; leave it blank on failure.
+            }
+        }
+    }
 
     /** (Re)subscribe to the terminal stream, resetting to the loading state. */
     fun reconnect() = connect()

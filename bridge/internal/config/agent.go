@@ -30,6 +30,9 @@ type AgentConfig struct {
 	// SessionStore is the path to the JSON file holding this agent's paired
 	// devices' e2e shared secrets and replay counters (internal/e2e.Store).
 	SessionStore string `toml:"session_store"`
+	// YoloStore is the path to the JSON file holding each workspace's opt-in
+	// auto-reply mode for permission prompts (internal/yolo.Store).
+	YoloStore string `toml:"yolo_store"`
 }
 
 func agentDefaults() AgentConfig {
@@ -37,6 +40,7 @@ func agentDefaults() AgentConfig {
 		CmuxBin:      "cmux",
 		IdentityKey:  "~/.config/cmux-bridge/identity.key",
 		SessionStore: "~/.config/cmux-bridge/sessions.json",
+		YoloStore:    "~/.config/cmux-bridge/yolo.json",
 	}
 }
 
@@ -62,5 +66,6 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.CACert = expandHome(cfg.CACert)
 	cfg.IdentityKey = expandHome(cfg.IdentityKey)
 	cfg.SessionStore = expandHome(cfg.SessionStore)
+	cfg.YoloStore = expandHome(cfg.YoloStore)
 	return cfg, nil
 }

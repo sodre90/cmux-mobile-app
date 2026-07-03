@@ -76,6 +76,31 @@ class BridgeClientTest {
     }
 
     @Test
+    fun sessionsDecodesYoloMode() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"workspaces":[{"id":"a","cwd":"/x","title":"build","yolo_mode":"bypass","terminals":[]}]}""",
+            ),
+        )
+
+        val list = runBlocking { client.sessions() }
+
+        assertEquals("bypass", list[0].yoloMode)
+    }
+
+    @Test
+    fun setYoloModePostsToYoloModePath() {
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+
+        runBlocking { client.setYoloMode("ws-1", "bypass") }
+
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/sessions/ws-1/yolo-mode", req.path)
+        assertTrue(req.body.readUtf8().contains("\"mode\":\"bypass\""))
+    }
+
+    @Test
     fun registerDevicePostsFcmToken() {
         server.enqueue(MockResponse().setBody("""{"ok":true}"""))
 

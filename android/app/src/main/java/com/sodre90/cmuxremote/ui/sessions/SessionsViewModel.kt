@@ -47,6 +47,21 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** Sets a workspace's YOLO auto-reply mode, then reloads the list so the
+     *  new mode (persisted bridge-side) comes back fresh. */
+    fun setYoloMode(id: String, mode: String) {
+        val client = container.bridgeClient() ?: run { _actionError.value = "Bridge not configured"; return }
+        viewModelScope.launch {
+            try {
+                client.setYoloMode(id, mode)
+                _actionError.value = null
+                refresh()
+            } catch (e: Exception) {
+                _actionError.value = e.message ?: "Setting YOLO mode failed"
+            }
+        }
+    }
+
     fun refresh() {
         val client = container.bridgeClient()
         if (client == null) {

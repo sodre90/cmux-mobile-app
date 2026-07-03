@@ -36,6 +36,7 @@ func (s *Server) routes(wrap func(http.Handler) http.Handler) http.Handler {
 	mux.Handle("GET /feed/pending", wrap(http.HandlerFunc(s.handleFeedPending)))
 	mux.Handle("POST /feed/{id}/reply", wrap(http.HandlerFunc(s.handleFeedReply)))
 	mux.Handle("POST /sessions/{id}/rename", wrap(http.HandlerFunc(s.handleRenameWorkspace)))
+	mux.Handle("POST /sessions/{id}/yolo-mode", wrap(http.HandlerFunc(s.handleSetYoloMode)))
 	return mux
 }
 

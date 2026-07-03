@@ -51,6 +51,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.yoloModeLabel
 
 // Reference size for the surface-viewport resize math (decoupled from the display
 // zoom so pinching never re-resizes the surface).
@@ -73,6 +75,7 @@ fun TerminalScreen(
     onBack: () -> Unit,
 ) {
     val state by vm.state.collectAsState()
+    val yoloMode by vm.yoloMode.collectAsState()
     var input by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
 
@@ -94,7 +97,15 @@ fun TerminalScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Terminal") },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Terminal")
+                        yoloModeLabel(yoloMode)?.let { YoloBadge(it) }
+                    }
+                },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
                     TextButton(onClick = { wrap = !wrap }) {

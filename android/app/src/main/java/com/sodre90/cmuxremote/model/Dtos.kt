@@ -28,8 +28,23 @@ data class Workspace(
     @SerialName("has_unread") val hasUnread: Boolean = false,
     /** Agent attention state derived by the bridge: "permission", "input", or "". */
     val attention: String = "",
+    /** This workspace's YOLO auto-reply mode (see [YoloMode]); "" means off. */
+    @SerialName("yolo_mode") val yoloMode: String = "",
     val terminals: List<TerminalPane> = emptyList(),
 )
+
+/**
+ * YOLO mode's auto-reply levels for permission prompts. The bridge persists
+ * these per workspace and replies to pending `permission`-kind feed items
+ * with them automatically (see bridge's internal/yolo package); [BYPASS]
+ * mirrors Claude Code's own `--dangerously-skip-permissions`.
+ */
+object YoloMode {
+    const val OFF = ""
+    const val ALWAYS = "always"
+    const val ALL_TOOLS = "all"
+    const val BYPASS = "bypass"
+}
 
 /** One terminal surface (pane) within a [Workspace]; [id] opens via /terminal/{id}. */
 @Serializable
@@ -53,6 +68,10 @@ data class RegisterDeviceRequest(@SerialName("fcm_token") val fcmToken: String)
 /** Body of `POST /sessions/{id}/rename`. */
 @Serializable
 data class RenameWorkspaceRequest(val title: String)
+
+/** Body of `POST /sessions/{id}/yolo-mode`; [mode] is one of [YoloMode]'s values. */
+@Serializable
+data class SetYoloModeRequest(val mode: String)
 
 /** A simplified event the bridge fans out over the events WebSocket. */
 @Serializable

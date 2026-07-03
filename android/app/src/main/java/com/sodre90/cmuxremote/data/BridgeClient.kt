@@ -6,6 +6,7 @@ import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.PendingFeedResponse
 import com.sodre90.cmuxremote.model.RegisterDeviceRequest
 import com.sodre90.cmuxremote.model.RenameWorkspaceRequest
+import com.sodre90.cmuxremote.model.SetYoloModeRequest
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.WorkspacesResponse
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,13 @@ class BridgeClient(
     suspend fun renameWorkspace(id: String, title: String) {
         val payload = BridgeJson.encodeToString(RenameWorkspaceRequest.serializer(), RenameWorkspaceRequest(title))
         post("$root/sessions/$id/rename", payload)
+    }
+
+    /** Sets a workspace's YOLO auto-reply mode (see
+     *  bridge/internal/server/yolo.go's handleSetYoloMode). */
+    suspend fun setYoloMode(id: String, mode: String) {
+        val payload = BridgeJson.encodeToString(SetYoloModeRequest.serializer(), SetYoloModeRequest(mode))
+        post("$root/sessions/$id/yolo-mode", payload)
     }
 
     private suspend fun post(url: String, json: String) = withContext(Dispatchers.IO) {
