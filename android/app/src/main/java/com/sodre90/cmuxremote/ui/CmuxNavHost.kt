@@ -1,5 +1,7 @@
 package com.sodre90.cmuxremote.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -62,7 +64,21 @@ fun CmuxNavHost(
         }
     }
 
-    NavHost(navController = navController, startDestination = start) {
+    // Predictive back (enabled in the manifest) makes Navigation Compose
+    // cross-fade between destinations by default. A fast repeated tap right
+    // at the transition can interrupt that animation mid-flight, leaving
+    // AnimatedContent paused between two screens with neither one's content
+    // composed -- a blank, stuck pane. Every destination here already swaps
+    // instantly with no animation, so disable the transition outright rather
+    // than risk that stuck state.
+    NavHost(
+        navController = navController,
+        startDestination = start,
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+    ) {
         composable(Routes.SETTINGS) {
             val vm: PairingViewModel = viewModel(
                 factory = viewModelFactory { initializer { PairingViewModel(container) } },
@@ -85,9 +101,17 @@ fun CmuxNavHost(
                 vm = vm,
                 // The pane's surface id is passed through to /terminal/{id} as
                 // the cmux terminal-surface id (see bridge handleTerminal).
-                onOpenTerminal = { surfaceId -> navController.navigate(Routes.terminal(surfaceId)) },
-                onOpenInbox = { navController.navigate(Routes.INBOX) },
-                onSettings = { navController.navigate(Routes.SETTINGS) },
+                // launchSingleTop guards a fast double-tap on the same
+                // workspace card (e.g. right as the previous terminal is
+                // popping back to this screen) from pushing a duplicate
+                // destination -- otherwise a single "back" only pops one
+                // copy, leaving an identical-looking screen underneath that
+                // looks stuck.
+                onOpenTerminal = { surfaceId ->
+                    navController.navigate(Routes.terminal(surfaceId)) { launchSingleTop = true }
+                },
+                onOpenInbox = { navController.navigate(Routes.INBOX) { launchSingleTop = true } },
+                onSettings = { navController.navigate(Routes.SETTINGS) { launchSingleTop = true } },
             )
         }
 
