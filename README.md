@@ -14,7 +14,7 @@ cmux socket password is stored.
     │        Android app         │
     │         (Compose)          │
     └────────────────────────────┘
-                   │  HTTPS / WSS — mTLS device cert + bearer token
+                   │  HTTPS / WSS — bearer token + e2e encryption
                    ▼
     ┌────────────────────────────┐
     │  nginx (mutual TLS edge)   │
@@ -64,9 +64,12 @@ launchd plist, nginx vhosts, container files, example configs) are in
    to get its own signed cert and tenant ID; from then on it opens **one
    outbound WSS tunnel** to the relay and serves the bridge HTTP/WS API over
    it. No port-forwarding, no inbound exposure on the Mac.
-3. **The Android app** connects to the relay's public DNS name, presenting a
-   client TLS certificate (mTLS) plus a per-device bearer token, and renders
-   cmux's `render_grid` cell grid live.
+3. **The Android app** connects to the relay's public DNS name, authenticating
+   with a per-device bearer token minted at pairing, and renders cmux's
+   `render_grid` cell grid live. Once paired, every request/response body and
+   terminal frame is also end-to-end encrypted between the phone and the Mac
+   agent (X25519 + HKDF, derived during pairing) — the relay operator can
+   route traffic but not read it.
 
 ## Quick start
 
@@ -74,8 +77,8 @@ Set it up in this order — each step links to the detailed guide:
 
 1. **Relay + nginx edge** on the home server → [bridge/README.md → Relay](bridge/README.md#relay-home-server)
 2. **Agent** on the Mac (LaunchAgent, dials the relay) → [bridge/README.md → Agent](bridge/README.md#agent-mac)
-3. **Pair the phone** (mint a device token on the relay) → [bridge/README.md → Pair a device](bridge/README.md#pair-a-device)
-4. **Install & configure the app** (base URL, client `.p12`, device token) → [android/README.md → First-run setup](android/README.md#first-run-setup-settings-screen)
+3. **Pair the phone** (self-service: scan a QR code, or enter the server URL + code manually) → [bridge/README.md → Pair a device](bridge/README.md#pair-a-device)
+4. **Install the app** and complete pairing on the Pairing screen → [android/README.md → First-run setup](android/README.md#first-run-setup-pairing-screen)
 5. **Push notifications** (optional, Firebase) → both READMEs' *Push* sections
 
 ### Build
@@ -101,12 +104,20 @@ Defense in depth, all the way to the cmux socket:
   A bug in one tenant's traffic can't spill into another's — enforced by an
   adversarial test (`internal/relay/multitenant_test.go`), not just by
   convention.
-- **Mutual TLS at the nginx edge** — both the Mac agent and every device present
-  client certificates signed by one CA.
-- **Client-cert CN routing** in the relay — an `agent:<tenant-id>` CN may open
-  that tenant's tunnel; device CNs are reverse-proxied as API calls.
-- **Per-device bearer token** — minted by `cmux-relay pair`, revocable, sent as
-  `Authorization: Bearer …` on every request.
+- **Mutual TLS at the nginx edge for the Mac agent** — the agent presents a
+  client certificate signed by the relay's own CA (`CN=agent:<tenant-id>`),
+  and only a request nginx independently verified against that cert may open
+  or use that tenant's tunnel. Devices don't have a client certificate at all
+  (nginx's `ssl_verify_client` is `optional`) — they authenticate with a
+  bearer token instead (below).
+- **Per-device bearer token** — minted at self-service pairing (see [Pair a
+  device](bridge/README.md#pair-a-device)), revocable, sent as
+  `Authorization: Bearer …` and resolved to a tenant on every request.
+- **End-to-end encryption between phone and Mac agent** — pairing also derives
+  a shared secret via X25519 ECDH + HKDF; every HTTP body and terminal
+  WebSocket frame after that is AEAD-encrypted with a replay-protected
+  counter, so the relay (and anyone who compromises the relay host) can route
+  traffic by tenant but never read its contents.
 - **`X-Relay-Token` shared secret** — injected by the relay so the agent only
   honors relay-originated requests.
 - The relay binds loopback only; **the Mac agent has no listening port at all.**

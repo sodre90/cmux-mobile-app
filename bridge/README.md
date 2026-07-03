@@ -19,7 +19,7 @@ independent work that consumes cmux's IPC contract.
     ┌────────────────────────────┐
     │        Android app         │
     └────────────────────────────┘
-                   │  HTTPS / WSS — device client cert
+                   │  HTTPS / WSS — bearer token + e2e encryption
                    ▼
     ┌────────────────────────────┐
     │  nginx (mutual TLS edge)   │
@@ -46,11 +46,15 @@ stream over the single agent tunnel (a WebSocket, so it traverses nginx on 443).
 The agent serves its existing handler verbatim. When the Mac is not connected,
 the relay returns `503 {"error":"agent_offline"}`.
 
-Security is layered: **mutual TLS at the nginx edge** (both the agent and devices
-present client certs signed by one CA) + **client-cert CN routing** at the relay
-+ a **per-device bearer token** checked by the relay + an `X-Relay-Token` shared
-secret the relay injects so the agent only honors relay-originated requests. The
-relay binds loopback only; the agent has no listening port at all.
+Security is layered: **mutual TLS at the nginx edge for the agent only**
+(`ssl_verify_client optional` — the agent presents a client cert signed by
+the relay's own CA and is routed by its verified CN; devices have no client
+cert) + a **per-device bearer token** checked by the relay + **end-to-end
+encryption** between phone and agent (X25519 ECDH + HKDF derived at pairing,
+AEAD over every HTTP body and terminal WS frame, replay-protected — the relay
+can route it but not read it) + an `X-Relay-Token` shared secret the relay
+injects so the agent only honors relay-originated requests. The relay binds
+loopback only; the agent has no listening port at all.
 
 ## Build
 
@@ -280,9 +284,12 @@ routes require `Authorization: Bearer <device-token>`. A `503 {"error":
 | GET  | `/sessions` | list workspaces/terminals (normalized) |
 | GET  | `/events` (WS) | agent feed + notifications; `needs_attention` flags blocking prompts |
 | GET  | `/terminal/{id}` (WS) | replay + live output (down); input/paste/resize (up) |
+| GET  | `/feed/pending` | list pending blocking prompts (full question/option structure) |
 | POST | `/feed/{id}/reply` | answer a prompt: `{kind, request_id, params}` |
 | POST | `/sessions/{id}/rename` | set a workspace's title in cmux: `{title}` |
 | POST | `/devices/register` | store this device's FCM token: `{fcm_token}` |
+| POST | `/devices/pair` | redeem a pairing code (no bearer token yet): `{code, name, device_pubkey}` |
+| GET  | `/devices/pair-info/{code}` | resolve a pairing code's agent pubkey for manual entry (no auth) |
 
 Terminal frames carry cmux's `render_grid` (`format: "cmux.render-grid.v1"`)
 verbatim; the client renders it as a styled cell grid.

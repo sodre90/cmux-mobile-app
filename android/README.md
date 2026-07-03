@@ -6,9 +6,12 @@ answer agent prompts — with optional FCM push when an agent needs your attenti
 
 The app depends only on the bridge's documented HTTP/WebSocket contract
 (`GET /sessions`, `WS /events`, `WS /terminal/{id}`, `POST /feed/{id}/reply`,
-`POST /devices/register`), never on cmux internals. Every request carries a
-**client TLS certificate** (mTLS, terminated at nginx) and an
-`Authorization: Bearer <device-token>`.
+`POST /devices/register`), never on cmux internals. Every request carries an
+`Authorization: Bearer <device-token>` minted at pairing — no client TLS
+certificate on the device side (only the Mac agent has one). Once paired,
+request/response bodies and terminal frames are also end-to-end encrypted
+between the phone and the Mac agent (X25519 ECDH + HKDF derived during
+pairing), so the relay can route traffic but not read it.
 
 ## Requirements
 
@@ -30,67 +33,47 @@ cd android
 Or open the `android/` directory in Android Studio, let it sync, then Run `app`
 on a device or emulator.
 
-## First-run setup (Settings screen)
+## First-run setup (Pairing screen)
 
-On first launch the app opens the **Settings** screen. You need three things:
+On first launch — or any time the app has no bridge config yet — it opens the
+**Pairing** screen instead of the sessions list. Pairing is entirely
+self-service now: nothing to generate or paste by hand.
 
-### 1. Bridge base URL
-
-The HTTPS URL of your nginx edge, e.g. `https://cmux.example.com`. This is the
-public DNS name that terminates mutual TLS and proxies to the bridge on your LAN.
-
-### 2. Client certificate (`.p12`)
-
-nginx is configured with `ssl_verify_client on`, so the app must present a client
-certificate signed by the CA nginx trusts (`ssl_client_certificate` — the same CA
-you set up for the bridge edge). Generate a client cert and bundle it into a
-password-protected PKCS#12:
+On the Mac, with the agent running (see
+[`bridge/README.md` → Agent](../bridge/README.md#agent-mac)):
 
 ```bash
-# 1) client private key + CSR
-openssl req -newkey rsa:2048 -nodes -keyout phone.key -out phone.csr -subj "/CN=phone"
-
-# 2) sign it with your nginx client-auth CA (ca.crt / ca.key)
-openssl x509 -req -in phone.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out phone.crt -days 825 -sha256
-
-# 3) bundle key + cert into a .p12 (you'll be prompted for an export password)
-openssl pkcs12 -export -inkey phone.key -in phone.crt -certfile ca.crt \
-  -out phone.p12
+cmux-bridge pair-device --config ~/.config/cmux-bridge/agent.toml
 ```
 
-Transfer `phone.p12` to the device (e.g. via a USB/file transfer or a private
-channel — it contains a private key, keep it secret), then in Settings tap
-**Import .p12**, pick the file, and enter the export password. The bytes are
-stored in EncryptedSharedPreferences and never logged.
+This prints a QR code and, alongside it, a short code for manual entry.
 
-### 3. Device token
+### Option 1: scan the QR code
 
-On the **home server** (the relay owns the device token store), find the
-tenant this phone belongs to (the Mac agent printed its tenant ID when it
-self-registered — see [`bridge/README.md`](../bridge/README.md#agent-client-certificate)):
+Grant the camera permission when prompted, then point it at the QR code
+printed above. The QR payload carries the server URL, a one-time pairing
+code, and the agent's public key — the app redeems the code with the relay,
+generates its own X25519 keypair (kept in `EncryptedSharedPreferences`,
+persisted thereafter), derives a shared secret with the agent, and stores the
+bridge's base URL and the bearer token it's issued. No further input needed.
 
-```bash
-cmux-relay tenants list
-```
+### Option 2: enter the server URL and code manually
 
-Then pair the device to mint a long-lived bearer token for that tenant:
+No camera handy, or pairing remotely (e.g. over SSH into the Mac)? Tap
+**"Enter server URL and code manually"** and fill in:
 
-```bash
-cmux-relay pair --tenant <id> --name phone
-```
+- **Server URL** — the same `https://` base the QR's `pair_url` uses (e.g.
+  `https://cmux.example.com`).
+- **Pairing code** — the short code `pair-device` printed next to the QR.
 
-Copy the printed token and paste it into the **Device token** field. Revoke later
-with `cmux-relay devices revoke <token>`.
+The app resolves the agent's public key via the relay's `GET
+/devices/pair-info/{code}` and completes the exact same handshake as the QR
+path from there.
 
-### Optional: server CA
-
-Leave **Server CA (PEM)** blank if nginx presents a publicly-trusted server
-certificate (e.g. Let's Encrypt). If nginx uses a private/self-signed **server**
-certificate, paste that CA's PEM here so the app trusts the connection.
-
-Tap **Save & connect**. The app moves to the sessions list; the start screen on
-subsequent launches is the sessions list whenever a bridge config is present.
+Either way, once pairing succeeds the app moves to the sessions list; the
+start screen on subsequent launches is the sessions list whenever a bridge
+config is already present. A pairing code is single-use and expires (10
+minutes) — if it's stale, generate a fresh one with `pair-device` and retry.
 
 ## Push notifications (optional)
 
@@ -114,22 +97,22 @@ when it has several.
 
 ## Known gaps / assumptions
 
-These were the points that could not be confirmed against a live cmux prompt while
-building; verify them once connected and adjust if needed:
+This point could not be confirmed against a live cmux prompt while building;
+verify it once connected and adjust if needed:
 
 - **Feed reply `request_id`.** The bridge reads `request_id` from the reply body.
   cmux's exact reply param names are unconfirmed, so the inbox currently sends the
   feed id as `request_id` and params `{"decision":"approve"|"deny"}` for
   permission/exit-plan prompts and `{"answer": <text>}` for questions.
-- **Terminal surface id.** A session's `id` from `GET /sessions` is used directly
-  as the `{id}` in `WS /terminal/{id}`. Confirm sessions expose the surface id the
-  terminal socket expects.
-- **Render-grid colors.** The `cmux.render-grid.v1` style colors are decoded as
-  `#rrggbb` / `#aarrggbb` hex strings. If cmux encodes colors differently (e.g.
-  palette indices), the renderer's color parsing needs updating.
+
+(Two earlier open questions are now resolved: workspace id and terminal
+surface id are deliberately distinct — see the workspace→panes model in
+`GET /sessions`'s `terminals[]` — and render-grid colors are confirmed
+`#rrggbb`/`#aarrggbb` hex strings, verified live.)
 
 ## Out of scope (for now)
 
 Creating/closing sessions, file-diff viewing, multiple Macs, biometric lock, and
-tablet-specific layouts. The bridge only ever performs read methods, terminal
-input/replay, and feed replies — it never mutates session lifecycle.
+tablet-specific layouts. The bridge only performs read methods, terminal
+input/replay, feed replies, and workspace rename (setting a title) — it never
+creates, closes, or restores workspaces/terminals.
