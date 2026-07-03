@@ -30,11 +30,16 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
-    // True while a pull-to-refresh or event-triggered refetch is in flight;
-    // drives PullToRefreshBox's spinner without dropping the already-rendered
-    // list into UiState.Loading (see [silentRefresh]).
+    // True only while a user-initiated refresh (pull gesture or the Refresh
+    // button) is in flight -- drives PullToRefreshBox's spinner. Background
+    // auto-refresh (see [subscribeToEvents]) deliberately does NOT set this;
+    // it should update the list with no visible indicator at all.
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    // Guards against overlapping fetches from any source (pull, button, or
+    // auto-refresh) -- separate from [_isRefreshing], which is UI-only.
+    private var fetchInFlight = false
 
     // Coalesces bursts of cmux feed events (e.g. many PreToolUse frames during
     // one agent turn) into a single refetch instead of hammering `cmux rpc`.
@@ -44,7 +49,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     init {
         refresh()
         viewModelScope.launch {
-            refreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { silentRefresh() }
+            refreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { autoRefresh() }
         }
         subscribeToEvents()
     }
@@ -108,24 +113,48 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** Refetches the session list without dropping it into [UiState.Loading] --
-     *  used by pull-to-refresh and by [subscribeToEvents]'s change-triggered
-     *  refetch, neither of which should flash the full-screen spinner over an
-     *  already-rendered list. Skips if a refresh is already in flight so a
-     *  burst of events collapses onto one request. */
+    /** User-initiated refresh (pull-to-refresh gesture or the Refresh button)
+     *  -- refetches without dropping the list into [UiState.Loading], and
+     *  shows [isRefreshing] so PullToRefreshBox's spinner appears. Skips if a
+     *  fetch is already in flight. */
     fun silentRefresh() {
         val client = container.bridgeClient() ?: run { _actionError.value = "Bridge not configured"; return }
-        if (_isRefreshing.value) return
+        if (fetchInFlight) return
         viewModelScope.launch {
+            fetchInFlight = true
             _isRefreshing.value = true
             try {
-                _state.value = UiState.Ready(fetchSessionsWithPairingRetry(client))
-                _actionError.value = null
-            } catch (e: Exception) {
-                _actionError.value = e.message ?: "Failed to refresh sessions"
+                fetchAndApply(client)
             } finally {
                 _isRefreshing.value = false
+                fetchInFlight = false
             }
+        }
+    }
+
+    /** Background refresh triggered by [subscribeToEvents] -- same non-
+     *  blocking refetch as [silentRefresh] but never touches [isRefreshing],
+     *  so cmux agent activity the user didn't ask about never pops the
+     *  pull-to-refresh spinner. */
+    private fun autoRefresh() {
+        val client = container.bridgeClient() ?: return
+        if (fetchInFlight) return
+        viewModelScope.launch {
+            fetchInFlight = true
+            try {
+                fetchAndApply(client)
+            } finally {
+                fetchInFlight = false
+            }
+        }
+    }
+
+    private suspend fun fetchAndApply(client: BridgeClient) {
+        try {
+            _state.value = UiState.Ready(fetchSessionsWithPairingRetry(client))
+            _actionError.value = null
+        } catch (e: Exception) {
+            _actionError.value = e.message ?: "Failed to refresh sessions"
         }
     }
 
