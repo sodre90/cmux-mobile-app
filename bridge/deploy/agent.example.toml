@@ -6,3 +6,9 @@ ca_cert     = ""                                    # CA that signed the nginx s
 relay_token = "CHANGE_ME_long_random_secret"        # must match the relay
 cmux_bin    = "cmux"
 # bootstrap_url = "https://cmux.example.com:8444/tenants/register"  # used once, on first run
+
+# Direct (Tailscale) mode -- optional, additive to the relay above. See
+# bridge/README.md#direct-tailscale-mode for the one-time Tailscale setup
+# this requires.
+# direct_listen     = ":8443"
+# direct_auth_store = "~/.config/cmux-bridge/direct-auth.db"

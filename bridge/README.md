@@ -241,6 +241,33 @@ There is no manual-pairing fallback: `auth.Issue` always requires a device
 public key, so a phone paired under the old `cmux-relay pair` flow loses
 relay access the moment this ships and must be re-paired via `pair-device`.
 
+## Direct (Tailscale) mode
+
+An optional, additive alternative to the relay above: if your Mac and phone
+are both on the same [Tailscale](https://tailscale.com) tailnet, the phone
+can talk straight to the Mac agent with no relay and no home server in the
+path. The relay keeps working exactly as before — this is a second listener,
+not a replacement, and push notifications still require the relay.
+
+1. Install Tailscale on the Mac (Mac App Store, or `brew install --cask
+   tailscale`) and run `tailscale up`.
+2. In the [Tailscale admin console](https://login.tailscale.com/admin/dns),
+   enable **MagicDNS** and, in the same DNS page's **HTTPS Certificates**
+   section, enable HTTPS certificates for the tailnet.
+3. Install the official Tailscale app from the Play Store on the phone and
+   sign in to the same tailnet.
+4. Confirm cert issuance works: `sudo tailscale cert
+   $(tailscale status --json | jq -r .Self.DNSName)`.
+5. Add to `agent.toml`: `direct_listen = ":8443"` (any free port), restart
+   the agent.
+6. Run `cmux-bridge pair-device --config ~/.config/cmux-bridge/agent.toml
+   --direct`, then complete pairing on the phone (Settings → Enter server
+   URL and code manually) using the printed
+   `https://<mac>.<tailnet>.ts.net:8443` URL and code.
+
+Switching between relay and direct mode is a manual re-pair (Settings screen
+→ enter the other URL/code) — there's no automatic fallback in v1.
+
 ## Edge: nginx mutual TLS
 
 See `deploy/nginx-cmux-relay.conf`. Point your home-server DNS name at nginx,

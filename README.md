@@ -140,6 +140,10 @@ Defense in depth, all the way to the cmux socket:
   Claude Code's own `--dangerously-skip-permissions`.
 - **Custom sort order** — drag workspaces into any order via the handle on each
   row; purely a phone-local display preference, not synced anywhere.
+- **Direct (Tailscale) mode** — an optional, additive alternative to the
+  relay above: if the phone and Mac share a Tailscale tailnet, the app can
+  talk straight to the Mac agent with no relay or home server involved. See
+  [bridge/README.md → Direct (Tailscale) mode](bridge/README.md#direct-tailscale-mode).
 - **Optional push** — FCM "an agent needs you" notifications, off by default and
   requiring no Firebase config to build.
 
