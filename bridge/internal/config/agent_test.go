@@ -103,3 +103,41 @@ session_store  = "/c/sessions.json"
 		t.Fatalf("SessionStore = %q", cfg.SessionStore)
 	}
 }
+
+func TestLoadAgentDefaultsDirectAuthStorePath(t *testing.T) {
+	cfg, err := LoadAgent(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DirectListen != "" {
+		t.Fatalf("DirectListen default = %q, want empty (direct mode off by default)", cfg.DirectListen)
+	}
+	if cfg.DirectAuthStore == "" || strings.Contains(cfg.DirectAuthStore, "~") {
+		t.Fatalf("DirectAuthStore default not expanded: %q", cfg.DirectAuthStore)
+	}
+	if !strings.HasSuffix(cfg.DirectAuthStore, "direct-auth.db") {
+		t.Fatalf("DirectAuthStore = %q", cfg.DirectAuthStore)
+	}
+}
+
+func TestLoadAgentParsesDirectFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	body := `
+direct_listen     = ":8443"
+direct_auth_store = "/c/direct-auth.db"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DirectListen != ":8443" {
+		t.Fatalf("DirectListen = %q", cfg.DirectListen)
+	}
+	if cfg.DirectAuthStore != "/c/direct-auth.db" {
+		t.Fatalf("DirectAuthStore = %q", cfg.DirectAuthStore)
+	}
+}

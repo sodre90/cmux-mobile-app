@@ -33,14 +33,25 @@ type AgentConfig struct {
 	// YoloStore is the path to the JSON file holding each workspace's opt-in
 	// auto-reply mode for permission prompts (internal/yolo.Store).
 	YoloStore string `toml:"yolo_store"`
+	// DirectListen is the address the agent listens on for direct
+	// (Tailscale) connections, e.g. ":8443". Empty (the default) disables
+	// direct mode entirely — the agent behaves exactly as it does today,
+	// relay-only.
+	DirectListen string `toml:"direct_listen"`
+	// DirectAuthStore is the path to direct mode's own local SQLite device
+	// store (internal/auth.Store) — deliberately separate from any
+	// relay-shaped state, since direct mode has exactly one implicit tenant
+	// (this Mac).
+	DirectAuthStore string `toml:"direct_auth_store"`
 }
 
 func agentDefaults() AgentConfig {
 	return AgentConfig{
-		CmuxBin:      "cmux",
-		IdentityKey:  "~/.config/cmux-bridge/identity.key",
-		SessionStore: "~/.config/cmux-bridge/sessions.json",
-		YoloStore:    "~/.config/cmux-bridge/yolo.json",
+		CmuxBin:         "cmux",
+		IdentityKey:     "~/.config/cmux-bridge/identity.key",
+		SessionStore:    "~/.config/cmux-bridge/sessions.json",
+		YoloStore:       "~/.config/cmux-bridge/yolo.json",
+		DirectAuthStore: "~/.config/cmux-bridge/direct-auth.db",
 	}
 }
 
@@ -67,5 +78,6 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.IdentityKey = expandHome(cfg.IdentityKey)
 	cfg.SessionStore = expandHome(cfg.SessionStore)
 	cfg.YoloStore = expandHome(cfg.YoloStore)
+	cfg.DirectAuthStore = expandHome(cfg.DirectAuthStore)
 	return cfg, nil
 }
