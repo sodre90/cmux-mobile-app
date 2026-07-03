@@ -5,6 +5,7 @@ import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.PendingFeedResponse
 import com.sodre90.cmuxremote.model.RegisterDeviceRequest
+import com.sodre90.cmuxremote.model.RenameWorkspaceRequest
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.WorkspacesResponse
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,13 @@ class BridgeClient(
     suspend fun replyFeed(feedId: String, reply: FeedReply) {
         val payload = BridgeJson.encodeToString(FeedReply.serializer(), reply)
         post("$root/feed/$feedId/reply", payload)
+    }
+
+    /** Sets a workspace's persistent display title in cmux (see
+     *  bridge/internal/server/rename.go's workspace.rename RPC call). */
+    suspend fun renameWorkspace(id: String, title: String) {
+        val payload = BridgeJson.encodeToString(RenameWorkspaceRequest.serializer(), RenameWorkspaceRequest(title))
+        post("$root/sessions/$id/rename", payload)
     }
 
     private suspend fun post(url: String, json: String) = withContext(Dispatchers.IO) {

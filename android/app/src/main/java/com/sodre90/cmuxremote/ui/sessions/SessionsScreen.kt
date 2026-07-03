@@ -1,7 +1,9 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +18,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -42,6 +51,8 @@ import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,21 +84,37 @@ fun SessionsScreen(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
-                is UiState.Ready -> WorkspaceList(s.data, onOpenTerminal)
+                is UiState.Ready -> WorkspaceList(vm, s.data, onOpenTerminal)
             }
         }
     }
 }
 
 @Composable
-private fun WorkspaceList(workspaces: List<Workspace>, onOpen: (String) -> Unit) {
+private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, onOpen: (String) -> Unit) {
     if (workspaces.isEmpty()) {
         Box(Modifier.fillMaxSize()) { Text("No sessions", Modifier.align(Alignment.Center)) }
         return
     }
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     var sortByAttention by remember { mutableStateOf(false) }
-    val ordered = if (sortByAttention) sortedByAttention(workspaces) else workspaces
+
+    // The phone-local drag order (see WorkspaceOrderStore); read once, then
+    // kept in sync locally so drags feel instant without waiting on a
+    // SharedPreferences round trip through the view model.
+    var customOrder by remember { mutableStateOf(vm.loadOrder()) }
+    val baseOrdered = remember(workspaces, customOrder) { applyCustomOrder(workspaces, customOrder) }
+    val ordered = if (sortByAttention) sortedByAttention(baseOrdered) else baseOrdered
+
+    val lazyListState = rememberLazyListState()
+    val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        val reordered = ordered.toMutableList().apply { add(to.index, removeAt(from.index)) }
+        customOrder = reordered.map { it.id }
+        vm.saveOrder(customOrder)
+    }
+
+    var renamingWorkspace by remember { mutableStateOf<Workspace?>(null) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -102,27 +129,84 @@ private fun WorkspaceList(workspaces: List<Workspace>, onOpen: (String) -> Unit)
             Switch(checked = sortByAttention, onCheckedChange = { sortByAttention = it })
         }
         LazyColumn(
+            state = lazyListState,
             modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(ordered, key = { it.id }) { ws ->
-                WorkspaceCard(
-                    ws = ws,
-                    expanded = expanded[ws.id] == true,
-                    onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
-                    onOpen = onOpen,
-                )
+                ReorderableItem(reorderableLazyListState, key = ws.id) {
+                    WorkspaceCard(
+                        ws = ws,
+                        expanded = expanded[ws.id] == true,
+                        onToggle = { expanded[ws.id] = !(expanded[ws.id] ?: false) },
+                        onOpen = onOpen,
+                        onLongPress = { renamingWorkspace = ws },
+                        dragHandle = {
+                            // Custom order is only meaningful when it's the
+                            // visible order -- disabled while "Waiting first"
+                            // is on so a drag can't silently scramble it.
+                            if (sortByAttention) {
+                                IconButton(onClick = {}, enabled = false) {
+                                    Icon(
+                                        Icons.Filled.Menu,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                    )
+                                }
+                            } else {
+                                IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
+                                    Icon(Icons.Filled.Menu, contentDescription = "Drag to reorder")
+                                }
+                            }
+                        },
+                    )
+                }
             }
         }
     }
+
+    renamingWorkspace?.let { ws ->
+        RenameDialog(
+            initial = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
+            onDismiss = { renamingWorkspace = null },
+            onConfirm = { newTitle ->
+                vm.renameWorkspace(ws.id, newTitle)
+                renamingWorkspace = null
+            },
+        )
+    }
 }
 
+@Composable
+private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename workspace") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) { Text("Rename") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WorkspaceCard(
     ws: Workspace,
     expanded: Boolean,
     onToggle: () -> Unit,
     onOpen: (String) -> Unit,
+    onLongPress: () -> Unit,
+    dragHandle: @Composable () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         // A left accent stripe flags agents that want attention: red when blocked
@@ -135,10 +219,14 @@ private fun WorkspaceCard(
             Column(modifier = Modifier.weight(1f)) {
                 Row(
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(enabled = ws.terminals.isNotEmpty()) {
-                            val direct = singlePaneTarget(ws)
-                            if (direct != null) onOpen(direct) else onToggle()
-                        }
+                        .combinedClickable(
+                            onClick = {
+                                if (ws.terminals.isEmpty()) return@combinedClickable
+                                val direct = singlePaneTarget(ws)
+                                if (direct != null) onOpen(direct) else onToggle()
+                            },
+                            onLongClick = onLongPress,
+                        )
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -172,6 +260,7 @@ private fun WorkspaceCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    dragHandle()
                 }
                 if (expanded) {
                     ws.terminals.forEach { pane -> PaneRow(pane, onOpen) }

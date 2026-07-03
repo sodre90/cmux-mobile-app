@@ -18,8 +18,33 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
     val state: StateFlow<UiState<List<Workspace>>> = _state.asStateFlow()
 
+    // Surfaced separately from [state] so a failed rename doesn't blow away an
+    // already-loaded list (mirrors InboxViewModel's error/items split).
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError: StateFlow<String?> = _actionError.asStateFlow()
+
     init {
         refresh()
+    }
+
+    /** The phone-local custom sort order (see [com.sodre90.cmuxremote.data.WorkspaceOrderStore]). */
+    fun loadOrder(): List<String> = container.workspaceOrderStore.load()
+
+    fun saveOrder(order: List<String>) = container.workspaceOrderStore.save(order)
+
+    /** Sets a workspace's display title in cmux, then reloads the list so the
+     *  new title (cmux's single source of truth for it) comes back fresh. */
+    fun renameWorkspace(id: String, title: String) {
+        val client = container.bridgeClient() ?: run { _actionError.value = "Bridge not configured"; return }
+        viewModelScope.launch {
+            try {
+                client.renameWorkspace(id, title)
+                _actionError.value = null
+                refresh()
+            } catch (e: Exception) {
+                _actionError.value = e.message ?: "Rename failed"
+            }
+        }
     }
 
     fun refresh() {

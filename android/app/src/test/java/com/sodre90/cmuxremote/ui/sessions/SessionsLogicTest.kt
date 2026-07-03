@@ -58,4 +58,30 @@ class SessionsLogicTest {
         val b = Workspace(id = "b", attention = "")
         assertEquals(listOf("a", "b"), sortedByAttention(listOf(a, b)).map { it.id })
     }
+
+    @Test
+    fun applyCustomOrderIsNoOpWhenOrderIsEmpty() {
+        val a = Workspace(id = "a")
+        val b = Workspace(id = "b")
+        assertEquals(listOf("a", "b"), applyCustomOrder(listOf(a, b), emptyList()).map { it.id })
+    }
+
+    @Test
+    fun applyCustomOrderReordersByPersistedIds() {
+        val a = Workspace(id = "a")
+        val b = Workspace(id = "b")
+        val c = Workspace(id = "c")
+        val reordered = applyCustomOrder(listOf(a, b, c), listOf("c", "a", "b"))
+        assertEquals(listOf("c", "a", "b"), reordered.map { it.id })
+    }
+
+    @Test
+    fun applyCustomOrderAppendsUnknownIdsAfterKnownOnesStably() {
+        val a = Workspace(id = "a")
+        val b = Workspace(id = "b") // not in the saved order
+        val c = Workspace(id = "c")
+        val d = Workspace(id = "d") // not in the saved order
+        val reordered = applyCustomOrder(listOf(a, b, c, d), listOf("c", "a"))
+        assertEquals(listOf("c", "a", "b", "d"), reordered.map { it.id })
+    }
 }

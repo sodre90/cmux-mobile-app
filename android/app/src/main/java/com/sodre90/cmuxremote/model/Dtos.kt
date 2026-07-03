@@ -50,6 +50,10 @@ data class WorkspacesResponse(val workspaces: List<Workspace> = emptyList())
 @Serializable
 data class RegisterDeviceRequest(@SerialName("fcm_token") val fcmToken: String)
 
+/** Body of `POST /sessions/{id}/rename`. */
+@Serializable
+data class RenameWorkspaceRequest(val title: String)
+
 /** A simplified event the bridge fans out over the events WebSocket. */
 @Serializable
 data class EventFrame(

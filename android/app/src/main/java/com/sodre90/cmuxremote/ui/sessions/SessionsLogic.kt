@@ -22,3 +22,14 @@ fun needsAttention(ws: Workspace): Boolean = ws.attention.isNotEmpty()
  *  each group's original relative order. */
 fun sortedByAttention(workspaces: List<Workspace>): List<Workspace> =
     workspaces.sortedByDescending { needsAttention(it) }
+
+/** Reorders [workspaces] by a phone-local, persisted custom id [order]: ids
+ *  present in [order] come first in that sequence; any other workspace (new,
+ *  or from before an order existed) keeps its relative position, appended
+ *  after all known ids. Stable sort, so ties resolve to [workspaces]'s own
+ *  order. */
+fun applyCustomOrder(workspaces: List<Workspace>, order: List<String>): List<Workspace> {
+    if (order.isEmpty()) return workspaces
+    val rank = order.withIndex().associate { (i, id) -> id to i }
+    return workspaces.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+}

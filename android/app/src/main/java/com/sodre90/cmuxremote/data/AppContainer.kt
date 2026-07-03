@@ -22,6 +22,7 @@ class AppContainer(appContext: Context) {
     val identity = Identity(appContext)
     val session = Session(appContext)
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
+    val workspaceOrderStore = WorkspaceOrderStore(appContext)
 
     private var clientKey: String? = null
     private var client: OkHttpClient? = null
