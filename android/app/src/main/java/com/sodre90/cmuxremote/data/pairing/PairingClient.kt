@@ -34,6 +34,13 @@ private data class DevicePairResponse(
     @SerialName("tenant_id") val tenantId: String = "",
 )
 
+@Serializable
+private data class PairingCodeInfoResponse(
+    @SerialName("agent_pubkey") val agentPubkey: String = "",
+    @SerialName("expires_at") val expiresAt: String = "",
+    @SerialName("tenant_id") val tenantId: String = "",
+)
+
 private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
 /**
@@ -58,7 +65,40 @@ class PairingClient(
         onSetBaseUrl = { settings.baseUrl = it },
         onSetToken = { settings.deviceToken = it },
     )
+
+    /** Resolves a manually-entered server URL + pairing code (the CLI's
+     *  fallback for when scanning isn't possible) into the same [PairingQr]
+     *  shape a scanned QR produces. */
+    suspend fun resolveManualCode(serverUrl: String, code: String): PairingQr =
+        resolvePairingCode(http, serverUrl, code)
 }
+
+/** GET /devices/pair-info/{code}: the manual-entry counterpart to scanning a
+ *  QR. The QR carries {pair_url, code, agent_pubkey, expires_at, tenant_id}
+ *  directly; a phone that can't scan (no camera, or pairing remotely) has
+ *  only the server URL and the code the CLI also prints, so it resolves the
+ *  rest from the relay instead. Everything downstream of this call
+ *  (pairInternal) is identical to the QR path. */
+internal suspend fun resolvePairingCode(http: OkHttpClient, serverUrl: String, code: String): PairingQr =
+    withContext(Dispatchers.IO) {
+        val base = serverUrl.trimEnd('/')
+        val request = Request.Builder().url("$base/devices/pair-info/$code").get().build()
+        http.newCall(request).execute().use { response ->
+            if (response.code == 410) throw PairingCodeInvalidException()
+            if (!response.isSuccessful) throw IOException("pair-info failed: HTTP ${response.code}")
+            val body = BridgeJson.decodeFromString(
+                PairingCodeInfoResponse.serializer(),
+                response.body?.string().orEmpty(),
+            )
+            PairingQr(
+                pairUrl = "$base/devices/pair",
+                code = code,
+                agentPubkey = body.agentPubkey,
+                expiresAt = body.expiresAt,
+                tenantId = body.tenantId,
+            )
+        }
+    }
 
 /** Free function (not a Session/Settings method) so PairingClientTest can
  *  exercise the real handshake logic via plain callbacks -- see Task 11's

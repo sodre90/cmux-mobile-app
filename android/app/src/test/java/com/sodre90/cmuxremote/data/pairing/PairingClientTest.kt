@@ -93,6 +93,58 @@ class PairingClientTest {
             // expected
         }
     }
+
+    @Test
+    fun resolvePairingCodeBuildsEquivalentPairingQr() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val agentPubkeyB64 = Base64.getEncoder().encodeToString(agentPub)
+        server.enqueue(
+            MockResponse().setBody(
+                """{"agent_pubkey":"$agentPubkeyB64","expires_at":"2099-01-01T00:00:00Z","tenant_id":"t1"}""",
+            ),
+        )
+
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val qr = runBlocking { resolvePairingCode(http, serverUrl, "MANUAL01") }
+
+        assertEquals("$serverUrl/devices/pair", qr.pairUrl)
+        assertEquals("MANUAL01", qr.code)
+        assertEquals(agentPubkeyB64, qr.agentPubkey)
+        assertEquals("2099-01-01T00:00:00Z", qr.expiresAt)
+        assertEquals("t1", qr.tenantId)
+
+        val recorded = server.takeRequest()
+        assertEquals("GET", recorded.method)
+        assertEquals("/devices/pair-info/MANUAL01", recorded.path)
+    }
+
+    @Test
+    fun resolvePairingCodeThrowsPairingCodeInvalidOn410() {
+        server.enqueue(MockResponse().setResponseCode(410).setBody("""{"error":"pairing_code_invalid"}"""))
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        try {
+            runBlocking { resolvePairingCode(http, serverUrl, "BOGUS") }
+            fail("expected PairingCodeInvalidException")
+        } catch (e: PairingCodeInvalidException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun resolvePairingCodeTrimsTrailingSlashFromServerUrl() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val agentPubkeyB64 = Base64.getEncoder().encodeToString(agentPub)
+        server.enqueue(
+            MockResponse().setBody(
+                """{"agent_pubkey":"$agentPubkeyB64","expires_at":"2099-01-01T00:00:00Z","tenant_id":"t1"}""",
+            ),
+        )
+
+        val serverUrlWithSlash = server.url("/").toString() // already trailing-slash
+        val qr = runBlocking { resolvePairingCode(http, serverUrlWithSlash, "MANUAL01") }
+
+        assertEquals(server.url("/").toString().trimEnd('/') + "/devices/pair", qr.pairUrl)
+    }
 }
 
 /** Test seam: same logic as PairingClient.pair, but with persistence as

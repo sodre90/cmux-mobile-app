@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.pairing.PairingCodeInvalidException
+import com.sodre90.cmuxremote.data.pairing.PairingQr
 import com.sodre90.cmuxremote.data.pairing.isExpired
 import com.sodre90.cmuxremote.data.pairing.parsePairingQr
 import kotlinx.coroutines.launch
@@ -35,14 +36,37 @@ class PairingViewModel(private val container: AppContainer) : ViewModel() {
         }
         state = PairingUiState.Pairing
         viewModelScope.launch {
+            pairAndUpdateState(qr, invalidCodeMessage = "This code has expired or was already used -- scan a fresh one.")
+        }
+    }
+
+    /** Manual-entry fallback for when scanning isn't possible (no camera, or
+     *  pairing remotely): resolves the server URL + the code `cmux-bridge
+     *  pair-device` also prints, into the same shape a scanned QR produces. */
+    fun onManualEntrySubmitted(serverUrl: String, code: String) {
+        if (state !is PairingUiState.Scanning) return
+        if (serverUrl.isBlank() || code.isBlank()) return
+        state = PairingUiState.Pairing
+        viewModelScope.launch {
             try {
-                container.pairingClient().pair(qr)
-                state = PairingUiState.Success
+                val qr = container.pairingClient().resolveManualCode(serverUrl.trim(), code.trim())
+                pairAndUpdateState(qr, invalidCodeMessage = "This code has expired or was already used -- ask for a fresh one.")
             } catch (e: PairingCodeInvalidException) {
-                state = PairingUiState.Error("This code has expired or was already used -- scan a fresh one.")
+                state = PairingUiState.Error("This code has expired or was already used -- ask for a fresh one.")
             } catch (e: Exception) {
                 state = PairingUiState.Error(e.message ?: "Pairing failed")
             }
+        }
+    }
+
+    private suspend fun pairAndUpdateState(qr: PairingQr, invalidCodeMessage: String) {
+        try {
+            container.pairingClient().pair(qr)
+            state = PairingUiState.Success
+        } catch (e: PairingCodeInvalidException) {
+            state = PairingUiState.Error(invalidCodeMessage)
+        } catch (e: Exception) {
+            state = PairingUiState.Error(e.message ?: "Pairing failed")
         }
     }
 

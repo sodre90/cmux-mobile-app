@@ -15,11 +15,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -69,15 +72,34 @@ fun PairingScreen(vm: PairingViewModel, onPaired: () -> Unit) {
             verticalArrangement = Arrangement.Top,
         ) {
             when (val state = vm.state) {
-                is PairingUiState.Scanning -> if (hasCameraPermission) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        CameraPreview(onQrDetected = vm::onQrScanned)
-                    }
-                } else {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Camera permission is required to scan the pairing QR code.")
-                        Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                            Text("Grant camera permission")
+                is PairingUiState.Scanning -> {
+                    var showManualEntry by remember { mutableStateOf(false) }
+                    if (showManualEntry) {
+                        ManualEntryForm(
+                            onSubmit = vm::onManualEntrySubmitted,
+                            onScanInstead = { showManualEntry = false },
+                        )
+                    } else {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Box(modifier = Modifier.weight(1f)) {
+                                if (hasCameraPermission) {
+                                    CameraPreview(onQrDetected = vm::onQrScanned)
+                                } else {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Text("Camera permission is required to scan the pairing QR code.")
+                                        Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
+                                            Text("Grant camera permission")
+                                        }
+                                    }
+                                }
+                            }
+                            TextButton(
+                                onClick = { showManualEntry = true },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Enter server URL and code manually") }
                         }
                     }
                 }
@@ -91,6 +113,45 @@ fun PairingScreen(vm: PairingViewModel, onPaired: () -> Unit) {
                 }
                 is PairingUiState.Success -> Unit // LaunchedEffect above navigates away
             }
+        }
+    }
+}
+
+/** Fallback pairing path for when scanning isn't possible (no camera, or
+ *  pairing remotely, e.g. over SSH): the server URL and the pairing code
+ *  `cmux-bridge pair-device` also prints alongside the QR are enough to
+ *  complete the same handshake (see PairingClient.resolveManualCode). */
+@Composable
+private fun ManualEntryForm(onSubmit: (serverUrl: String, code: String) -> Unit, onScanInstead: () -> Unit) {
+    var serverUrl by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Enter the server URL and pairing code shown by `cmux-bridge pair-device` on the Mac.")
+        OutlinedTextField(
+            value = serverUrl,
+            onValueChange = { serverUrl = it },
+            label = { Text("Server URL") },
+            placeholder = { Text("https://cmux.example.com") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = code,
+            onValueChange = { code = it },
+            label = { Text("Pairing code") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = { onSubmit(serverUrl, code) },
+            enabled = serverUrl.isNotBlank() && code.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Pair") }
+        TextButton(onClick = onScanInstead, modifier = Modifier.fillMaxWidth()) {
+            Text("Scan QR code instead")
         }
     }
 }
