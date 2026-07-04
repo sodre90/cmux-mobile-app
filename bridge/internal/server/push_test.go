@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
+	"github.com/sodre90/cmux-bridge/internal/e2e"
 )
 
 type fakePusher struct {
@@ -224,5 +227,66 @@ func TestHandleRegisterDeviceNotMountedOnTrustedHandler(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404 -- /devices/register must not exist on the relay-tunneled handler, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope exercises
+// /devices/register through DirectHandler with SetSessions wired up, the way
+// runAgent's production configuration always has it (agent.go's runAgent
+// unconditionally calls SetSessions with a real e2e.Store). Every other test
+// above uses newDirectRegisterTestServer, which never calls SetSessions, so
+// they only ever exercised the plaintext passthrough (s.sessions == nil) --
+// a configuration direct mode never actually runs in. This test sends a
+// genuinely e2e-encrypted envelope, the same way a correctly slot-aware
+// Android E2eInterceptor now does on the DIRECT slot, and confirms the FCM
+// token really lands in the auth store through the real encrypted pipeline.
+func TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope(t *testing.T) {
+	authStore, err := auth.Open(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+
+	tok, secret := directPairedDevice(t, authStore, sessions)
+	dev, ok := authStore.Verify(tok)
+	if !ok {
+		t.Fatal("issued token should verify")
+	}
+
+	s := New(config.Config{}, &cmux.Client{}, authStore)
+	s.SetSessions(sessions)
+
+	plaintextReq := []byte(`{"fcm_token":"fcm-real"}`)
+	ct, err := e2e.Seal(secret, e2e.Nonce(e2e.DirDeviceToAgent, 0), plaintextReq)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	envelope, err := json.Marshal(struct {
+		V  int    `json:"v"`
+		N  uint64 `json:"n"`
+		CT string `json:"ct"`
+	}{V: 1, N: 0, CT: base64.StdEncoding.EncodeToString(ct)})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(string(envelope)))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 for a real e2e-encrypted /devices/register request, got %d", resp.StatusCode)
+	}
+
+	tokens := authStore.TenantFCMTokens(dev.TenantID)
+	if len(tokens) != 1 || tokens[0] != "fcm-real" {
+		t.Fatalf("fcm token did not make it through the encrypted pipeline into the auth store: %+v", tokens)
 	}
 }
