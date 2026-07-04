@@ -1154,11 +1154,24 @@ constructor `private val`s (they were plain parameters before) since
 threading `container`/`surfaceId` through explicitly — a small, intentional
 cleanup enabled by this change, not a functional difference.
 
-- [ ] **Step 4: Build and run the full suite**
+- [ ] **Step 4: Build and confirm no new regressions**
 
-Run: `cd android && ./gradlew :app:testDebugUnitTest :app:compileDebugKotlin`
-Expected: PASS. `SessionsLogicTest` (10 pre-existing tests) must be
-unaffected since none of its pure helper functions changed.
+**Gradle constraint (discovered during Task 4, still applies here):**
+`compileDebugUnitTestKotlin` depends on `compileDebugKotlin` succeeding, so
+no unit test can run via Gradle at all until Task 9 lands (`PairingClient.kt`/
+`CmuxNavHost.kt` are still broken). Run
+`cd android && ./gradlew :app:compileDebugKotlin` and confirm every
+remaining error is attributable to `PairingClient.kt`, `CmuxNavHost.kt`, or
+another already-known pending file — not to any of the three files this
+task touches. Paste the output in your report. `SessionsLogicTest` (10
+pre-existing tests covering pure helpers this task doesn't touch) should be
+unaffected in principle, but can't be run to confirm until Task 9; note
+this as deferred verification in your report rather than claiming a green
+run you couldn't actually get. If you want genuine local confirmation now,
+you may use the same temporary-patch-then-revert technique Task 4's
+implementer used (patch the still-broken files with throwaway minimal
+fixes, run the full suite, then `git checkout --` them back before your own
+commit) — optional, not required.
 
 - [ ] **Step 5: Commit**
 
