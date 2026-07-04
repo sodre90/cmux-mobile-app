@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.sodre90.cmuxremote.data.ConnectionSlot
 
 /** The subset of [Session] that [encryptBody]/[decryptBody]/[encryptFrame]/
  *  [decryptFrame] need -- lets tests substitute an in-memory fake. */
@@ -16,12 +17,13 @@ interface PairedSession {
 }
 
 /**
- * The phone's single paired-agent session: the derived shared secret, a
- * durable monotonic send counter, and the sliding-window receive gate.
- * Unlike the Go agent (which pairs with many devices), the phone pairs with
- * exactly one agent at a time -- re-pairing overwrites this record.
+ * One paired-agent session for [slot]: the derived shared secret, a durable
+ * monotonic send counter, and the sliding-window receive gate. The phone
+ * pairs with exactly one agent per slot at a time -- re-pairing that slot
+ * overwrites its own record, but the other slot's session is untouched
+ * (both slots' keys share one prefs file, distinguished only by prefix).
  */
-class Session(context: Context) : PairedSession {
+class Session(context: Context, private val slot: ConnectionSlot) : PairedSession {
 
     private val prefs: SharedPreferences = run {
         val masterKey = MasterKey.Builder(context)
@@ -36,10 +38,36 @@ class Session(context: Context) : PairedSession {
         )
     }
 
-    fun isPaired(): Boolean = prefs.contains(KEY_SHARED_SECRET)
+    /**
+     * Migrates the pre-dual-pairing single e2e session record into this
+     * instance's slot, if [isMigrationTarget] is true. AppContainer decides
+     * this once (from [com.sodre90.cmuxremote.data.Settings.migrateLegacyIfNeeded]'s
+     * result), since a Session has no way to see the base URL its legacy
+     * pairing belonged to and infer the right slot on its own. No-op if
+     * there's no legacy record. Self-terminating: always clears the legacy
+     * keys the first time it finds data.
+     */
+    fun absorbLegacyIfTarget(isMigrationTarget: Boolean) {
+        if (!isMigrationTarget) return
+        if (!prefs.contains(KEY_SHARED_SECRET)) return
+        prefs.edit()
+            .putString(key(KEY_PEER_PUBLIC_KEY), prefs.getString(KEY_PEER_PUBLIC_KEY, null))
+            .putString(key(KEY_SHARED_SECRET), prefs.getString(KEY_SHARED_SECRET, null))
+            .putLong(key(KEY_SEND_COUNTER), prefs.getLong(KEY_SEND_COUNTER, 0L))
+            .putLong(key(KEY_RECV_HIGHEST), prefs.getLong(KEY_RECV_HIGHEST, -1L))
+            .putLong(key(KEY_RECV_WINDOW_BITS), prefs.getLong(KEY_RECV_WINDOW_BITS, 0L))
+            .remove(KEY_PEER_PUBLIC_KEY)
+            .remove(KEY_SHARED_SECRET)
+            .remove(KEY_SEND_COUNTER)
+            .remove(KEY_RECV_HIGHEST)
+            .remove(KEY_RECV_WINDOW_BITS)
+            .apply()
+    }
+
+    fun isPaired(): Boolean = prefs.contains(key(KEY_SHARED_SECRET))
 
     override fun sharedSecret(): ByteArray? =
-        prefs.getString(KEY_SHARED_SECRET, null)?.let { Base64.decode(it, Base64.NO_WRAP) }
+        prefs.getString(key(KEY_SHARED_SECRET), null)?.let { Base64.decode(it, Base64.NO_WRAP) }
 
     /** Called once, by [com.sodre90.cmuxremote.data.pairing.PairingClient] after a
      *  successful pairing handshake. Resets counters and the replay window --
@@ -47,23 +75,23 @@ class Session(context: Context) : PairedSession {
      *  meaningless (and reusing it would incorrectly reject the first messages). */
     fun setPairing(peerPublicKey: ByteArray, sharedSecret: ByteArray) {
         prefs.edit()
-            .putString(KEY_PEER_PUBLIC_KEY, Base64.encodeToString(peerPublicKey, Base64.NO_WRAP))
-            .putString(KEY_SHARED_SECRET, Base64.encodeToString(sharedSecret, Base64.NO_WRAP))
-            .putLong(KEY_SEND_COUNTER, 0L)
-            .putLong(KEY_RECV_HIGHEST, -1L)
-            .putLong(KEY_RECV_WINDOW_BITS, 0L)
+            .putString(key(KEY_PEER_PUBLIC_KEY), Base64.encodeToString(peerPublicKey, Base64.NO_WRAP))
+            .putString(key(KEY_SHARED_SECRET), Base64.encodeToString(sharedSecret, Base64.NO_WRAP))
+            .putLong(key(KEY_SEND_COUNTER), 0L)
+            .putLong(key(KEY_RECV_HIGHEST), -1L)
+            .putLong(key(KEY_RECV_WINDOW_BITS), 0L)
             .apply()
     }
 
-    /** Durable, never reset across reconnects (see Global Constraints). */
+    /** Durable, never reset across reconnects. */
     override fun nextSendCounter(): Long {
-        val n = prefs.getLong(KEY_SEND_COUNTER, 0L)
-        prefs.edit().putLong(KEY_SEND_COUNTER, n + 1).apply()
+        val n = prefs.getLong(key(KEY_SEND_COUNTER), 0L)
+        prefs.edit().putLong(key(KEY_SEND_COUNTER), n + 1).apply()
         return n
     }
 
     private fun replayWindow(): ReplayWindow =
-        ReplayWindow(prefs.getLong(KEY_RECV_HIGHEST, -1L), prefs.getLong(KEY_RECV_WINDOW_BITS, 0L))
+        ReplayWindow(prefs.getLong(key(KEY_RECV_HIGHEST), -1L), prefs.getLong(key(KEY_RECV_WINDOW_BITS), 0L))
 
     /** Read-only check -- call before attempting to decrypt. */
     override fun canAcceptRecvCounter(n: Long): Boolean = replayWindow().canAccept(n)
@@ -72,15 +100,24 @@ class Session(context: Context) : PairedSession {
     override fun commitRecvCounter(n: Long) {
         val updated = replayWindow().commit(n)
         prefs.edit()
-            .putLong(KEY_RECV_HIGHEST, updated.highestSeen)
-            .putLong(KEY_RECV_WINDOW_BITS, updated.windowBits)
+            .putLong(key(KEY_RECV_HIGHEST), updated.highestSeen)
+            .putLong(key(KEY_RECV_WINDOW_BITS), updated.windowBits)
             .apply()
     }
 
-    /** Wipes the whole session -- used when re-pairing or on the legacy-settings migration. */
+    /** Wipes this slot's session only -- used when re-pairing this slot. The
+     *  other slot's session (sharing the same prefs file) is untouched. */
     fun clear() {
-        prefs.edit().clear().apply()
+        prefs.edit()
+            .remove(key(KEY_PEER_PUBLIC_KEY))
+            .remove(key(KEY_SHARED_SECRET))
+            .remove(key(KEY_SEND_COUNTER))
+            .remove(key(KEY_RECV_HIGHEST))
+            .remove(key(KEY_RECV_WINDOW_BITS))
+            .apply()
     }
+
+    private fun key(base: String) = "${slot.name.lowercase()}_$base"
 
     private companion object {
         const val PREFS_NAME = "cmux_e2e_session"
