@@ -24,6 +24,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
@@ -287,6 +288,14 @@ func runAgent(args []string) int {
 	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, directStore)
 	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
 	srv.SetYoloStore(yolo.OpenStore(cfg.YoloStore))
+	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
+		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
+			log.Printf("agent: direct-mode push disabled: %v", err)
+		} else {
+			srv.SetPusher(p, directTenantID)
+			log.Printf("agent: direct-mode FCM push enabled for project %s", cfg.FCMProjectID)
+		}
+	}
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
