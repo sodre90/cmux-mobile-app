@@ -9,6 +9,8 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sodre90.cmuxremote.CmuxApp
 import com.sodre90.cmuxremote.MainActivity
+import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,19 +41,36 @@ class CmuxMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         if (message.data["type"] != "attention") return
-        val title = message.data["title"]?.takeIf { it.isNotBlank() }
-            ?: "Agent needs your attention"
-        // body carries the workspace's live title + status preview (the richest
-        // context cmux exposes for a prompt whose text it redacts).
-        val body = message.data["body"]?.takeIf { it.isNotBlank() }
-            ?: message.data["kind"]?.takeIf { it.isNotBlank() }
-            ?: "Open cmux to reply"
+        val container = (application as? CmuxApp)?.container
+        val (title, body) = decryptContent(container, message.data) ?: (GENERIC_TITLE to GENERIC_BODY)
         showNotification(
             title,
             body,
             workspaceId = message.data["workspace_id"]?.takeIf { it.isNotBlank() },
             surfaceId = message.data["surface_id"]?.takeIf { it.isNotBlank() },
         )
+    }
+
+    /**
+     * Decrypts the per-device e2e payload the bridge/relay embed under
+     * `data["e2e"]` -- the bridge never sends real title/body in the clear (see
+     * bridge/internal/server/push.go's buildEncryptedPush), so this is the only
+     * way to recover the actual notification content. Returns null on anything
+     * that isn't a clean decrypt: no session/key material yet, wrong slot,
+     * corrupt blob, or an unpaired/wiped local session. The caller falls back to
+     * one generic, content-free notification in every such case.
+     */
+    private fun decryptContent(container: AppContainer?, data: Map<String, String>): Pair<String, String>? {
+        val container = container ?: return null
+        val blobB64 = data["e2e"] ?: return null
+        val slot = data["slot"]?.let { name -> ConnectionSlot.entries.find { it.name.equals(name, ignoreCase = true) } }
+            ?: return null
+        return try {
+            val payload = decryptPushPayload(container.session(slot), container.cipher, blobB64)
+            payload.title to payload.body
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun showNotification(title: String, body: String, workspaceId: String?, surfaceId: String?) {
@@ -92,5 +111,7 @@ class CmuxMessagingService : FirebaseMessagingService() {
 
     companion object {
         const val CHANNEL_ID = "agent_attention"
+        private const val GENERIC_TITLE = "cmux needs your attention"
+        private const val GENERIC_BODY = "Open the app to see what's happening"
     }
 }

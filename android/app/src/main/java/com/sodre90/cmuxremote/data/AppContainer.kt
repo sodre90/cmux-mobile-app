@@ -107,4 +107,9 @@ class AppContainer(appContext: Context) {
     fun activeBridge(): FallbackBridgeClient? = if (anyBridgeConfigured()) fallbackBridge else null
 
     fun anyBridgeConfigured(): Boolean = ConnectionSlot.entries.any { settings.bridgeConfig(it) != null }
+
+    /** The paired session for [slot] -- used by CmuxMessagingService to decrypt an
+     *  incoming push, which arrives tagged with the slot that sent it rather than
+     *  going through the usual bridgeClient()/eventsSocket() request path. */
+    fun session(slot: ConnectionSlot): Session = sessions.getValue(slot)
 }
