@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
@@ -68,19 +69,27 @@ func (s *Server) maybeAutoResolve(ctx context.Context, workspaceID string) {
 	go s.resolvePendingPermission(ctx, workspaceID, mode)
 }
 
-// resolvePendingPermission finds any pending "permission" feed item whose cwd
-// matches workspaceID's live working directory and replies to it with mode,
-// unblocking the agent without a phone tap.
+// resolvePendingPermission finds any pending "permissionRequest" feed item
+// whose cwd matches workspaceID's live working directory and replies to it
+// with mode, unblocking the agent without a phone tap.
 //
 // Pending items are keyed by workstream_id -- the agent's own session ID
 // (e.g. "claude-<uuid>"), confirmed live to be a different ID space than
 // cmux's workspace ID -- so correlation is done on cwd instead, the one field
 // both a pending item and a workspace carry in common.
+//
+// mobile.workspace.list's current_directory and feed.list's cwd disagree on
+// symlinks -- confirmed live, e.g. workspace.list reports "/tmp/foo" while
+// the same workspace's pending item reports "/private/tmp/foo" (macOS
+// resolves /tmp -> /private/tmp). Comparing raw strings would silently drop
+// every match for a workspace under /tmp, /var, /etc, or any other
+// symlinked path, so both sides are canonicalized before comparing.
 func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode string) {
 	ws, ok := s.findWorkspace(ctx, workspaceID)
 	if !ok || ws.CWD == "" {
 		return
 	}
+	wantCWD := canonicalPath(ws.CWD)
 	raw, err := s.cmux.Rpc(ctx, "feed.list", map[string]any{"pending_only": true})
 	if err != nil {
 		return
@@ -92,7 +101,7 @@ func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode
 		return
 	}
 	for _, item := range resp.Items {
-		if item.Kind != "permission" || item.Status != "pending" || item.CWD != ws.CWD {
+		if item.Kind != "permissionRequest" || item.Status != "pending" || canonicalPath(item.CWD) != wantCWD {
 			continue
 		}
 		_, _ = s.cmux.Rpc(ctx, "feed.permission.reply", map[string]any{
@@ -100,4 +109,14 @@ func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode
 			"mode":       mode,
 		})
 	}
+}
+
+// canonicalPath resolves symlinks so paths reported through different cmux
+// RPCs can be compared for equality; a path that no longer exists (or any
+// other resolution failure) is returned unchanged rather than dropped.
+func canonicalPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return p
 }

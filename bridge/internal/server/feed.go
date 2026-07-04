@@ -13,14 +13,18 @@ import (
 // against a live prompt; until then the client sends cmux-native params under
 // "params".
 type FeedReply struct {
-	Kind      string         `json:"kind"`       // "permission" | "question" | "exitPlan"
+	// Kind is cmux's own feed.list item kind. "permissionRequest" is confirmed
+	// live (cmux rpc feed.list); "exitPlan" is not yet confirmed against a
+	// real exit-plan prompt and may need correcting the same way
+	// "permission" did.
+	Kind      string         `json:"kind"`       // "permissionRequest" | "question" | "exitPlan"
 	RequestID string         `json:"request_id"` // required by cmux
 	Params    map[string]any `json:"params,omitempty"`
 }
 
 func feedMethod(kind string) (string, bool) {
 	switch kind {
-	case "permission":
+	case "permissionRequest":
 		return "feed.permission.reply", true
 	case "question":
 		return "feed.question.reply", true

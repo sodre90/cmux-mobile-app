@@ -74,7 +74,7 @@ class DtosTest {
     @Test
     fun encodesFeedReplyWithRequestIdAndParams() {
         val params = buildJsonObject { put("decision", "approve") }
-        val reply = FeedReply(kind = "permission", requestId = "req-9", params = params)
+        val reply = FeedReply(kind = "permissionRequest", requestId = "req-9", params = params)
         val out = BridgeJson.encodeToString(FeedReply.serializer(), reply)
         assertTrue(out.contains("\"request_id\":\"req-9\""))
         assertTrue(out.contains("\"decision\":\"approve\""))

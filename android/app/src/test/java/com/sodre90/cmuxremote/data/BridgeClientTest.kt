@@ -61,7 +61,7 @@ class BridgeClientTest {
         server.enqueue(MockResponse().setBody("""{"ok":true}"""))
 
         val reply = FeedReply(
-            kind = "permission",
+            kind = "permissionRequest",
             requestId = "req-1",
             params = buildJsonObject { put("decision", "approve") },
         )

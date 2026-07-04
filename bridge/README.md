@@ -342,7 +342,7 @@ never touch the real socket.
 enabled via `POST /sessions/{id}/yolo-mode`. The mode (`always`/`all`/
 `bypass`) is persisted locally on the Mac agent (`~/.config/cmux-bridge/yolo.json`,
 keyed by workspace ID — never sent to cmux itself). When a workspace with a
-mode set gets a pending `permission`-kind feed item, the agent replies to it
+mode set gets a pending `permissionRequest`-kind feed item, the agent replies to it
 with that mode automatically, with no phone round-trip. `bypass` mirrors
 Claude Code's own `--dangerously-skip-permissions`: cmux's wrapper already
 launches Claude with `--allow-dangerously-skip-permissions`, so a single

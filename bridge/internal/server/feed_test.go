@@ -34,7 +34,7 @@ func TestFeedPermissionReplyRouted(t *testing.T) {
 	defer srv.Close()
 
 	resp := postFeed(t, srv.URL, tok, "/feed/F1/reply",
-		`{"kind":"permission","request_id":"REQ1","params":{"decision":"approve"}}`)
+		`{"kind":"permissionRequest","request_id":"REQ1","params":{"decision":"approve"}}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
@@ -79,7 +79,7 @@ func TestFeedMissingRequestID400(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	resp := postFeed(t, srv.URL, tok, "/feed/F1/reply", `{"kind":"permission"}`)
+	resp := postFeed(t, srv.URL, tok, "/feed/F1/reply", `{"kind":"permissionRequest"}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400 for missing request_id, got %d", resp.StatusCode)

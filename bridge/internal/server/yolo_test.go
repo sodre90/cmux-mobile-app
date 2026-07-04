@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ case "$2" in
     echo '{"workspaces":[{"id":"WS1","current_directory":"/tmp/proj","title":"t","terminals":[]}]}'
     ;;
   feed.list)
-    echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"permission","status":"pending","cwd":"/tmp/proj"}]}'
+    echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"permissionRequest","status":"pending","cwd":"/tmp/proj"}]}'
     ;;
   *)
     echo '{"ok":true}'
@@ -40,6 +41,55 @@ func TestResolvePendingPermissionRepliesToMatchingCWD(t *testing.T) {
 	for _, want := range []string{"feed.permission.reply", "REQ1", "bypass"} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("log missing %q; got:\n%s", want, log)
+		}
+	}
+}
+
+// TestResolvePendingPermissionMatchesSymlinkedCWD reproduces a live-observed
+// mismatch: mobile.workspace.list reports a workspace's raw current_directory
+// (which can be a symlink, e.g. macOS's /tmp -> /private/tmp) while feed.list
+// reports the same location already resolved. A plain string comparison
+// silently drops every match for such a workspace; resolvePendingPermission
+// must canonicalize both sides before comparing.
+func TestResolvePendingPermissionMatchesSymlinkedCWD(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.workspace.list)
+    echo '{"workspaces":[{"id":"WS1","current_directory":"` + alias + `","title":"t","terminals":[]}]}'
+    ;;
+  feed.list)
+    echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"permissionRequest","status":"pending","cwd":"` + real + `"}]}'
+    ;;
+  *)
+    echo '{"ok":true}'
+    ;;
+esac
+`
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, _ := newTestServer(t, script)
+
+	s.resolvePendingPermission(context.Background(), "WS1", "bypass")
+
+	data, _ := os.ReadFile(logPath)
+	log := string(data)
+	for _, want := range []string{"feed.permission.reply", "REQ1", "bypass"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("log missing %q (workspace cwd %q, feed item cwd %q); got:\n%s", want, alias, real, log)
 		}
 	}
 }
