@@ -13,6 +13,9 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,8 +27,16 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
-	"tailscale.com/client/tailscale"
-	"tailscale.com/ipn/ipnstate"
+)
+
+// certRefreshInterval is how often serveDirect re-checks the direct-mode
+// TLS certificate's remaining validity via `tailscale cert`.
+// certMinValidity is the minimum remaining validity requested each time --
+// well short of Let's Encrypt's 90-day lifetime, so repeated calls within
+// that window are cheap no-ops rather than forcing a fresh issuance.
+const (
+	certRefreshInterval = 24 * time.Hour
+	certMinValidity     = 30 * 24 * time.Hour
 )
 
 func defaultAgentConfigPath() string {
@@ -116,11 +127,11 @@ func directListenPort(listenAddr string) (string, error) {
 // callers must fail closed on that, not fall back to binding all
 // interfaces, since Tailscale's own network ACLs are the actual
 // access-control boundary for the direct-mode listener.
-func selfTailscaleIPv4(st *ipnstate.Status) (netip.Addr, error) {
-	if st == nil || st.Self == nil {
+func selfTailscaleIPv4(st *tailscaleSelf) (netip.Addr, error) {
+	if st == nil {
 		return netip.Addr{}, errors.New("no Self status -- is Tailscale up?")
 	}
-	for _, ip := range st.Self.TailscaleIPs {
+	for _, ip := range st.TailscaleIPs {
 		if ip.Is4() {
 			return ip, nil
 		}
@@ -128,19 +139,46 @@ func selfTailscaleIPv4(st *ipnstate.Status) (netip.Addr, error) {
 	return netip.Addr{}, errors.New("no Tailscale IPv4 address assigned yet -- is Tailscale up?")
 }
 
+// refreshDirectCert re-runs tailscaleCert on a ticker for as long as ctx is
+// live, atomically swapping certVal to the reloaded certificate on success.
+// A failed refresh (tailscaled down, transient ACME error) logs and keeps
+// serving the previous certificate rather than tearing down the listener.
+func refreshDirectCert(ctx context.Context, domain, certFile, keyFile string, certVal *atomic.Pointer[tls.Certificate]) {
+	ticker := time.NewTicker(certRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if err := tailscaleCert(ctx, domain, certFile, keyFile, certMinValidity); err != nil {
+			log.Printf("agent: direct mode: cert refresh failed, keeping current cert: %v", err)
+			continue
+		}
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			log.Printf("agent: direct mode: cert refresh: reload failed, keeping current cert: %v", err)
+			continue
+		}
+		certVal.Store(&cert)
+	}
+}
+
 // serveDirect runs the direct (Tailscale) listener until ctx is canceled or
 // the listener fails. It never affects the relay dial loop running
 // alongside it in runAgent. store/tenantID back both the pairing routes and
 // (via handler, already bound to the same store through Server.store)
 // authenticated requests -- one auth.Store, opened once, for the whole
-// listener.
+// listener. certDir holds the direct-mode TLS certificate/key files
+// (refreshed periodically via tailscaleCert); it's created if missing.
 //
 // It binds ONLY to this Mac's own Tailscale IPv4 address, never to all
 // interfaces: the design's whole premise is that Tailscale's own network
 // ACLs are the access-control boundary for these routes (some of which,
 // like the pairing endpoints, are otherwise unauthenticated), so listening
 // on 0.0.0.0/[::] here would let any LAN-adjacent device reach them too.
-func serveDirect(ctx context.Context, listenAddr string, store *auth.Store, tenantID string, handler http.Handler) error {
+func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler) error {
 	mux := http.NewServeMux()
 	server.MountDirectPairing(mux, store, tenantID)
 	mux.Handle("/", handler)
@@ -149,22 +187,47 @@ func serveDirect(ctx context.Context, listenAddr string, store *auth.Store, tena
 	if err != nil {
 		return fmt.Errorf("direct mode: %w", err)
 	}
-	lc := &tailscale.LocalClient{}
-	st, err := lc.Status(ctx)
+	st, err := tailscaleSelfStatus(ctx)
 	if err != nil {
-		return fmt.Errorf("direct mode: tailscale status: %w", err)
+		return fmt.Errorf("direct mode: %w", err)
 	}
 	ip, err := selfTailscaleIPv4(st)
 	if err != nil {
 		return fmt.Errorf("direct mode: %w", err)
 	}
+	if st.DNSName == "" {
+		return errors.New("direct mode: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
+	}
+	domain := strings.TrimSuffix(st.DNSName, ".")
 	bindAddr := net.JoinHostPort(ip.String(), port)
+
+	if err := os.MkdirAll(certDir, 0o700); err != nil {
+		return fmt.Errorf("direct mode: cert dir: %w", err)
+	}
+	certFile := filepath.Join(certDir, "direct-cert.pem")
+	keyFile := filepath.Join(certDir, "direct-key.pem")
+	if err := tailscaleCert(ctx, domain, certFile, keyFile, certMinValidity); err != nil {
+		return fmt.Errorf("direct mode: %w", err)
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("direct mode: load cert: %w", err)
+	}
+	var certVal atomic.Pointer[tls.Certificate]
+	certVal.Store(&cert)
+	refreshCtx, cancelRefresh := context.WithCancel(ctx)
+	defer cancelRefresh()
+	go refreshDirectCert(refreshCtx, domain, certFile, keyFile, &certVal)
 
 	tcpLn, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		return fmt.Errorf("direct mode: listen %s: %w", bindAddr, err)
 	}
-	tlsLn := tls.NewListener(tcpLn, &tls.Config{GetCertificate: lc.GetCertificate})
+	tlsLn := tls.NewListener(tcpLn, &tls.Config{
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certVal.Load(), nil
+		},
+	})
 
 	log.Printf("agent: direct listener up on %s (tailscale-only)", bindAddr)
 	errCh := make(chan error, 1)
@@ -228,8 +291,9 @@ func runAgent(args []string) int {
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
 	if cfg.DirectListen != "" {
+		certDir := filepath.Join(filepath.Dir(cfg.DirectAuthStore), "direct-certs")
 		go func() {
-			if err := serveDirect(ctx, cfg.DirectListen, directStore, directTenantID, srv.DirectHandler()); err != nil && ctx.Err() == nil {
+			if err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler()); err != nil && ctx.Err() == nil {
 				log.Printf("agent: direct listener ended: %v", err)
 			}
 		}()

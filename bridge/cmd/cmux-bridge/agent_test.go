@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
-	"tailscale.com/ipn/ipnstate"
 )
 
 func TestNextBackoffCaps(t *testing.T) {
@@ -138,12 +137,10 @@ func TestDirectListenPortRejectsMalformedAddr(t *testing.T) {
 }
 
 func TestSelfTailscaleIPv4PrefersIPv4(t *testing.T) {
-	st := &ipnstate.Status{
-		Self: &ipnstate.PeerStatus{
-			TailscaleIPs: []netip.Addr{
-				netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6 tailnet address, listed first
-				netip.MustParseAddr("100.64.1.2"),
-			},
+	st := &tailscaleSelf{
+		TailscaleIPs: []netip.Addr{
+			netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6 tailnet address, listed first
+			netip.MustParseAddr("100.64.1.2"),
 		},
 	}
 	ip, err := selfTailscaleIPv4(st)
@@ -155,12 +152,6 @@ func TestSelfTailscaleIPv4PrefersIPv4(t *testing.T) {
 	}
 }
 
-func TestSelfTailscaleIPv4NoSelfErrors(t *testing.T) {
-	if _, err := selfTailscaleIPv4(&ipnstate.Status{}); err == nil {
-		t.Fatal("want error when Status.Self is nil (tailscale not up)")
-	}
-}
-
 func TestSelfTailscaleIPv4NilStatusErrors(t *testing.T) {
 	if _, err := selfTailscaleIPv4(nil); err == nil {
 		t.Fatal("want error for a nil status")
@@ -168,11 +159,9 @@ func TestSelfTailscaleIPv4NilStatusErrors(t *testing.T) {
 }
 
 func TestSelfTailscaleIPv4NoIPv4Errors(t *testing.T) {
-	st := &ipnstate.Status{
-		Self: &ipnstate.PeerStatus{
-			TailscaleIPs: []netip.Addr{
-				netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6-only, e.g. IPv4 not yet assigned
-			},
+	st := &tailscaleSelf{
+		TailscaleIPs: []netip.Addr{
+			netip.MustParseAddr("fd7a:115c:a1e0::1"), // IPv6-only, e.g. IPv4 not yet assigned
 		},
 	}
 	if _, err := selfTailscaleIPv4(st); err == nil {

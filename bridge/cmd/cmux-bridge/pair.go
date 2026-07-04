@@ -20,7 +20,6 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
-	"tailscale.com/client/tailscale"
 )
 
 // pairingQR is the JSON payload rendered into the QR code. The phone scans
@@ -187,17 +186,16 @@ func runPairDevice(args []string) int {
 			log.Printf("pair-device: --direct requires direct_listen to be set in %s", *cfgPath)
 			return 1
 		}
-		lc := &tailscale.LocalClient{}
-		st, err := lc.Status(context.Background())
+		st, err := tailscaleSelfStatus(context.Background())
 		if err != nil {
 			log.Printf("pair-device: tailscale status: %v", err)
 			return 1
 		}
-		if st.Self == nil || st.Self.DNSName == "" {
+		if st.DNSName == "" {
 			log.Printf("pair-device: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
 			return 1
 		}
-		host := strings.TrimSuffix(st.Self.DNSName, ".")
+		host := strings.TrimSuffix(st.DNSName, ".")
 		agentBase = "https://" + host + cfg.DirectListen
 		// The direct listener's cert is a real, publicly-trusted Let's
 		// Encrypt cert (tailscale cert) -- the default transport's system
