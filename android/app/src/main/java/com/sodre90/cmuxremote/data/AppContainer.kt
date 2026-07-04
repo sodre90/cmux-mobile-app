@@ -79,18 +79,19 @@ class AppContainer(appContext: Context) {
     fun pairingClient(slot: ConnectionSlot): PairingClient =
         PairingClient(OkHttpClient(), identity, sessions.getValue(slot), settings, slot)
 
+    private val fallbackBridge = FallbackBridgeClient(
+        primary = { bridgeClient(ConnectionSlot.RELAY) },
+        fallback = { bridgeClient(ConnectionSlot.DIRECT) },
+    )
+
     /** The fallback-aware entry point most read/write call sites should use
      *  instead of bridgeClient(slot) directly. Null only when neither slot
      *  is paired yet (matches the old single-slot bridgeClient()'s null
      *  contract, so existing "Bridge not configured" call sites need no
-     *  shape change). */
-    fun activeBridge(): FallbackBridgeClient? {
-        if (!anyBridgeConfigured()) return null
-        return FallbackBridgeClient(
-            primary = { bridgeClient(ConnectionSlot.RELAY) },
-            fallback = { bridgeClient(ConnectionSlot.DIRECT) },
-        )
-    }
+     *  shape change). A single shared instance is kept (not rebuilt per
+     *  call) so FallbackBridgeClient's 30s "primary is down" penalty window
+     *  actually persists across repeated calls from ViewModels. */
+    fun activeBridge(): FallbackBridgeClient? = if (anyBridgeConfigured()) fallbackBridge else null
 
     fun anyBridgeConfigured(): Boolean = ConnectionSlot.entries.any { settings.bridgeConfig(it) != null }
 }

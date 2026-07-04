@@ -144,6 +144,49 @@ class FallbackBridgeClientTest {
     }
 
     @Test
+    fun primary4xxPropagatesWithoutFailoverOrPenalty() {
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
+        primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}""")) // must be consumed by the 2nd call
+        val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
+
+        try {
+            runBlocking { fb.sessions() }
+            fail("expected the primary's 409 to propagate instead of failing over")
+        } catch (e: BridgeException) {
+            assertEquals(409, e.code)
+        }
+        assertEquals(0, fallbackServer.requestCount)
+
+        // No penalty was set, so the second call must still try primary first.
+        val result = runBlocking { fb.sessions() }
+
+        assertEquals(0, result.size)
+        assertEquals(2, primaryServer.requestCount)
+        assertEquals(0, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun primary5xxFailsOverAndSetsPenalty() {
+        primaryServer.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"tunnel_down"}"""))
+        primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}""")) // must NOT be consumed by the 2nd call
+        fallbackServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))
+        fallbackServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))
+        var clock = 1_000_000L
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+            now = { clock },
+        )
+
+        runBlocking { fb.sessions() } // primary 503s, falls back, sets 30s penalty
+        clock += 10_000L // still inside the window
+        runBlocking { fb.sessions() } // must skip primary entirely
+
+        assertEquals(1, primaryServer.requestCount)
+        assertEquals(2, fallbackServer.requestCount)
+    }
+
+    @Test
     fun penaltyWindowExpiresAndRetriesPrimary() {
         primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))

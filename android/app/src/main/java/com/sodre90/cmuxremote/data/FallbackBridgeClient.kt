@@ -6,10 +6,18 @@ import java.io.IOException
 /**
  * Wraps a primary (relay) and fallback (direct) [BridgeClient] supplier.
  * Every call tries primary first and transparently retries against
- * fallback on an [IOException] (primary unreachable/timeout), remembering
- * the failure for [PENALTY_MS] so a dead relay isn't re-tried on every
- * single call. The penalty is in-memory only -- a fresh process always
- * tries primary first again.
+ * fallback on a genuine reachability failure -- a transport-level
+ * [IOException], or a [BridgeException] with a 5xx code (relay reachable,
+ * but its tunnel to the Mac agent is broken) -- remembering the failure for
+ * [PENALTY_MS] so a dead relay isn't re-tried on every single call. The
+ * penalty is in-memory only -- a fresh process always tries primary first
+ * again.
+ *
+ * A 4xx [BridgeException] from primary is an application-level error (bad
+ * request, auth, stale pairing, etc.), not a reachability problem: it is
+ * NOT treated as a failover trigger and propagates immediately with no
+ * penalty set, so mutating calls (replyFeed/renameWorkspace/setYoloMode)
+ * are never silently re-executed against the wrong backend.
  */
 class FallbackBridgeClient(
     private val primary: () -> BridgeClient?,
@@ -33,6 +41,7 @@ class FallbackBridgeClient(
             block(primaryClient)
         } catch (e: IOException) {
             if (fallbackClient == null) throw e
+            if (e is BridgeException && e.code in 400..499) throw e
             primaryDownUntil = now() + PENALTY_MS
             block(fallbackClient)
         }

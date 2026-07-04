@@ -130,6 +130,10 @@ class PairingClientTest {
         }
     }
 
+    /** Exercises TestablePairingClient's closure-capture shape only -- does
+     *  NOT construct or call the real PairingClient class. The real
+     *  PairingClient.pair() slot-threading is a two-line, branch-free
+     *  pass-through verified by inspection, not by this test. */
     @Test
     fun pairWritesIntoTheConstructedSlotNotAHardcodedOne() {
         val (agentPriv, agentPub) = generateX25519KeyPair()
