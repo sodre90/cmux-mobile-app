@@ -71,6 +71,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rq registerDeviceRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.FCMToken == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing fcm_token"})
 		return

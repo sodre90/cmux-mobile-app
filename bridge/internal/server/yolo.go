@@ -19,6 +19,7 @@ type setYoloModeRequest struct {
 func (s *Server) handleSetYoloMode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req setYoloModeRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return

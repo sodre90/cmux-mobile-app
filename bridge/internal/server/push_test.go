@@ -194,6 +194,33 @@ func TestHandleRegisterDeviceRejectsMissingFCMToken(t *testing.T) {
 	}
 }
 
+func TestHandleRegisterDeviceRejectsOversizedBody(t *testing.T) {
+	s, store := newDirectRegisterTestServer(t)
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone", "test-pubkey-b64")
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	oversized := `{"fcm_token":"` + strings.Repeat("a", 5<<10) + `"}`
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(oversized))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for a body over the 4KB cap, got %d", resp.StatusCode)
+	}
+
+	tokens := store.TenantFCMTokens(tenant)
+	if len(tokens) != 0 {
+		t.Fatalf("oversized request must not be stored: %+v", tokens)
+	}
+}
+
 func TestHandleRegisterDeviceRejectsInvalidBearer(t *testing.T) {
 	s, _ := newDirectRegisterTestServer(t)
 

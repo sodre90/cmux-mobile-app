@@ -47,6 +47,7 @@ func (s *Server) handleFeedPending(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFeedReply(w http.ResponseWriter, r *http.Request) {
 	var fr FeedReply
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&fr); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
