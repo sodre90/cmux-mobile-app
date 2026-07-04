@@ -3,6 +3,8 @@ package com.sodre90.cmuxremote.ui.terminal
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
@@ -28,14 +30,17 @@ data class TerminalUiState(
 )
 
 class TerminalViewModel(
-    container: AppContainer,
-    surfaceId: String,
+    private val container: AppContainer,
+    private val surfaceId: String,
 ) : ViewModel() {
 
-    private val socket = container.terminalSocket(surfaceId)
     private val _state = MutableStateFlow(TerminalUiState())
     val state: StateFlow<TerminalUiState> = _state.asStateFlow()
     private var job: Job? = null
+    private var preferredSlot = ConnectionSlot.RELAY
+
+    @Volatile
+    private var activeSocket: TerminalSocket? = null
 
     // Kept separate from [state] (which the live grid-frame loop replaces
     // wholesale on every frame) so a fast terminal stream never clobbers this
@@ -46,15 +51,15 @@ class TerminalViewModel(
 
     init {
         connect()
-        loadYoloMode(container, surfaceId)
+        loadYoloMode()
     }
 
     // The terminal route is keyed by surface (pane) id, but YOLO mode is a
     // workspace-level setting -- several panes can share one workspace -- so
     // this finds the owning workspace via the existing sessions list rather
     // than needing a new bridge endpoint or extra nav args.
-    private fun loadYoloMode(container: AppContainer, surfaceId: String) {
-        val client = container.bridgeClient() ?: return
+    private fun loadYoloMode() {
+        val client = container.activeBridge() ?: return
         viewModelScope.launch {
             try {
                 val ws = client.sessions().firstOrNull { ws -> ws.terminals.any { it.id == surfaceId } }
@@ -69,8 +74,7 @@ class TerminalViewModel(
     fun reconnect() = connect()
 
     private fun connect() {
-        val s = socket
-        if (s == null) {
+        if (!container.anyBridgeConfigured()) {
             _state.value = TerminalUiState(error = "Bridge not configured")
             return
         }
@@ -83,8 +87,12 @@ class TerminalViewModel(
         job = viewModelScope.launch {
             var backoff = INITIAL_BACKOFF_MS
             while (isActive) {
+                val socket = container.terminalSocket(preferredSlot, surfaceId)
+                    ?: container.terminalSocket(preferredSlot.other(), surfaceId)
+                if (socket == null) { delay(backoff); continue }
+                activeSocket = socket
                 try {
-                    s.connect().collect { frame ->
+                    socket.connect().collect { frame ->
                         val rg = frame.grid ?: return@collect
                         backoff = INITIAL_BACKOFF_MS
                         _state.value = TerminalUiState(
@@ -95,7 +103,7 @@ class TerminalViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    // Transient drop: keep the last grid visible and retry.
+                    preferredSlot = preferredSlot.other()
                 }
                 if (!isActive) break
                 delay(backoff)
@@ -105,14 +113,14 @@ class TerminalViewModel(
     }
 
     fun sendText(text: String) {
-        socket?.send(TerminalUp(type = "input", text = text))
+        activeSocket?.send(TerminalUp(type = "input", text = text))
     }
 
     fun resize(columns: Int, rows: Int) {
-        socket?.send(TerminalUp(type = "resize", columns = columns, rows = rows))
+        activeSocket?.send(TerminalUp(type = "resize", columns = columns, rows = rows))
     }
 
     override fun onCleared() {
-        socket?.close()
+        activeSocket?.close()
     }
 }

@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.inbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import kotlinx.coroutines.CancellationException
@@ -30,8 +31,7 @@ private const val MAX_BACKOFF_MS = 5_000L
  */
 class InboxViewModel(container: AppContainer) : ViewModel() {
 
-    private val client = container.bridgeClient()
-    private val events = container.eventsSocket()
+    private val client = container.activeBridge()
 
     private val _items = MutableStateFlow<List<PendingFeedItem>>(emptyList())
     val items: StateFlow<List<PendingFeedItem>> = _items.asStateFlow()
@@ -46,24 +46,27 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
         // socket is dropped when the app is backgrounded, so reconnect with
         // backoff and re-sync pending items after each gap instead of dying on
         // the first disconnect.
-        events?.let { e ->
+        if (container.anyBridgeConfigured()) {
             viewModelScope.launch {
+                var preferred = ConnectionSlot.RELAY
                 var backoff = INITIAL_BACKOFF_MS
                 while (isActive) {
+                    val events = container.eventsSocket(preferred) ?: container.eventsSocket(preferred.other())
+                    if (events == null) { delay(backoff); continue }
                     try {
-                        e.connect().collect { frame ->
+                        events.connect().collect { frame ->
                             backoff = INITIAL_BACKOFF_MS
                             if (frame.type == "feed" && frame.needsAttention) refresh()
                         }
                     } catch (ex: CancellationException) {
                         throw ex
                     } catch (_: Exception) {
-                        // Transient drop; reconnect below.
+                        preferred = preferred.other()
                     }
                     if (!isActive) break
                     delay(backoff)
                     backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
-                    refresh() // catch anything that changed while disconnected
+                    refresh()
                 }
             }
         }
