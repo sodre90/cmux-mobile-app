@@ -106,6 +106,11 @@ func TestMaybeSendPushNoopWithoutStore(t *testing.T) {
 	}
 }
 
+// TestMaybeSendPushSendsToEveryRegisteredToken covers the s.sessions == nil
+// case -- newPushTestServer never calls SetSessions, so this proves the
+// no-e2e-configured fallback: push still reaches every token, with no real
+// content, and no "e2e" data key at all. TestMaybeSendPushSendsEncryptedPayload
+// below covers the real, always-on-in-production configuration.
 func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 	s, store := newPushTestServer(t)
 	tenant, _ := store.CreateTenant()
@@ -128,18 +133,74 @@ func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 	got := map[string]bool{}
 	for _, c := range fp.calls {
 		got[c.token] = true
-		if c.data["type"] != "attention" || c.data["feed_id"] != "F1" || c.data["workspace_id"] != "W1" || c.data["kind"] != "permissionRequest" {
+		if c.data["type"] != "attention" || c.data["feed_id"] != "F1" || c.data["workspace_id"] != "W1" || c.data["kind"] != "permissionRequest" || c.data["slot"] != "direct" {
 			t.Fatalf("unexpected push data: %+v", c.data)
 		}
-		if c.title != "cmux-app" {
-			t.Fatalf("title = %q, want the frame's Title (workspace name)", c.title)
+		if _, ok := c.data["e2e"]; ok {
+			t.Fatalf("no e2e session configured -- e2e key must be absent, got %+v", c.data)
 		}
-		if c.body != "Claude needs your permission" {
-			t.Fatalf("body = %q, want the frame's Preview", c.body)
+		if c.title != "" || c.body != "" {
+			t.Fatalf("real content must never be passed to Send as plaintext, got title=%q body=%q", c.title, c.body)
 		}
 	}
 	if !got["fcm-1"] || !got["fcm-2"] {
 		t.Fatalf("expected both tokens to receive push, got calls: %+v", fp.calls)
+	}
+}
+
+// TestMaybeSendPushSendsEncryptedPayload exercises the real, always-on
+// production configuration (runAgent unconditionally calls SetSessions):
+// maybeSendPush must forward only the device's own encrypted payload from
+// f.EncryptedPush, and that payload must decrypt back to the frame's real
+// title/body -- proving the wire format is exactly what CmuxMessagingService
+// on Android expects to decrypt.
+func TestMaybeSendPushSendsEncryptedPayload(t *testing.T) {
+	s, store := newPushTestServer(t)
+	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	s.SetSessions(sessions)
+	tok, secret := directPairedDevice(t, store, sessions)
+	dev, ok := store.Verify(tok)
+	if !ok {
+		t.Fatal("issued token should verify")
+	}
+	store.SetFCMToken(tok, "fcm-1")
+
+	fp := &fakePusher{}
+	s.SetPusher(fp, dev.TenantID)
+
+	f := EventFrame{
+		NeedsAttention: true, FeedID: "F1", WorkspaceID: "W1", SurfaceID: "S1",
+		Title: "cmux-app", Preview: "Claude needs your permission", Kind: "permissionRequest",
+	}
+	f.EncryptedPush = s.buildEncryptedPush(f)
+
+	s.maybeSendPush(context.Background(), f)
+
+	if fp.callCount() != 1 {
+		t.Fatalf("want 1 push call, got %d", fp.callCount())
+	}
+	c := fp.calls[0]
+	if c.title != "" || c.body != "" {
+		t.Fatalf("real content must never be passed to Send as plaintext, got title=%q body=%q", c.title, c.body)
+	}
+	blobB64, ok := c.data["e2e"]
+	if !ok {
+		t.Fatalf("expected an e2e data key, got %+v", c.data)
+	}
+	blob, err := base64.StdEncoding.DecodeString(blobB64)
+	if err != nil {
+		t.Fatalf("e2e blob not valid base64: %v", err)
+	}
+	_, plain, err := e2e.DecodeFrame(secret, e2e.DirAgentToDevice, blob)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	var got pushPayload
+	if err := json.Unmarshal(plain, &got); err != nil {
+		t.Fatalf("unmarshal decrypted payload: %v", err)
+	}
+	if got.Title != "cmux-app" || got.Body != "Claude needs your permission" {
+		t.Fatalf("decrypted payload = %+v, want title=cmux-app body=Claude needs your permission", got)
 	}
 }
 
@@ -205,9 +266,9 @@ func TestHandleRegisterDeviceStoresToken(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 
-	tokens := store.TenantFCMTokens(tenant)
-	if len(tokens) != 1 || tokens[0] != "fcm-abc" {
-		t.Fatalf("token not stored correctly: %+v", tokens)
+	devices := store.TenantFCMDevices(tenant)
+	if len(devices) != 1 || devices[0].FCMToken != "fcm-abc" {
+		t.Fatalf("token not stored correctly: %+v", devices)
 	}
 }
 
@@ -253,9 +314,9 @@ func TestHandleRegisterDeviceRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("want 400 for a body over the 4KB cap, got %d", resp.StatusCode)
 	}
 
-	tokens := store.TenantFCMTokens(tenant)
-	if len(tokens) != 0 {
-		t.Fatalf("oversized request must not be stored: %+v", tokens)
+	devices := store.TenantFCMDevices(tenant)
+	if len(devices) != 0 {
+		t.Fatalf("oversized request must not be stored: %+v", devices)
 	}
 }
 
@@ -350,8 +411,8 @@ func TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope(t *testing.T) {
 		t.Fatalf("want 200 for a real e2e-encrypted /devices/register request, got %d", resp.StatusCode)
 	}
 
-	tokens := authStore.TenantFCMTokens(dev.TenantID)
-	if len(tokens) != 1 || tokens[0] != "fcm-real" {
-		t.Fatalf("fcm token did not make it through the encrypted pipeline into the auth store: %+v", tokens)
+	devices := authStore.TenantFCMDevices(dev.TenantID)
+	if len(devices) != 1 || devices[0].FCMToken != "fcm-real" {
+		t.Fatalf("fcm token did not make it through the encrypted pipeline into the auth store: %+v", devices)
 	}
 }

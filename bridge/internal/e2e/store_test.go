@@ -42,6 +42,30 @@ func TestSharedSecretUnknownDevice(t *testing.T) {
 	}
 }
 
+func TestDeviceIDsListsAllPairedDevices(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if got := s.DeviceIDs(); len(got) != 0 {
+		t.Fatalf("expected no devices yet, got %v", got)
+	}
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret1")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	if err := s.AddDevice("dev2", testPubKey(t), []byte("secret2")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	got := s.DeviceIDs()
+	want := map[string]bool{"dev1": true, "dev2": true}
+	if len(got) != len(want) {
+		t.Fatalf("DeviceIDs = %v, want exactly %v", got, want)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("unexpected deviceID %q in %v", id, got)
+		}
+	}
+}
+
 func TestNextSendCounterIncrementsAndPersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")

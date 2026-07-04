@@ -82,6 +82,25 @@ func (s *Store) AddDevice(deviceID string, devicePub *ecdh.PublicKey, sharedSecr
 	return s.save(f)
 }
 
+// DeviceIDs returns every deviceID this agent has ever paired with (direct or
+// relay-mediated alike -- AddDevice is called identically by both pairing
+// flows, so this one local file is the complete list). Used to build a
+// per-device encrypted push payload for each paired device without needing
+// to know which slot/backend a given device belongs to.
+func (s *Store) DeviceIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(f.Devices))
+	for id := range f.Devices {
+		out = append(out, id)
+	}
+	return out
+}
+
 func (s *Store) SharedSecret(deviceID string) (secret []byte, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

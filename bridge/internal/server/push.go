@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -48,32 +49,75 @@ func (f EventFrame) PushBody() string {
 	}
 }
 
-// maybeSendPush fans a NeedsAttention frame out to every FCM token
-// registered in this agent's own local device store (direct-mode pairs
-// only -- the relay's separate store/pushmon subscription handles
-// relay-paired devices completely independently and is untouched by this).
-// No-op with zero store/network cost when direct mode or FCM aren't
+// pushPayload is the plaintext JSON encrypted per-device into
+// EventFrame.EncryptedPush -- the only form a NeedsAttention frame's
+// notification content ever takes once it leaves this agent, whether bound
+// for relay-mode fan-out or FCM/Google's own servers.
+type pushPayload struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+// buildEncryptedPush encrypts f's notification content once per device this
+// agent has ever paired with (direct or relay-mediated alike -- see
+// e2e.Store.DeviceIDs), so relay-mode push never needs the real Title/Preview
+// to build a notification: it only ever receives these opaque, per-device
+// ciphertexts (see writeEventFrame's redaction of the relay's own
+// subscription). Returns nil when e2e isn't configured (s.sessions == nil);
+// callers then send push with no "e2e" data key at all, and the app shows a
+// generic notification instead of silently dropping it.
+func (s *Server) buildEncryptedPush(f EventFrame) map[string]string {
+	if s.sessions == nil {
+		return nil
+	}
+	payload, err := json.Marshal(pushPayload{Title: f.PushTitle(), Body: f.PushBody()})
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, deviceID := range s.sessions.DeviceIDs() {
+		frame, err := s.sessions.EncryptFrame(deviceID, payload)
+		if err != nil {
+			continue
+		}
+		out[deviceID] = base64.StdEncoding.EncodeToString(frame)
+	}
+	return out
+}
+
+// maybeSendPush fans a NeedsAttention frame's encrypted push payload out to
+// every FCM token registered in this agent's own local device store
+// (direct-mode pairs only -- the relay's separate store/pushmon subscription
+// handles relay-paired devices completely independently and is untouched by
+// this). No-op with zero store/network cost when direct mode or FCM aren't
 // configured, the common case for an agent that hasn't opted into either.
 func (s *Server) maybeSendPush(ctx context.Context, f EventFrame) {
 	if s.pusher == nil || s.store == nil {
 		return
 	}
-	tokens := s.store.TenantFCMTokens(s.directTenantID)
-	if len(tokens) == 0 {
+	devices := s.store.TenantFCMDevices(s.directTenantID)
+	if len(devices) == 0 {
 		return
-	}
-	title, body := f.PushTitle(), f.PushBody()
-	data := map[string]string{
-		"type":         "attention",
-		"feed_id":      f.FeedID,
-		"workspace_id": f.WorkspaceID,
-		"surface_id":   f.SurfaceID,
-		"kind":         f.Kind,
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	for _, tok := range tokens {
-		if err := s.pusher.Send(sendCtx, tok, title, body, data); err != nil {
+	for _, dev := range devices {
+		data := map[string]string{
+			"type":         "attention",
+			"feed_id":      f.FeedID,
+			"workspace_id": f.WorkspaceID,
+			"surface_id":   f.SurfaceID,
+			"kind":         f.Kind,
+			"slot":         "direct",
+		}
+		// Real notification content (title/body) is never passed to Send as
+		// plaintext -- only this opaque per-device ciphertext, if one could
+		// be built. Missing it (e2e not configured) is not treated as an
+		// error: the app falls back to a generic, content-free notification.
+		if blob, ok := f.EncryptedPush[dev.DeviceID]; ok {
+			data["e2e"] = blob
+		}
+		if err := s.pusher.Send(sendCtx, dev.FCMToken, "", "", data); err != nil {
 			log.Printf("agent: direct-mode push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
 		}
 	}

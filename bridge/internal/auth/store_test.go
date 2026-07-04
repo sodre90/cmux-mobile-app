@@ -330,15 +330,15 @@ func TestListShowsHashSuffixNotRawToken(t *testing.T) {
 	}
 }
 
-func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
+func TestTenantFCMDevicesScopedPerTenant(t *testing.T) {
 	s := newStore(t)
 	tenantA := newTenant(t, s)
 	tenantB := newTenant(t, s)
 	tokA, _ := s.Issue(tenantA, "phone-a", testPubkey)
 	tokB, _ := s.Issue(tenantB, "phone-b", testPubkey)
 
-	if got := s.TenantFCMTokens(tenantA); len(got) != 0 {
-		t.Fatalf("expected no FCM tokens yet, got %v", got)
+	if got := s.TenantFCMDevices(tenantA); len(got) != 0 {
+		t.Fatalf("expected no FCM devices yet, got %v", got)
 	}
 	if !s.SetFCMToken(tokA, "fcm-a") {
 		t.Fatal("SetFCMToken should succeed for a known device")
@@ -350,17 +350,17 @@ func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
 		t.Fatal("SetFCMToken must fail for unknown device")
 	}
 
-	gotA := s.TenantFCMTokens(tenantA)
-	if len(gotA) != 1 || gotA[0] != "fcm-a" {
-		t.Fatalf("tenantA tokens = %v, want [fcm-a]", gotA)
+	gotA := s.TenantFCMDevices(tenantA)
+	if len(gotA) != 1 || gotA[0].FCMToken != "fcm-a" || gotA[0].DeviceID != hashToken(tokA) {
+		t.Fatalf("tenantA devices = %+v, want [{%s fcm-a}]", gotA, hashToken(tokA))
 	}
-	gotB := s.TenantFCMTokens(tenantB)
-	if len(gotB) != 1 || gotB[0] != "fcm-b" {
-		t.Fatalf("tenantB tokens = %v, want [fcm-b]", gotB)
+	gotB := s.TenantFCMDevices(tenantB)
+	if len(gotB) != 1 || gotB[0].FCMToken != "fcm-b" || gotB[0].DeviceID != hashToken(tokB) {
+		t.Fatalf("tenantB devices = %+v, want [{%s fcm-b}]", gotB, hashToken(tokB))
 	}
 }
 
-func TestTenantFCMTokensDedupesRepeatedPairings(t *testing.T) {
+func TestTenantFCMDevicesDedupesRepeatedPairingsKeepingNewest(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)
 
@@ -377,9 +377,12 @@ func TestTenantFCMTokensDedupesRepeatedPairings(t *testing.T) {
 		t.Fatal("SetFCMToken should succeed for a known device")
 	}
 
-	got := s.TenantFCMTokens(tenant)
-	if len(got) != 1 || got[0] != "fcm-shared" {
-		t.Fatalf("TenantFCMTokens = %v, want exactly one [fcm-shared] despite 3 device rows sharing it", got)
+	got := s.TenantFCMDevices(tenant)
+	if len(got) != 1 || got[0].FCMToken != "fcm-shared" {
+		t.Fatalf("TenantFCMDevices = %+v, want exactly one [{_ fcm-shared}] despite 3 device rows sharing it", got)
+	}
+	if got[0].DeviceID != hashToken(tok3) {
+		t.Fatalf("TenantFCMDevices deviceID = %q, want the newest row's %q (tok3) -- its shared secret is the one still live on the phone", got[0].DeviceID, hashToken(tok3))
 	}
 }
 

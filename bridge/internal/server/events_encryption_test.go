@@ -111,6 +111,63 @@ func TestEventsServesPlaintextForRelayPushWhenSessionsSet(t *testing.T) {
 	}
 }
 
+// TestEventsRedactsContentForRelayPushWhenSessionsSet proves the relay's own
+// push-monitor subscription (X-Relay-Token, no X-Device-ID) never receives a
+// tenant's workspace name or live status text -- a blind relay must not
+// learn tenant content even though it needs NeedsAttention/Kind/EncryptedPush
+// to fan out push notifications.
+func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
+	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
+	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	sessions, _, _ := pairedSessions(t)
+	s.SetSessions(sessions)
+
+	const relayTok = "relay-secret"
+	srv := httptest.NewServer(s.TrustedHandler(relayTok))
+	defer srv.Close()
+
+	u := "ws" + strings.TrimPrefix(srv.URL, "http") + "/events"
+	h := http.Header{"X-Relay-Token": {relayTok}}
+	c, resp, err := websocket.DefaultDialer.Dial(u, h)
+	if err != nil {
+		code := 0
+		if resp != nil {
+			code = resp.StatusCode
+		}
+		t.Fatalf("ws dial failed (status %d): %v", code, err)
+	}
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+
+	s.hub.broadcast(EventFrame{
+		Type:           "feed",
+		FeedID:         "X",
+		NeedsAttention: true,
+		Kind:           "Notification",
+		Title:          "my-secret-project",
+		Preview:        "Claude needs your permission",
+		EncryptedPush:  map[string]string{"dev1": "ciphertext-blob"},
+	})
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var got EventFrame
+	if err := c.ReadJSON(&got); err != nil {
+		t.Fatalf("expected a plaintext JSON frame for the relay's push subscription, got: %v", err)
+	}
+	if got.Title != "" {
+		t.Fatalf("relay must never see the workspace title, got %q", got.Title)
+	}
+	if got.Preview != "" {
+		t.Fatalf("relay must never see the live status preview, got %q", got.Preview)
+	}
+	if got.FeedID != "X" || !got.NeedsAttention || got.Kind != "Notification" {
+		t.Fatalf("routing metadata should still reach the relay: %+v", got)
+	}
+	if got.EncryptedPush["dev1"] != "ciphertext-blob" {
+		t.Fatalf("EncryptedPush should still reach the relay so it can fan out push: %+v", got.EncryptedPush)
+	}
+}
+
 func TestEventsRejectsUnrecognizedDeviceIDWhenEncrypted(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
 	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)

@@ -60,29 +60,41 @@ func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, stor
 	}
 }
 
+// fanout sends one push per registered device, each carrying only that
+// device's own e2e-encrypted payload from f.EncryptedPush (built agent-side
+// by buildEncryptedPush) -- the relay never has the shared secrets needed to
+// read or build notification content itself (see events.go's
+// writeEventFrame, which redacts Title/Preview before this subscription ever
+// sees the frame). A device missing from EncryptedPush still gets a push
+// with routing metadata only, so the app can show a generic notification
+// rather than nothing.
 func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame) {
-	tokens := store.TenantFCMTokens(tenantID)
-	if len(tokens) == 0 {
+	devices := store.TenantFCMDevices(tenantID)
+	if len(devices) == 0 {
 		return
-	}
-	title, body := f.PushTitle(), f.PushBody()
-	data := map[string]string{
-		"type":         "attention",
-		"feed_id":      f.FeedID,
-		"workspace_id": f.WorkspaceID,
-		"surface_id":   f.SurfaceID,
-		"kind":         f.Kind,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	sent, failed := 0, 0
-	for _, tok := range tokens {
-		if err := push.Send(ctx, tok, title, body, data); err != nil {
+	sent, failed, encrypted := 0, 0, 0
+	for _, dev := range devices {
+		data := map[string]string{
+			"type":         "attention",
+			"feed_id":      f.FeedID,
+			"workspace_id": f.WorkspaceID,
+			"surface_id":   f.SurfaceID,
+			"kind":         f.Kind,
+			"slot":         "relay",
+		}
+		if blob, ok := f.EncryptedPush[dev.DeviceID]; ok {
+			data["e2e"] = blob
+			encrypted++
+		}
+		if err := push.Send(ctx, dev.FCMToken, "", "", data); err != nil {
 			failed++
 			log.Printf("relay: attention push failed (tenant=%q kind=%s ws=%s): %v", tenantID, f.Kind, f.WorkspaceID, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("relay: attention push (tenant=%q kind=%s title=%q body=%q ws=%s) sent=%d failed=%d", tenantID, f.Kind, title, body, f.WorkspaceID, sent, failed)
+	log.Printf("relay: attention push (tenant=%q kind=%s ws=%s) sent=%d failed=%d encrypted=%d", tenantID, f.Kind, f.WorkspaceID, sent, failed, encrypted)
 }

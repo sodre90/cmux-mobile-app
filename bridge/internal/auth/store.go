@@ -338,28 +338,47 @@ func (s *Store) SetFCMToken(token, fcm string) bool {
 	return n > 0
 }
 
-// TenantFCMTokens returns all distinct, non-empty FCM registration tokens
+// FCMDevice pairs a device's e2e deviceID (its bearer-token hash -- the same
+// value the relay's proxy Director injects as X-Device-ID, and the same key
+// e2e.Store.EncryptFrame expects) with its registered FCM token.
+type FCMDevice struct {
+	DeviceID string
+	FCMToken string
+}
+
+// TenantFCMDevices returns one FCMDevice per distinct, non-empty FCM token
 // belonging to tenantID's own devices. Scoped per tenant so an attention push
 // triggered by one tenant's agent can never fan out to another tenant's
-// phones. DISTINCT matters here: a device that re-pairs repeatedly (e.g. a
-// phone toggling between direct and relay slots) leaves behind multiple
-// device rows sharing the same still-valid fcm_token -- without dedup, a
-// single attention event would fan out one push per stale row to the exact
-// same token.
-func (s *Store) TenantFCMTokens(tenantID string) []string {
+// phones. Dedup matters here: a device that re-pairs repeatedly (e.g. a phone
+// toggling between direct and relay slots) leaves behind multiple device rows
+// sharing the same still-valid fcm_token -- without it, a single attention
+// event would fan out one push per stale row to the exact same token. Among
+// rows sharing a token, the most recently inserted row wins: re-pairing a
+// slot overwrites that slot's shared secret on the phone, so only the newest
+// row's deviceID still has a secret the phone can actually decrypt with.
+// Ordered by rowid, not created_at -- created_at has only second resolution
+// (see now()), too coarse to break ties between pairings done in the same
+// second, while rowid is exact insertion order regardless of timestamp.
+func (s *Store) TenantFCMDevices(tenantID string) []FCMDevice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT DISTINCT fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != ''`, tenantID)
+	rows, err := s.db.Query(`SELECT token_hash, fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != '' ORDER BY rowid DESC`, tenantID)
 	if err != nil {
-		return []string{}
+		return []FCMDevice{}
 	}
 	defer rows.Close()
-	out := []string{}
+	seen := map[string]bool{}
+	out := []FCMDevice{}
 	for rows.Next() {
-		var tok string
-		if err := rows.Scan(&tok); err == nil {
-			out = append(out, tok)
+		var d FCMDevice
+		if err := rows.Scan(&d.DeviceID, &d.FCMToken); err != nil {
+			continue
 		}
+		if seen[d.FCMToken] {
+			continue
+		}
+		seen[d.FCMToken] = true
+		out = append(out, d)
 	}
 	return out
 }

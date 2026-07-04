@@ -28,6 +28,13 @@ type EventFrame struct {
 	// body, instead of one combined string in both.
 	Preview string `json:"preview,omitempty"`
 	Kind    string `json:"kind,omitempty"`
+	// EncryptedPush holds, per paired deviceID, an e2e-encrypted {title,body}
+	// push payload (see buildEncryptedPush in push.go) -- populated by
+	// ingestEvents for NeedsAttention frames so relay-mode push (which reads
+	// this same frame over a plaintext internal subscription, see
+	// writeEventFrame) never needs the real Title/Preview to build a
+	// notification. Keyed by the same deviceID e2e.Store.EncryptFrame uses.
+	EncryptedPush map[string]string `json:"encrypted_push,omitempty"`
 }
 
 // classify maps a raw cmux event frame to an EventFrame. The bool is false for
@@ -123,8 +130,11 @@ func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
 
 // ingestEvents reads NDJSON cmux event frames from r, classifies each, and
 // broadcasts the ones the app should see. Relay-side push (internal/relay's
-// pushmon) subscribes to this same /events stream, so enriching an attention
-// frame's Title here reaches both the live app and the FCM fan-out for free.
+// pushmon) subscribes to this same /events stream over a plaintext internal
+// connection (see writeEventFrame) -- enrichTitle's real Title/Preview never
+// reach it directly; buildEncryptedPush turns them into per-device
+// ciphertexts first, which is the only form of this content the relay (or
+// this agent's own direct-mode push) ever forwards to FCM.
 func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -139,6 +149,7 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		if f, ok := classify(m); ok {
 			if f.NeedsAttention {
 				s.enrichTitle(ctx, &f)
+				f.EncryptedPush = s.buildEncryptedPush(f)
 				s.maybeAutoResolve(ctx, f.WorkspaceID)
 				s.maybeSendPush(ctx, f)
 			}
@@ -257,9 +268,20 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // writeEventFrame sends f as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil) or the caller is the relay's own internal
 // push-monitor subscription (deviceID == ""), or as a binary e2e-encrypted
-// frame otherwise.
+// frame otherwise. In a deployment with e2e enabled, the relay's own
+// subscription additionally gets Title and Preview redacted -- a blind relay
+// must never learn a tenant's workspace name or live status text. It still
+// gets EncryptedPush's per-device ciphertexts and the routing metadata
+// (kind, ids) it needs to fan out push notifications. When s.sessions == nil
+// there is no device/relay distinction or blindness guarantee being made at
+// all (a bare test/dev configuration), so nothing is redacted.
 func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f EventFrame) error {
-	if s.sessions == nil || deviceID == "" {
+	if s.sessions == nil {
+		return c.WriteJSON(f)
+	}
+	if deviceID == "" {
+		f.Title = ""
+		f.Preview = ""
 		return c.WriteJSON(f)
 	}
 	raw, err := json.Marshal(f)
