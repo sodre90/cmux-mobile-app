@@ -34,5 +34,7 @@ func (s *Server) DirectHandler() http.Handler {
 	wrap := func(h http.Handler) http.Handler {
 		return auth.Require(s.store, injectDeviceID(s.encryptionMiddleware(h)))
 	}
-	return s.routes(wrap)
+	mux := s.routes(wrap).(*http.ServeMux)
+	mux.Handle("POST /devices/register", wrap(http.HandlerFunc(s.handleRegisterDevice)))
+	return mux
 }

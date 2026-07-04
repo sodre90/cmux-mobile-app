@@ -2,8 +2,12 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"net/http"
 	"time"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
 )
 
 // Pusher sends an FCM data message to one registration token. push.Sender
@@ -47,4 +51,33 @@ func (s *Server) maybeSendPush(ctx context.Context, f EventFrame) {
 			log.Printf("agent: direct-mode push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
 		}
 	}
+}
+
+type registerDeviceRequest struct {
+	FCMToken string `json:"fcm_token"`
+}
+
+// handleRegisterDevice stores a device's FCM registration token in this
+// agent's own local store, keyed by the caller's own bearer token (NOT
+// X-Device-ID, which carries a hash -- SetFCMToken hashes its argument
+// itself; see auth.BearerToken's use here and identically at
+// internal/relay/relay.go's handleRegister). Mounted only on
+// DirectHandler()'s route set (see direct.go) -- never on TrustedHandler(),
+// whose relay-tunneled requests have no real per-device bearer validation
+// at the agent, so auth.BearerToken(r) would be meaningless there.
+func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not_available"})
+		return
+	}
+	var rq registerDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.FCMToken == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing fcm_token"})
+		return
+	}
+	if !s.store.SetFCMToken(auth.BearerToken(r), rq.FCMToken) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

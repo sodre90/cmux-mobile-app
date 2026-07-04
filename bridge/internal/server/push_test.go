@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -128,5 +131,98 @@ func TestMaybeSendPushScopesToOwnTenant(t *testing.T) {
 
 	if fp.callCount() != 1 || fp.calls[0].token != "fcm-a" {
 		t.Fatalf("push must be scoped to directTenantID only, got calls: %+v", fp.calls)
+	}
+}
+
+func newDirectRegisterTestServer(t *testing.T) (*Server, *auth.Store) {
+	t.Helper()
+	store, err := auth.Open(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(config.Config{}, &cmux.Client{}, store)
+	return s, store
+}
+
+func TestHandleRegisterDeviceStoresToken(t *testing.T) {
+	s, store := newDirectRegisterTestServer(t)
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone", "test-pubkey-b64")
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(`{"fcm_token":"fcm-abc"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+
+	tokens := store.TenantFCMTokens(tenant)
+	if len(tokens) != 1 || tokens[0] != "fcm-abc" {
+		t.Fatalf("token not stored correctly: %+v", tokens)
+	}
+}
+
+func TestHandleRegisterDeviceRejectsMissingFCMToken(t *testing.T) {
+	s, store := newDirectRegisterTestServer(t)
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone", "test-pubkey-b64")
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing fcm_token, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleRegisterDeviceRejectsInvalidBearer(t *testing.T) {
+	s, _ := newDirectRegisterTestServer(t)
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(`{"fcm_token":"fcm-abc"}`))
+	req.Header.Set("Authorization", "Bearer not-a-real-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401 for an invalid bearer token, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleRegisterDeviceNotMountedOnTrustedHandler(t *testing.T) {
+	s, _ := newDirectRegisterTestServer(t)
+	srv := httptest.NewServer(s.TrustedHandler("relay-secret"))
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(`{"fcm_token":"fcm-abc"}`))
+	req.Header.Set("X-Relay-Token", "relay-secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404 -- /devices/register must not exist on the relay-tunneled handler, got %d", resp.StatusCode)
 	}
 }

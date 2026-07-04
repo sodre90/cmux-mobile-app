@@ -26,8 +26,12 @@ func RequireRelayToken(token string, next http.Handler) http.Handler {
 }
 
 // routes wires the API onto a mux using wrap as the per-route middleware.
-// Device registration is handled exclusively by the relay (see
-// internal/relay.handleRegister), so it is never mounted here.
+// Device registration (/devices/register) is deliberately not mounted here:
+// it's added directly onto DirectHandler()'s route set (see direct.go)
+// instead, because this function's wrap is shared by TrustedHandler (the
+// relay-tunneled path, with no real per-device bearer validation at the
+// agent) and DirectHandler (which does have one) -- the route only makes
+// sense for the latter.
 func (s *Server) routes(wrap func(http.Handler) http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /sessions", wrap(http.HandlerFunc(s.handleSessions)))
