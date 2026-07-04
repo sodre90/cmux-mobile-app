@@ -206,4 +206,30 @@ class FallbackBridgeClientTest {
         assertEquals(2, primaryServer.requestCount)
         assertEquals(1, fallbackServer.requestCount)
     }
+
+    @Test
+    fun registerDevicePrimarySuccessNeverCallsFallback() {
+        primaryServer.enqueue(MockResponse())
+        val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
+
+        runBlocking { fb.registerDevice("fcm-token-abc") }
+
+        assertEquals(1, primaryServer.requestCount)
+        assertEquals(0, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun registerDeviceFallsBackWhenPrimaryUnreachable() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse())
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer) },
+        )
+
+        runBlocking { fb.registerDevice("fcm-token-abc") }
+
+        assertEquals(1, primaryServer.requestCount)
+        assertEquals(1, fallbackServer.requestCount)
+    }
 }

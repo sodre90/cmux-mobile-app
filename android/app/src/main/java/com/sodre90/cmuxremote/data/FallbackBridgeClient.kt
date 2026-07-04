@@ -16,8 +16,12 @@ import java.io.IOException
  * A 4xx [BridgeException] from primary is an application-level error (bad
  * request, auth, stale pairing, etc.), not a reachability problem: it is
  * NOT treated as a failover trigger and propagates immediately with no
- * penalty set, so mutating calls (replyFeed/renameWorkspace/setYoloMode)
- * are never silently re-executed against the wrong backend.
+ * penalty set, so mutating calls (replyFeed/renameWorkspace/setYoloMode/
+ * registerDevice) are never silently re-executed against the wrong backend.
+ *
+ * [registerDevice] is wrapped here too: whichever slot (relay or direct) is
+ * actually reachable for a given device should end up with the FCM token,
+ * since either one may be the connection the Mac agent later pushes through.
  */
 class FallbackBridgeClient(
     private val primary: () -> BridgeClient?,
@@ -52,6 +56,7 @@ class FallbackBridgeClient(
     suspend fun replyFeed(feedId: String, reply: FeedReply) = call { it.replyFeed(feedId, reply) }
     suspend fun renameWorkspace(id: String, title: String) = call { it.renameWorkspace(id, title) }
     suspend fun setYoloMode(id: String, mode: String) = call { it.setYoloMode(id, mode) }
+    suspend fun registerDevice(fcmToken: String) = call { it.registerDevice(fcmToken) }
 
     private companion object {
         const val PENALTY_MS = 30_000L
