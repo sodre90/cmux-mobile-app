@@ -19,6 +19,35 @@ type Pusher interface {
 	Send(ctx context.Context, fcmToken, title, body string, data map[string]string) error
 }
 
+// PushTitle returns a NeedsAttention frame's notification title: the
+// workspace's own live title (set by enrichTitle), so the notification shows
+// which workspace at a glance, or a generic fallback when the workspace
+// couldn't be resolved.
+func (f EventFrame) PushTitle() string {
+	if f.Title != "" {
+		return f.Title
+	}
+	return "Agent needs your attention"
+}
+
+// PushBody returns a NeedsAttention frame's notification body: the
+// workspace's live status preview (set by enrichTitle) when known, else a
+// phrase derived from the underlying Claude Code hook event, else a generic
+// fallback.
+func (f EventFrame) PushBody() string {
+	if f.Preview != "" {
+		return f.Preview
+	}
+	switch f.Kind {
+	case "AskUserQuestion":
+		return "Has a question for you"
+	case "Notification":
+		return "Needs your attention"
+	default:
+		return "Open cmux to reply"
+	}
+}
+
 // maybeSendPush fans a NeedsAttention frame out to every FCM token
 // registered in this agent's own local device store (direct-mode pairs
 // only -- the relay's separate store/pushmon subscription handles
@@ -33,10 +62,7 @@ func (s *Server) maybeSendPush(ctx context.Context, f EventFrame) {
 	if len(tokens) == 0 {
 		return
 	}
-	body := f.Title
-	if body == "" {
-		body = f.Kind
-	}
+	title, body := f.PushTitle(), f.PushBody()
 	data := map[string]string{
 		"type":         "attention",
 		"feed_id":      f.FeedID,
@@ -47,7 +73,7 @@ func (s *Server) maybeSendPush(ctx context.Context, f EventFrame) {
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	for _, tok := range tokens {
-		if err := s.pusher.Send(sendCtx, tok, "Agent needs your attention", body, data); err != nil {
+		if err := s.pusher.Send(sendCtx, tok, title, body, data); err != nil {
 			log.Printf("agent: direct-mode push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
 		}
 	}

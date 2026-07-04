@@ -41,6 +41,41 @@ func (p *fakePusher) callCount() int {
 	return len(p.calls)
 }
 
+func TestPushTitlePrefersWorkspaceTitle(t *testing.T) {
+	f := EventFrame{Title: "cmux-app"}
+	if got := f.PushTitle(); got != "cmux-app" {
+		t.Fatalf("PushTitle() = %q, want %q", got, "cmux-app")
+	}
+}
+
+func TestPushTitleFallsBackWhenNoTitle(t *testing.T) {
+	f := EventFrame{}
+	if got := f.PushTitle(); got != "Agent needs your attention" {
+		t.Fatalf("PushTitle() = %q, want the generic fallback", got)
+	}
+}
+
+func TestPushBodyPrefersPreview(t *testing.T) {
+	f := EventFrame{Preview: "Claude needs your permission", Kind: "AskUserQuestion"}
+	if got := f.PushBody(); got != "Claude needs your permission" {
+		t.Fatalf("PushBody() = %q, want the frame's Preview", got)
+	}
+}
+
+func TestPushBodyMapsKnownKindsWithoutPreview(t *testing.T) {
+	cases := map[string]string{
+		"AskUserQuestion": "Has a question for you",
+		"Notification":    "Needs your attention",
+		"":                "Open cmux to reply",
+		"unknown-kind":    "Open cmux to reply",
+	}
+	for kind, want := range cases {
+		if got := (EventFrame{Kind: kind}).PushBody(); got != want {
+			t.Fatalf("PushBody() for kind %q = %q, want %q", kind, got, want)
+		}
+	}
+}
+
 func newPushTestServer(t *testing.T) (*Server, *auth.Store) {
 	t.Helper()
 	store, err := auth.Open(filepath.Join(t.TempDir(), "auth.db"))
@@ -84,7 +119,7 @@ func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 
 	s.maybeSendPush(context.Background(), EventFrame{
 		NeedsAttention: true, FeedID: "F1", WorkspaceID: "W1", SurfaceID: "S1",
-		Title: "Run rm -rf?", Kind: "permissionRequest",
+		Title: "cmux-app", Preview: "Claude needs your permission", Kind: "permissionRequest",
 	})
 
 	if fp.callCount() != 2 {
@@ -96,8 +131,11 @@ func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 		if c.data["type"] != "attention" || c.data["feed_id"] != "F1" || c.data["workspace_id"] != "W1" || c.data["kind"] != "permissionRequest" {
 			t.Fatalf("unexpected push data: %+v", c.data)
 		}
-		if c.body != "Run rm -rf?" {
-			t.Fatalf("body = %q, want the frame's Title", c.body)
+		if c.title != "cmux-app" {
+			t.Fatalf("title = %q, want the frame's Title (workspace name)", c.title)
+		}
+		if c.body != "Claude needs your permission" {
+			t.Fatalf("body = %q, want the frame's Preview", c.body)
 		}
 	}
 	if !got["fcm-1"] || !got["fcm-2"] {

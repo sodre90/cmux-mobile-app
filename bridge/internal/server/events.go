@@ -22,7 +22,12 @@ type EventFrame struct {
 	WorkspaceID    string `json:"workspace_id,omitempty"`
 	SurfaceID      string `json:"surface_id,omitempty"`
 	Title          string `json:"title,omitempty"`
-	Kind           string `json:"kind,omitempty"`
+	// Preview is the workspace's live status preview (e.g. "Claude needs your
+	// permission"), set by enrichTitle -- kept separate from Title so a push
+	// notification can put the workspace name in the title and this in the
+	// body, instead of one combined string in both.
+	Preview string `json:"preview,omitempty"`
+	Kind    string `json:"kind,omitempty"`
 }
 
 // classify maps a raw cmux event frame to an EventFrame. The bool is false for
@@ -98,10 +103,10 @@ func attentionLabel(payload map[string]any) string {
 }
 
 // enrichTitle upgrades an attention frame's Title with the workspace's live
-// title + status preview (e.g. "Check Cloudera ticket CB-33546: Claude is
+// title, and sets Preview to its live status preview (e.g. "Claude is
 // waiting for your input") — the richest context cmux exposes for a prompt
 // whose actual text it redacts. On any lookup failure the cheap cwd-basename
-// Title classify already set is left as-is.
+// Title classify already set is left as-is, and Preview stays empty.
 func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
 	if f.WorkspaceID == "" {
 		return
@@ -110,17 +115,10 @@ func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
 	if !ok {
 		return
 	}
-	label := ws.Title
-	if ws.Preview != "" {
-		if label != "" {
-			label += ": " + ws.Preview
-		} else {
-			label = ws.Preview
-		}
+	if ws.Title != "" {
+		f.Title = ws.Title
 	}
-	if label != "" {
-		f.Title = label
-	}
+	f.Preview = ws.Preview
 }
 
 // ingestEvents reads NDJSON cmux event frames from r, classifies each, and

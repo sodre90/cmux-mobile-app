@@ -65,10 +65,7 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame
 	if len(tokens) == 0 {
 		return
 	}
-	body := f.Title
-	if body == "" {
-		body = f.Kind
-	}
+	title, body := f.PushTitle(), f.PushBody()
 	data := map[string]string{
 		"type":         "attention",
 		"feed_id":      f.FeedID,
@@ -80,12 +77,12 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame
 	defer cancel()
 	sent, failed := 0, 0
 	for _, tok := range tokens {
-		if err := push.Send(ctx, tok, "Agent needs your attention", body, data); err != nil {
+		if err := push.Send(ctx, tok, title, body, data); err != nil {
 			failed++
 			log.Printf("relay: attention push failed (tenant=%q kind=%s ws=%s): %v", tenantID, f.Kind, f.WorkspaceID, err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("relay: attention push (tenant=%q kind=%s label=%q ws=%s) sent=%d failed=%d", tenantID, f.Kind, body, f.WorkspaceID, sent, failed)
+	log.Printf("relay: attention push (tenant=%q kind=%s title=%q body=%q ws=%s) sent=%d failed=%d", tenantID, f.Kind, title, body, f.WorkspaceID, sent, failed)
 }

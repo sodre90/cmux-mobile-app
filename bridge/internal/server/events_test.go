@@ -208,9 +208,11 @@ func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
-	want := "Build options: Build options trading system"
-	if got.Title != want {
-		t.Fatalf("title not enriched: got %q want %q", got.Title, want)
+	if got.Title != "Build options" {
+		t.Fatalf("title not enriched: got %q want %q", got.Title, "Build options")
+	}
+	if got.Preview != "Build options trading system" {
+		t.Fatalf("preview not enriched: got %q want %q", got.Preview, "Build options trading system")
 	}
 }
 
@@ -231,6 +233,9 @@ func TestIngestEventsKeepsFallbackTitleWhenWorkspaceNotFound(t *testing.T) {
 	var got EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
+	}
+	if got.Preview != "" {
+		t.Fatalf("preview should stay empty when the lookup misses, got %q", got.Preview)
 	}
 	if got.Title != "y" { // cwd basename fallback, unchanged when the lookup misses
 		t.Fatalf("title should fall back to cwd basename, got %q", got.Title)
