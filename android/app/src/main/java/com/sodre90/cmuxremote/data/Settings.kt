@@ -46,6 +46,15 @@ class Settings(context: Context) {
         prefs.edit().putString(key(slot, KEY_TOKEN), value).apply()
     }
 
+    /** Wipes [slot]'s stored base URL and device token -- used by "Forget" in
+     *  ConnectionSettingsScreen. The other slot is untouched. */
+    fun clearSlot(slot: ConnectionSlot) {
+        prefs.edit()
+            .remove(key(slot, KEY_BASE_URL))
+            .remove(key(slot, KEY_TOKEN))
+            .apply()
+    }
+
     /** Assembles a [BridgeConfig] for [slot], or null if that slot has never
      *  been paired. */
     fun bridgeConfig(slot: ConnectionSlot): BridgeConfig? {

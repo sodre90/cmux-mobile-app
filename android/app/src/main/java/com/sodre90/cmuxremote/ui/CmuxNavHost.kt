@@ -4,6 +4,10 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -82,10 +86,22 @@ fun CmuxNavHost(
         popExitTransition = { ExitTransition.None },
     ) {
         composable(Routes.SETTINGS) {
+            // Re-pairing already refreshes this screen's paired/unpaired status
+            // for free: navigating to PAIR and popping back recomposes this
+            // content lambda, which re-reads settings.bridgeConfig() fresh.
+            // Forgetting doesn't leave this destination, so there's nothing to
+            // force a fresh read otherwise -- this counter is that trigger.
+            var forgetGeneration by remember { mutableIntStateOf(0) }
+            val relayConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.RELAY) != null }
+            val directConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
             ConnectionSettingsScreen(
-                relayConfigured = container.settings.bridgeConfig(ConnectionSlot.RELAY) != null,
-                directConfigured = container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null,
+                relayConfigured = relayConfigured,
+                directConfigured = directConfigured,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
+                onForget = { slot ->
+                    container.forgetSlot(slot)
+                    forgetGeneration++
+                },
                 onDone = {
                     navController.navigate(Routes.SESSIONS) {
                         popUpTo(Routes.SETTINGS) { inclusive = true }

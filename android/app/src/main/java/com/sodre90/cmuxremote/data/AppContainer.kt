@@ -67,6 +67,17 @@ class AppContainer(appContext: Context) {
         return built
     }
 
+    /** Clears [slot]'s stored bridge config and e2e session, and evicts its
+     *  cached [OkHttpClient] -- used by "Forget" in ConnectionSettingsScreen.
+     *  The other slot is untouched. Re-pairing this slot afterwards behaves
+     *  exactly like pairing it for the first time. */
+    @Synchronized
+    fun forgetSlot(slot: ConnectionSlot) {
+        settings.clearSlot(slot)
+        sessions.getValue(slot).clear()
+        clients.remove(slot)
+    }
+
     fun bridgeClient(slot: ConnectionSlot): BridgeClient? =
         settings.bridgeConfig(slot)?.let { BridgeClient(httpClient(slot, it), it.baseUrl) }
 
