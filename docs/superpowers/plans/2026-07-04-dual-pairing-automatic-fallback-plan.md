@@ -1298,10 +1298,22 @@ everything else in the file is unchanged.)
 
 - [ ] **Step 5: Build and test**
 
-Run: `cd android && ./gradlew :app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.pairing.PairingClientTest" :app:compileDebugKotlin`
-Expected: `CmuxNavHost.kt` still won't compile (it constructs
-`PairingViewModel(container)`/`PairingScreen(vm, onPaired)` with the old
-arities) — expected until Task 9. `PairingClientTest` itself: PASS.
+**Gradle constraint (discovered during Task 4, still applies):**
+`compileDebugUnitTestKotlin` depends on `compileDebugKotlin` succeeding, so
+`PairingClientTest` (or any test) cannot actually run via Gradle until Task
+9 lands — `CmuxNavHost.kt` still constructs `PairingViewModel(container)`/
+`PairingScreen(vm, onPaired)` with the old arities, which is expected and
+not this task's problem to fix. Run
+`cd android && ./gradlew :app:compileDebugKotlin` and confirm the only
+remaining errors trace to `CmuxNavHost.kt` (and no longer to
+`PairingClient.kt`/`PairingViewModel.kt`/`PairingScreen.kt`, which this task
+fixes). If you want a genuine green run of `PairingClientTest` now, use the
+same temporary-patch-then-revert technique Task 4's implementer used
+(patch `CmuxNavHost.kt` with a throwaway minimal fix, run
+`:app:testDebugUnitTest --tests "com.sodre90.cmuxremote.data.pairing.PairingClientTest"`,
+then `git checkout --` it back before committing) — optional but
+recommended here since this task adds a real new test case, unlike Tasks
+5-7's purely mechanical changes.
 
 - [ ] **Step 6: Commit**
 
