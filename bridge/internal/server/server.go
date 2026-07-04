@@ -30,12 +30,33 @@ type Server struct {
 	// stored modes, no auto-reply) -- the plaintext-equivalent default every
 	// existing test exercises.
 	yolo *yolo.Store
+	// pusher is nil unless SetPusher is called (only by runAgent's production
+	// wiring, and only when direct mode + FCM config are both present). Nil
+	// means direct-mode attention frames are never pushed -- the
+	// plaintext-equivalent default every existing test exercises.
+	pusher Pusher
+	// directTenantID scopes pusher's token lookup to direct mode's one
+	// implicit tenant. Only meaningful together with pusher, so both are set
+	// by the same call.
+	directTenantID string
 }
 
 // SetYoloStore enables per-workspace YOLO auto-reply. Called only by
 // runAgent's production wiring; no test calls this, so pre-existing tests
 // continue to exercise the "always off" code path unchanged.
 func (s *Server) SetYoloStore(store *yolo.Store) { s.yolo = store }
+
+// SetPusher enables agent-native push for direct-mode-paired devices,
+// scoped to tenantID (direct mode's one implicit tenant -- the same value
+// already passed to MountDirectPairing). Called only by runAgent's
+// production wiring. Deliberately not a New() parameter: pusher is
+// optional, orthogonal config, following the same post-construction-setter
+// idiom as SetSessions/SetYoloStore rather than growing New()'s signature
+// and breaking every existing test call site.
+func (s *Server) SetPusher(p Pusher, tenantID string) {
+	s.pusher = p
+	s.directTenantID = tenantID
+}
 
 // New constructs a Server.
 func New(cfg config.Config, c *cmux.Client, s *auth.Store) *Server {

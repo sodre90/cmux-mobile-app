@@ -142,6 +142,7 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 			if f.NeedsAttention {
 				s.enrichTitle(ctx, &f)
 				s.maybeAutoResolve(ctx, f.WorkspaceID)
+				s.maybeSendPush(ctx, f)
 			}
 			s.hub.broadcast(f)
 		}
