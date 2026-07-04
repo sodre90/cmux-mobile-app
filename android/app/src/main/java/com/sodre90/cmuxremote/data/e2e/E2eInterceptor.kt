@@ -13,14 +13,29 @@ import java.io.IOException
  * callers never see ciphertext. Skips WebSocket upgrade requests entirely
  * (see this task's header note) since those have no JSON body to encrypt;
  * WS frame encryption is handled separately by Frame.kt.
+ *
+ * Slot-aware: [isRelaySlot] tells this instance whether it's protecting the
+ * RELAY connection slot or the DIRECT one. Only RELAY has a relay in front of
+ * the agent that terminates certain routes itself and expects them in
+ * plaintext ([RELAY_TERMINATED_PATHS]); DIRECT talks straight to the agent
+ * with no relay to terminate anything, so on DIRECT every route -- including
+ * those same paths -- must be encrypted like normal.
  */
-class E2eInterceptor(private val session: PairedSession, private val cipher: Cipher) : Interceptor {
+class E2eInterceptor(
+    private val session: PairedSession,
+    private val cipher: Cipher,
+    private val isRelaySlot: Boolean,
+) : Interceptor {
 
     companion object {
         // Paths terminated at the relay itself (not proxied to the agent), so
         // the relay decodes them as plaintext. Do NOT encrypt request bodies for
-        // these. Add any future relay-terminated endpoints here to avoid silent
-        // regressions. (/devices/pair uses a separate un-intercepted client.)
+        // these when running on the RELAY slot. Add any future relay-terminated
+        // endpoints here to avoid silent regressions. (/devices/pair uses a
+        // separate un-intercepted client.) These paths do NOT apply on the
+        // DIRECT slot: there is no relay in that path to terminate anything in
+        // plaintext, so DIRECT encrypts every route, this list included --
+        // gating on isRelaySlot below is what makes that distinction.
         private val RELAY_TERMINATED_PATHS = setOf("/devices/register")
     }
 
@@ -30,7 +45,7 @@ class E2eInterceptor(private val session: PairedSession, private val cipher: Cip
             return chain.proceed(original)
         }
 
-        val isRelayTerminated = RELAY_TERMINATED_PATHS.any { original.url.encodedPath.endsWith(it) }
+        val isRelayTerminated = isRelaySlot && RELAY_TERMINATED_PATHS.any { original.url.encodedPath.endsWith(it) }
 
         val requestBody = original.body
         val request = if (requestBody != null && !isRelayTerminated) {

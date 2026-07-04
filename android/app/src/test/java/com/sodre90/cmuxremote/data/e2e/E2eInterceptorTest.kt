@@ -36,8 +36,8 @@ class E2eInterceptorTest {
         server.shutdown()
     }
 
-    private fun clientFor(session: PairedSession) = OkHttpClient.Builder()
-        .addInterceptor(E2eInterceptor(session, cipher))
+    private fun clientFor(session: PairedSession, isRelaySlot: Boolean = true) = OkHttpClient.Builder()
+        .addInterceptor(E2eInterceptor(session, cipher, isRelaySlot))
         .build()
 
     @Test
@@ -102,10 +102,10 @@ class E2eInterceptorTest {
     }
 
     @Test
-    fun doesNotEncryptDeviceRegisterRequest() {
+    fun doesNotEncryptDeviceRegisterRequestOnRelaySlot() {
         server.enqueue(MockResponse().setBody("""{"ok":true}"""))
 
-        val client = clientFor(FakeSession(secret))
+        val client = clientFor(FakeSession(secret), isRelaySlot = true)
         val request = Request.Builder()
             .url(server.url("/devices/register"))
             .post("""{"fcm_token":"t"}""".toRequestBody("application/json".toMediaTypeOrNull()))
@@ -118,6 +118,25 @@ class E2eInterceptorTest {
         val sentBody = recorded.body.readUtf8()
         assertTrue(sentBody.contains("fcm_token"))
         assertFalse(sentBody.contains("\"v\":1"))
+    }
+
+    @Test
+    fun encryptsDeviceRegisterRequestOnDirectSlot() {
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+
+        val client = clientFor(FakeSession(secret), isRelaySlot = false)
+        val request = Request.Builder()
+            .url(server.url("/devices/register"))
+            .post("""{"fcm_token":"t"}""".toRequestBody("application/json".toMediaTypeOrNull()))
+            .build()
+        val response = client.newCall(request).execute()
+
+        assertEquals("""{"ok":true}""", response.body!!.string())
+
+        val recorded = server.takeRequest()
+        val sentBody = recorded.body.readUtf8()
+        assertTrue(sentBody.contains("\"v\":1")) // request body was encrypted, not the raw JSON
+        assertFalse(sentBody.contains("fcm_token"))
     }
 
     @Test

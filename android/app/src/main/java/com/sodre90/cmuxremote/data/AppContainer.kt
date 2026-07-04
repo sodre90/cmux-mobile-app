@@ -59,7 +59,9 @@ class AppContainer(appContext: Context) {
         }
         var built = builder.build()
         if (session.isPaired()) {
-            built = built.newBuilder().addInterceptor(E2eInterceptor(session, cipher)).build()
+            built = built.newBuilder()
+                .addInterceptor(E2eInterceptor(session, cipher, slot == ConnectionSlot.RELAY))
+                .build()
         }
         clients[slot] = key to built
         return built
