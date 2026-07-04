@@ -9,7 +9,6 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sodre90.cmuxremote.CmuxApp
 import com.sodre90.cmuxremote.MainActivity
-import com.sodre90.cmuxremote.data.ConnectionSlot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +30,7 @@ class CmuxMessagingService : FirebaseMessagingService() {
         val container = (application as? CmuxApp)?.container ?: return
         scope.launch {
             try {
-                container.bridgeClient(ConnectionSlot.RELAY)?.registerDevice(token)
+                container.activeBridge()?.registerDevice(token)
             } catch (_: Exception) {
                 // Bridge unreachable or unconfigured; token is resent on next start.
             }
