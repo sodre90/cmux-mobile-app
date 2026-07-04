@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.google.firebase.messaging.FirebaseMessaging
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import kotlinx.coroutines.CoroutineScope
@@ -77,7 +78,7 @@ class MainActivity : ComponentActivity() {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
                 scope.launch {
                     try {
-                        container.bridgeClient()?.registerDevice(token)
+                        container.bridgeClient(ConnectionSlot.RELAY)?.registerDevice(token)
                     } catch (_: Exception) {
                         // Bridge unreachable or unconfigured; retried next launch.
                     }
