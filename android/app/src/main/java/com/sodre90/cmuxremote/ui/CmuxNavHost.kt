@@ -13,11 +13,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.sessions.singlePaneTarget
+import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
@@ -30,7 +32,7 @@ fun CmuxNavHost(
     pendingSurfaceId: String? = null,
 ) {
     val navController = rememberNavController()
-    val configured = container.settings.bridgeConfig() != null
+    val configured = container.anyBridgeConfigured()
     val start = if (!configured) Routes.SETTINGS else Routes.SESSIONS
 
     // A notification tap carries which workspace needs attention (cmux never
@@ -49,7 +51,7 @@ fun CmuxNavHost(
             return@LaunchedEffect
         }
         if (pendingWorkspaceId != null) {
-            val target = runCatching { container.bridgeClient()?.sessions() }
+            val target = runCatching { container.activeBridge()?.sessions() }
                 .getOrNull()
                 ?.firstOrNull { it.id == pendingWorkspaceId }
                 ?.let { singlePaneTarget(it) }
@@ -80,16 +82,30 @@ fun CmuxNavHost(
         popExitTransition = { ExitTransition.None },
     ) {
         composable(Routes.SETTINGS) {
-            val vm: PairingViewModel = viewModel(
-                factory = viewModelFactory { initializer { PairingViewModel(container) } },
-            )
-            PairingScreen(
-                vm = vm,
-                onPaired = {
+            ConnectionSettingsScreen(
+                relayConfigured = container.settings.bridgeConfig(ConnectionSlot.RELAY) != null,
+                directConfigured = container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null,
+                onPair = { slot -> navController.navigate(Routes.pair(slot)) },
+                onDone = {
                     navController.navigate(Routes.SESSIONS) {
                         popUpTo(Routes.SETTINGS) { inclusive = true }
                     }
                 },
+            )
+        }
+
+        composable(
+            route = "${Routes.PAIR}/{slot}",
+            arguments = listOf(navArgument("slot") { type = NavType.StringType }),
+        ) { entry ->
+            val slot = ConnectionSlot.valueOf(entry.arguments?.getString("slot").orEmpty().uppercase())
+            val vm: PairingViewModel = viewModel(
+                factory = viewModelFactory { initializer { PairingViewModel(container, slot) } },
+            )
+            PairingScreen(
+                vm = vm,
+                title = if (slot == ConnectionSlot.RELAY) "Pair via relay" else "Pair via Tailscale (direct)",
+                onPaired = { navController.popBackStack() }, // back to ConnectionSettingsScreen, now showing this slot as paired
             )
         }
 
