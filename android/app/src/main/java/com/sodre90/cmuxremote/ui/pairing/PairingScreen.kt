@@ -45,7 +45,7 @@ import com.google.mlkit.vision.common.InputImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PairingScreen(vm: PairingViewModel, onPaired: () -> Unit) {
+fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
     val context = LocalContext.current
 
     var hasCameraPermission by remember {
@@ -66,7 +66,7 @@ fun PairingScreen(vm: PairingViewModel, onPaired: () -> Unit) {
         if (vm.state is PairingUiState.Success) onPaired()
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Pair with cmux-bridge") }) }) { inner ->
+    Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner),
             verticalArrangement = Arrangement.Top,

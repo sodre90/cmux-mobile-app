@@ -131,6 +131,40 @@ class PairingClientTest {
     }
 
     @Test
+    fun pairWritesIntoTheConstructedSlotNotAHardcodedOne() {
+        val (agentPriv, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-direct","tenant_id":"t1"}"""))
+
+        var recordedBaseUrlSlot: com.sodre90.cmuxremote.data.ConnectionSlot? = null
+        var recordedTokenSlot: com.sodre90.cmuxremote.data.ConnectionSlot? = null
+        val fakeSettingsSetBaseUrl = { slot: com.sodre90.cmuxremote.data.ConnectionSlot, _: String -> recordedBaseUrlSlot = slot }
+        val fakeSettingsSetToken = { slot: com.sodre90.cmuxremote.data.ConnectionSlot, _: String -> recordedTokenSlot = slot }
+
+        val slot = com.sodre90.cmuxremote.data.ConnectionSlot.DIRECT
+        val client = TestablePairingClient(
+            http = http,
+            phonePrivateKey = phonePriv,
+            phonePublicKey = phonePub,
+            onSetPairing = { _, _ -> },
+            onSetBaseUrl = { fakeSettingsSetBaseUrl(slot, it) },
+            onSetToken = { fakeSettingsSetToken(slot, it) },
+        )
+        val qr = PairingQr(
+            pairUrl = server.url("/devices/pair").toString(),
+            code = "CODE1",
+            agentPubkey = Base64.getEncoder().encodeToString(agentPub),
+            expiresAt = "2099-01-01T00:00:00Z",
+            tenantId = "t1",
+        )
+
+        runBlocking { client.pair(qr) }
+
+        assertEquals(slot, recordedBaseUrlSlot)
+        assertEquals(slot, recordedTokenSlot)
+    }
+
+    @Test
     fun resolvePairingCodeTrimsTrailingSlashFromServerUrl() {
         val (_, agentPub) = generateX25519KeyPair()
         val agentPubkeyB64 = Base64.getEncoder().encodeToString(agentPub)

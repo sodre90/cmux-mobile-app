@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.data.pairing
 
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.e2e.Identity
 import com.sodre90.cmuxremote.data.e2e.Session
@@ -55,6 +56,7 @@ class PairingClient(
     private val identity: Identity,
     private val session: Session,
     private val settings: Settings,
+    private val slot: ConnectionSlot,
 ) {
     suspend fun pair(qr: PairingQr) = pairInternal(
         http = http,
@@ -62,8 +64,8 @@ class PairingClient(
         phonePrivateKey = identity.privateKey,
         phonePublicKey = identity.publicKey,
         onSetPairing = session::setPairing,
-        onSetBaseUrl = { settings.baseUrl = it },
-        onSetToken = { settings.deviceToken = it },
+        onSetBaseUrl = { settings.setBaseUrl(slot, it) },
+        onSetToken = { settings.setDeviceToken(slot, it) },
     )
 
     /** Resolves a manually-entered server URL + pairing code (the CLI's
