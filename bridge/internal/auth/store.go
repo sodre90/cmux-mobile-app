@@ -338,13 +338,18 @@ func (s *Store) SetFCMToken(token, fcm string) bool {
 	return n > 0
 }
 
-// TenantFCMTokens returns all non-empty FCM registration tokens belonging to
-// tenantID's own devices. Scoped per tenant so an attention push triggered by
-// one tenant's agent can never fan out to another tenant's phones.
+// TenantFCMTokens returns all distinct, non-empty FCM registration tokens
+// belonging to tenantID's own devices. Scoped per tenant so an attention push
+// triggered by one tenant's agent can never fan out to another tenant's
+// phones. DISTINCT matters here: a device that re-pairs repeatedly (e.g. a
+// phone toggling between direct and relay slots) leaves behind multiple
+// device rows sharing the same still-valid fcm_token -- without dedup, a
+// single attention event would fan out one push per stale row to the exact
+// same token.
 func (s *Store) TenantFCMTokens(tenantID string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != ''`, tenantID)
+	rows, err := s.db.Query(`SELECT DISTINCT fcm_token FROM devices WHERE tenant_id = ? AND fcm_token IS NOT NULL AND fcm_token != ''`, tenantID)
 	if err != nil {
 		return []string{}
 	}

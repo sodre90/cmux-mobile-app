@@ -360,6 +360,29 @@ func TestTenantFCMTokensScopedPerTenant(t *testing.T) {
 	}
 }
 
+func TestTenantFCMTokensDedupesRepeatedPairings(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+
+	tok1, _ := s.Issue(tenant, "phone", testPubkey)
+	tok2, _ := s.Issue(tenant, "phone", testPubkey)
+	tok3, _ := s.Issue(tenant, "phone", testPubkey)
+	if !s.SetFCMToken(tok1, "fcm-shared") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+	if !s.SetFCMToken(tok2, "fcm-shared") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+	if !s.SetFCMToken(tok3, "fcm-shared") {
+		t.Fatal("SetFCMToken should succeed for a known device")
+	}
+
+	got := s.TenantFCMTokens(tenant)
+	if len(got) != 1 || got[0] != "fcm-shared" {
+		t.Fatalf("TenantFCMTokens = %v, want exactly one [fcm-shared] despite 3 device rows sharing it", got)
+	}
+}
+
 func TestOpenCreatesParentDirectory(t *testing.T) {
 	// Verify that Open creates parent directories that don't exist yet.
 	// This is a regression test: the old JSON-based store called os.MkdirAll
