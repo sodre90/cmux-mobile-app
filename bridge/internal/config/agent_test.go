@@ -141,3 +141,53 @@ direct_auth_store = "/c/direct-auth.db"
 		t.Fatalf("DirectAuthStore = %q", cfg.DirectAuthStore)
 	}
 }
+
+func TestLoadAgentDefaultsFCMFieldsEmpty(t *testing.T) {
+	cfg, err := LoadAgent(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FCMProjectID != "" || cfg.FCMCredentials != "" {
+		t.Fatalf("FCM fields should default empty (push disabled), got project=%q credentials=%q", cfg.FCMProjectID, cfg.FCMCredentials)
+	}
+}
+
+func TestLoadAgentParsesFCMFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	body := `
+fcm_project_id  = "my-project"
+fcm_credentials = "/c/fcm-key.json"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FCMProjectID != "my-project" {
+		t.Fatalf("FCMProjectID = %q", cfg.FCMProjectID)
+	}
+	if cfg.FCMCredentials != "/c/fcm-key.json" {
+		t.Fatalf("FCMCredentials = %q", cfg.FCMCredentials)
+	}
+}
+
+func TestLoadAgentExpandsFCMCredentialsHome(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	if err := os.WriteFile(path, []byte(`fcm_credentials = "~/fcm-key.json"`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cfg.FCMCredentials, "~") {
+		t.Fatalf("FCMCredentials not expanded: %q", cfg.FCMCredentials)
+	}
+	if !strings.HasSuffix(cfg.FCMCredentials, "fcm-key.json") {
+		t.Fatalf("FCMCredentials = %q", cfg.FCMCredentials)
+	}
+}

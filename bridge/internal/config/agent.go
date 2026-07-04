@@ -43,6 +43,14 @@ type AgentConfig struct {
 	// relay-shaped state, since direct mode has exactly one implicit tenant
 	// (this Mac).
 	DirectAuthStore string `toml:"direct_auth_store"`
+	// FCMProjectID is the Firebase project id for direct-mode push. Empty
+	// disables it -- direct mode behaves exactly as it does today. Same
+	// Firebase project as the relay's own fcm_project_id, configured
+	// separately here since the agent has its own independent device store.
+	FCMProjectID string `toml:"fcm_project_id"`
+	// FCMCredentials is the path to a Google service-account JSON key for
+	// direct-mode push. Empty disables it.
+	FCMCredentials string `toml:"fcm_credentials"`
 }
 
 func agentDefaults() AgentConfig {
@@ -79,5 +87,6 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.SessionStore = expandHome(cfg.SessionStore)
 	cfg.YoloStore = expandHome(cfg.YoloStore)
 	cfg.DirectAuthStore = expandHome(cfg.DirectAuthStore)
+	cfg.FCMCredentials = expandHome(cfg.FCMCredentials)
 	return cfg, nil
 }
