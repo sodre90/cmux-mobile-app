@@ -850,20 +850,26 @@ git commit -m "android: wire AppContainer for per-slot clients and activeBridge(
 
 **Files:**
 - Modify: `android/app/src/main/java/com/sodre90/cmuxremote/push/CmuxMessagingService.kt`
+- Modify: `android/app/src/main/java/com/sodre90/cmuxremote/MainActivity.kt`
 
 **Interfaces:**
 - Consumes: `AppContainer.bridgeClient(ConnectionSlot.RELAY)` (Task 5).
 
 This is the correctness fix motivating this whole project (see the plan's
-parent spec's Context section): today, `onNewToken` registers against
-whatever `bridgeClient()` happens to be configured; direct mode has no
-`/devices/register` endpoint at all, so a token refresh while direct is the
-only paired slot would silently and permanently break push. No automated
-test exists for this class today (`FirebaseMessagingService` needs
-Android's Service framework) — verified by inspection + manual check in
-Step 3.
+parent spec's Context section): today, both of the app's two independent
+push-registration call sites register against whatever `bridgeClient()`
+happens to be configured; direct mode has no `/devices/register` endpoint
+at all, so a token (re-)registration while direct is the only paired slot
+would silently and permanently break push. There are two call sites, not
+one — `CmuxMessagingService.onNewToken()` (fires only when FCM actually
+issues a new token) and `MainActivity.registerFcmToken()` (fires on every
+app launch, re-registering the *current* token as a belt-and-suspenders
+measure independent of whether it changed) — both need the same fix. No
+automated test exists for either class today (`FirebaseMessagingService`/
+`ComponentActivity` both need Android's framework) — verified by inspection
++ manual check in Step 3.
 
-- [ ] **Step 1: Change `onNewToken`**
+- [ ] **Step 1: Change `CmuxMessagingService.onNewToken`**
 
 ```kotlin
     override fun onNewToken(token: String) {
@@ -884,25 +890,63 @@ And add the import:
 import com.sodre90.cmuxremote.data.ConnectionSlot
 ```
 
-- [ ] **Step 2: Build**
+- [ ] **Step 2: Change `MainActivity.registerFcmToken`**
+
+```kotlin
+    private fun registerFcmToken() {
+        val container = (application as CmuxApp).container
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                scope.launch {
+                    try {
+                        container.bridgeClient(ConnectionSlot.RELAY)?.registerDevice(token)
+                    } catch (_: Exception) {
+                        // Bridge unreachable or unconfigured; retried next launch.
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // Firebase not configured (no google-services.json); push inactive.
+        }
+    }
+```
+
+(Only the `container.bridgeClient()` call in the inner `scope.launch` block
+changes — everything else in the method, and the rest of the file, is
+unchanged.) Add the same import:
+
+```kotlin
+import com.sodre90.cmuxremote.data.ConnectionSlot
+```
+
+- [ ] **Step 3: Build**
 
 Run: `cd android && ./gradlew :app:compileDebugKotlin`
-Expected: PASS (this file's only change is the accessor call + import; no
-new unresolved references).
+Expected: the module still does NOT fully compile at this point — Task 8
+(`PairingClient.kt`) and Task 9 (`CmuxNavHost.kt`) haven't landed yet, so
+their call sites are still broken. This is expected, not a regression.
+What matters is that neither `CmuxMessagingService.kt` nor `MainActivity.kt`
+themselves introduce any *new* unresolved reference beyond what already
+existed before this task — confirm this by reading the compiler's error
+output and checking every error is attributed to `PairingClient.kt`,
+`CmuxNavHost.kt`, or another already-known pending file, not to either file
+this task touched. Paste the full remaining error output in your report.
 
-- [ ] **Step 3: Manual verification note**
+- [ ] **Step 4: Manual verification note**
 
-Confirm by inspection: if only `DIRECT` is paired (relay slot returns
-null), `bridgeClient(ConnectionSlot.RELAY)` is null, `?.registerDevice`
-short-circuits to nothing, and the existing `catch` is never even reached
-— this is the intended, correct behavior (push stays unavailable until the
-relay slot is paired too, rather than the previous silent-and-wrong
-behavior of calling an endpoint that doesn't exist on whatever was active).
+Confirm by inspection, for BOTH files: if only `DIRECT` is paired (relay
+slot returns null), `bridgeClient(ConnectionSlot.RELAY)` is null,
+`?.registerDevice` short-circuits to nothing, and the existing `catch` is
+never even reached — this is the intended, correct behavior (push stays
+unavailable until the relay slot is paired too, rather than the previous
+silent-and-wrong behavior of calling an endpoint that doesn't exist on
+whatever was active).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add android/app/src/main/java/com/sodre90/cmuxremote/push/CmuxMessagingService.kt
+git add android/app/src/main/java/com/sodre90/cmuxremote/push/CmuxMessagingService.kt android/app/src/main/java/com/sodre90/cmuxremote/MainActivity.kt
 git commit -m "android: pin push registration to the relay slot"
 ```
 
