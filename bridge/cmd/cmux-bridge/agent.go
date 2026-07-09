@@ -285,7 +285,7 @@ func runAgent(args []string) int {
 			return 1
 		}
 	}
-	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin}, directStore)
+	srv := server.New(config.Config{}, &cmux.Client{Bin: cfg.CmuxBin, FastPath: true}, directStore)
 	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
 	srv.SetYoloStore(yolo.OpenStore(cfg.YoloStore))
 	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
