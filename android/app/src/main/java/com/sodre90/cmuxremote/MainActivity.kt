@@ -11,12 +11,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
+import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isFirebaseConfigured()) {
             requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
@@ -66,16 +66,27 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Firebase only initialises when `app/google-services.json` is present;
+     * without it [FirebaseApp.getInstance] throws. Without push configured
+     * there's nothing to notify about, so don't prompt for the permission.
+     */
+    private fun isFirebaseConfigured(): Boolean = try {
+        FirebaseApp.getInstance()
+        true
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
      * Best-effort registration of the FCM token on launch. Firebase only
      * initialises when `app/google-services.json` is present; without it
      * [FirebaseMessaging.getInstance] throws, so this is a guarded no-op.
      */
     private fun registerFcmToken() {
         val container = (application as CmuxApp).container
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         try {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                scope.launch {
+                lifecycleScope.launch(Dispatchers.IO) {
                     try {
                         container.activeBridge()?.registerDevice(token)
                     } catch (_: Exception) {

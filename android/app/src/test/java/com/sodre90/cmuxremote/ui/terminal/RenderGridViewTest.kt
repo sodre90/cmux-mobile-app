@@ -91,4 +91,16 @@ class RenderGridViewTest {
         val l = DecodedLine("──────────".map { Cell(it, 0) })
         assertNotNull(wrapModeLine(l, cursorColumn = 2))
     }
+
+    @Test fun cappedScrollbackKeepsShortHistoryUntouched() {
+        val lines = (1..5).map { DecodedLine(listOf(Cell('a' + it, 0))) }
+        assertEquals(lines, cappedScrollback(lines, max = 10))
+    }
+
+    @Test fun cappedScrollbackDropsOldestBeyondMax() {
+        val lines = (0 until 10).map { i -> DecodedLine(listOf(Cell('0' + i, 0))) }
+        val capped = cappedScrollback(lines, max = 3)
+        assertEquals(3, capped.size)
+        assertEquals(lines.takeLast(3), capped)
+    }
 }

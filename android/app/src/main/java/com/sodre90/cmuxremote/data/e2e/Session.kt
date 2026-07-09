@@ -6,6 +6,10 @@ import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** The subset of [Session] that [encryptBody]/[decryptBody]/[encryptFrame]/
  *  [decryptFrame] need -- lets tests substitute an in-memory fake. */
@@ -38,6 +42,38 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
         )
     }
 
+    // In-memory mirror of the send counter and replay window, so the hot
+    // path (once per outbound keystroke / inbound frame) never re-decrypts
+    // these from EncryptedSharedPreferences. Every method that touches
+    // either field -- including setPairing/clear/absorbLegacyIfTarget, not
+    // just the hot-path nextSendCounter/commitRecvCounter -- synchronizes on
+    // `this` and routes its prefs write through persist() on writeScope, so
+    // (a) callers on different threads (Compose's main thread for sends, an
+    // OkHttp callback thread for recvs, the pairing/forget flows) never see
+    // a torn read, and (b) the on-disk value always converges to match
+    // whichever write was most recently applied in memory -- a queued write
+    // from before a reset can't land after it and resurrect stale counters,
+    // since writeScope is single-threaded FIFO. peer_pubkey/shared_secret
+    // are deliberately NOT part of this cache: isPaired()/sharedSecret()
+    // read them straight from prefs and need read-after-write consistency,
+    // so their writes stay synchronous exactly as before.
+    private var sendCounter: Long = prefs.getLong(key(KEY_SEND_COUNTER), 0L)
+    private var replayWindow: ReplayWindow =
+        ReplayWindow(prefs.getLong(key(KEY_RECV_HIGHEST), -1L), prefs.getLong(key(KEY_RECV_WINDOW_BITS), 0L))
+
+    // Single-threaded so writes are applied in the same order they were
+    // committed in memory -- Dispatchers.IO's shared pool alone would not
+    // guarantee that for independently launched coroutines.
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+
+    private fun persist(block: SharedPreferences.Editor.() -> Unit) {
+        writeScope.launch {
+            val editor = prefs.edit()
+            editor.block()
+            editor.apply()
+        }
+    }
+
     /**
      * Migrates the pre-dual-pairing single e2e session record into this
      * instance's slot, if [isMigrationTarget] is true. AppContainer decides
@@ -50,18 +86,27 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
     fun absorbLegacyIfTarget(isMigrationTarget: Boolean) {
         if (!isMigrationTarget) return
         if (!prefs.contains(KEY_SHARED_SECRET)) return
+        val send = prefs.getLong(KEY_SEND_COUNTER, 0L)
+        val recvHighest = prefs.getLong(KEY_RECV_HIGHEST, -1L)
+        val recvWindowBits = prefs.getLong(KEY_RECV_WINDOW_BITS, 0L)
         prefs.edit()
             .putString(key(KEY_PEER_PUBLIC_KEY), prefs.getString(KEY_PEER_PUBLIC_KEY, null))
             .putString(key(KEY_SHARED_SECRET), prefs.getString(KEY_SHARED_SECRET, null))
-            .putLong(key(KEY_SEND_COUNTER), prefs.getLong(KEY_SEND_COUNTER, 0L))
-            .putLong(key(KEY_RECV_HIGHEST), prefs.getLong(KEY_RECV_HIGHEST, -1L))
-            .putLong(key(KEY_RECV_WINDOW_BITS), prefs.getLong(KEY_RECV_WINDOW_BITS, 0L))
             .remove(KEY_PEER_PUBLIC_KEY)
             .remove(KEY_SHARED_SECRET)
             .remove(KEY_SEND_COUNTER)
             .remove(KEY_RECV_HIGHEST)
             .remove(KEY_RECV_WINDOW_BITS)
             .apply()
+        synchronized(this) {
+            sendCounter = send
+            replayWindow = ReplayWindow(recvHighest, recvWindowBits)
+        }
+        persist {
+            putLong(key(KEY_SEND_COUNTER), send)
+            putLong(key(KEY_RECV_HIGHEST), recvHighest)
+            putLong(key(KEY_RECV_WINDOW_BITS), recvWindowBits)
+        }
     }
 
     fun isPaired(): Boolean = prefs.contains(key(KEY_SHARED_SECRET))
@@ -77,32 +122,42 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
         prefs.edit()
             .putString(key(KEY_PEER_PUBLIC_KEY), Base64.encodeToString(peerPublicKey, Base64.NO_WRAP))
             .putString(key(KEY_SHARED_SECRET), Base64.encodeToString(sharedSecret, Base64.NO_WRAP))
-            .putLong(key(KEY_SEND_COUNTER), 0L)
-            .putLong(key(KEY_RECV_HIGHEST), -1L)
-            .putLong(key(KEY_RECV_WINDOW_BITS), 0L)
             .apply()
+        synchronized(this) {
+            sendCounter = 0L
+            replayWindow = ReplayWindow()
+        }
+        persist {
+            putLong(key(KEY_SEND_COUNTER), 0L)
+            putLong(key(KEY_RECV_HIGHEST), -1L)
+            putLong(key(KEY_RECV_WINDOW_BITS), 0L)
+        }
     }
 
     /** Durable, never reset across reconnects. */
     override fun nextSendCounter(): Long {
-        val n = prefs.getLong(key(KEY_SEND_COUNTER), 0L)
-        prefs.edit().putLong(key(KEY_SEND_COUNTER), n + 1).apply()
+        val n = synchronized(this) {
+            val current = sendCounter
+            sendCounter = current + 1
+            current
+        }
+        persist { putLong(key(KEY_SEND_COUNTER), n + 1) }
         return n
     }
 
-    private fun replayWindow(): ReplayWindow =
-        ReplayWindow(prefs.getLong(key(KEY_RECV_HIGHEST), -1L), prefs.getLong(key(KEY_RECV_WINDOW_BITS), 0L))
-
     /** Read-only check -- call before attempting to decrypt. */
-    override fun canAcceptRecvCounter(n: Long): Boolean = replayWindow().canAccept(n)
+    override fun canAcceptRecvCounter(n: Long): Boolean = synchronized(this) { replayWindow.canAccept(n) }
 
     /** Mutating -- call only after the corresponding ciphertext has verified. */
     override fun commitRecvCounter(n: Long) {
-        val updated = replayWindow().commit(n)
-        prefs.edit()
-            .putLong(key(KEY_RECV_HIGHEST), updated.highestSeen)
-            .putLong(key(KEY_RECV_WINDOW_BITS), updated.windowBits)
-            .apply()
+        val updated = synchronized(this) {
+            replayWindow = replayWindow.commit(n)
+            replayWindow
+        }
+        persist {
+            putLong(key(KEY_RECV_HIGHEST), updated.highestSeen)
+            putLong(key(KEY_RECV_WINDOW_BITS), updated.windowBits)
+        }
     }
 
     /** Wipes this slot's session only -- used when re-pairing this slot. The
@@ -111,10 +166,16 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
         prefs.edit()
             .remove(key(KEY_PEER_PUBLIC_KEY))
             .remove(key(KEY_SHARED_SECRET))
-            .remove(key(KEY_SEND_COUNTER))
-            .remove(key(KEY_RECV_HIGHEST))
-            .remove(key(KEY_RECV_WINDOW_BITS))
             .apply()
+        synchronized(this) {
+            sendCounter = 0L
+            replayWindow = ReplayWindow()
+        }
+        persist {
+            remove(key(KEY_SEND_COUNTER))
+            remove(key(KEY_RECV_HIGHEST))
+            remove(key(KEY_RECV_WINDOW_BITS))
+        }
     }
 
     private fun key(base: String) = "${slot.name.lowercase()}_$base"

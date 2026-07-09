@@ -46,6 +46,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.mapSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -104,19 +106,30 @@ fun SessionsScreen(
     }
 }
 
+/** Saves the card-expanded map across rotation -- a SnapshotStateMap isn't
+ *  itself Bundleable, so round-trip it through a plain Map. */
+private val ExpandedMapSaver = mapSaver(
+    save = { it.toMap() },
+    restore = { saved ->
+        mutableStateMapOf<String, Boolean>().apply {
+            putAll(saved.mapValues { (_, v) -> v as Boolean })
+        }
+    },
+)
+
 @Composable
 private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, onOpen: (String) -> Unit) {
     if (workspaces.isEmpty()) {
         Box(Modifier.fillMaxSize()) { Text("No sessions", Modifier.align(Alignment.Center)) }
         return
     }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val expanded = rememberSaveable(saver = ExpandedMapSaver) { mutableStateMapOf() }
     var sortByAttention by remember { mutableStateOf(false) }
 
     // The phone-local drag order (see WorkspaceOrderStore); read once, then
     // kept in sync locally so drags feel instant without waiting on a
     // SharedPreferences round trip through the view model.
-    var customOrder by remember { mutableStateOf(vm.loadOrder()) }
+    var customOrder by rememberSaveable { mutableStateOf(vm.loadOrder()) }
     val baseOrdered = remember(workspaces, customOrder) { applyCustomOrder(workspaces, customOrder) }
     val ordered = if (sortByAttention) sortedByAttention(baseOrdered) else baseOrdered
 
@@ -293,7 +306,7 @@ private fun WorkspaceCard(
     onYoloMode: () -> Unit,
     dragHandle: @Composable () -> Unit,
 ) {
-    var showActionMenu by remember { mutableStateOf(false) }
+    var showActionMenu by rememberSaveable { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth()) {
         // A left accent stripe flags agents that want attention: red when blocked
         // on a permission prompt, amber when idle waiting for input. IntrinsicSize

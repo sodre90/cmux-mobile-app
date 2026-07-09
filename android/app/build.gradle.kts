@@ -28,7 +28,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -70,7 +70,6 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.security.crypto)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)

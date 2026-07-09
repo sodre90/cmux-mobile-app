@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,7 +102,7 @@ fun TerminalScreen(
     // only place typed input touches the UI; the terminal's own echo is the
     // single visible record of what's been typed, instead of mirroring it in
     // a second, separately-scrolling box.
-    var input by remember { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -125,10 +126,10 @@ fun TerminalScreen(
     }
 
     // Pinch-to-zoom factor over the fit-to-width baseline (1f = exact fit).
-    var userZoom by remember { mutableFloatStateOf(1f) }
+    var userZoom by rememberSaveable { mutableFloatStateOf(1f) }
     // Word-wrap: on → zooming in reflows long rows onto extra lines; off → it stays
     // one row per line with horizontal panning (keeps tables/TUI layouts aligned).
-    var wrap by remember { mutableStateOf(true) }
+    var wrap by rememberSaveable { mutableStateOf(true) }
 
     Scaffold(
         topBar = {
@@ -292,16 +293,25 @@ fun TerminalScreen(
                                 // IMEs (Gboard included) still dispatch a raw KEYCODE_DEL in
                                 // that case for compatibility; catch it here and send the
                                 // erase byte directly.
+                                //
+                                // Keys with no sensible meaning inside a single-line text
+                                // field (arrows, Escape, Tab, Enter -- from a physical/
+                                // Bluetooth keyboard) are intercepted the same way, instead
+                                // of falling through into the field's own IME-driven capture
+                                // where they'd be dropped or mangled.
                                 .onPreviewKeyEvent { event ->
-                                    if (event.type == KeyEventType.KeyDown &&
-                                        event.key == Key.Backspace &&
-                                        input.isEmpty()
-                                    ) {
-                                        vm.sendText(DEL)
-                                        true
-                                    } else {
-                                        false
+                                    if (event.type != KeyEventType.KeyDown) {
+                                        return@onPreviewKeyEvent false
                                     }
+                                    if (event.key == Key.Backspace && input.isEmpty()) {
+                                        vm.sendText(DEL)
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    val sequence = physicalKeySequence(event.key, s.grid.applicationCursorKeys)
+                                        ?: return@onPreviewKeyEvent false
+                                    vm.sendText(sequence)
+                                    if (event.key == Key.Enter || event.key == Key.NumPadEnter) input = ""
+                                    true
                                 },
                         )
                     }

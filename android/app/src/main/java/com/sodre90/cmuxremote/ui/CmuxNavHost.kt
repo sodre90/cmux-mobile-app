@@ -39,6 +39,14 @@ fun CmuxNavHost(
     val configured = container.anyBridgeConfigured()
     val start = if (!configured) Routes.SETTINGS else Routes.SESSIONS
 
+    // Hoisted above NavHost (not local to the SETTINGS composable) so both
+    // SETTINGS and PAIR can bump it. SETTINGS's own composition survives a
+    // push-to-PAIR-and-pop-back round trip unchanged -- it doesn't re-execute
+    // from scratch just because PAIR was on top of it -- so without an
+    // explicit bump on successful pairing, ConnectionSettingsScreen keeps
+    // showing whatever paired/unpaired status it read before the navigation.
+    var forgetGeneration by remember { mutableIntStateOf(0) }
+
     // A notification tap carries which workspace needs attention (cmux never
     // tells us the exact pane). Resolve it once after launch, but only when the
     // bridge is configured — otherwise onboarding must come first: if the
@@ -87,12 +95,6 @@ fun CmuxNavHost(
         popExitTransition = { ExitTransition.None },
     ) {
         composable(Routes.SETTINGS) {
-            // Re-pairing already refreshes this screen's paired/unpaired status
-            // for free: navigating to PAIR and popping back recomposes this
-            // content lambda, which re-reads settings.bridgeConfig() fresh.
-            // Forgetting doesn't leave this destination, so there's nothing to
-            // force a fresh read otherwise -- this counter is that trigger.
-            var forgetGeneration by remember { mutableIntStateOf(0) }
             val relayConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.RELAY) != null }
             val directConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
             ConnectionSettingsScreen(
@@ -122,7 +124,10 @@ fun CmuxNavHost(
             PairingScreen(
                 vm = vm,
                 title = if (slot == ConnectionSlot.RELAY) "Pair via relay" else "Pair via Tailscale (direct)",
-                onPaired = { navController.popBackStack() }, // back to ConnectionSettingsScreen, now showing this slot as paired
+                onPaired = {
+                    forgetGeneration++ // ConnectionSettingsScreen must re-read to show this slot as paired
+                    navController.popBackStack()
+                },
             )
         }
 

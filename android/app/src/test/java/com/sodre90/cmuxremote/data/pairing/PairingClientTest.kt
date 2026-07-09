@@ -6,6 +6,8 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.tls.HandshakeCertificates
+import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -13,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 import java.util.Base64
 
 /** Records what PairingClient persisted -- stands in for real Settings/Session/Identity. */
@@ -21,11 +24,26 @@ private class FakeIdentity(val priv: ByteArray, val pub: ByteArray)
 class PairingClientTest {
 
     private lateinit var server: MockWebServer
-    private val http = OkHttpClient()
+    private lateinit var http: OkHttpClient
 
+    // pairInternal now rejects a non-https pair_url (see hasSafePairUrl), so
+    // the MockWebServer these tests POST/GET against must actually speak
+    // TLS -- a self-signed cert the client is told to trust, same as
+    // OkHttp's own test suite does for localhost.
     @Before
     fun setUp() {
-        server = MockWebServer().apply { start() }
+        val serverCert = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
+        val serverCertificates = HandshakeCertificates.Builder().heldCertificate(serverCert).build()
+        server = MockWebServer().apply {
+            useHttps(serverCertificates.sslSocketFactory(), false)
+            start()
+        }
+        val clientCertificates = HandshakeCertificates.Builder()
+            .addTrustedCertificate(serverCert.certificate)
+            .build()
+        http = OkHttpClient.Builder()
+            .sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager)
+            .build()
     }
 
     @After
@@ -92,6 +110,25 @@ class PairingClientTest {
         } catch (e: PairingCodeInvalidException) {
             // expected
         }
+    }
+
+    @Test
+    fun pairRejectsNonHttpsPairUrlWithoutIssuingARequest() {
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        val client = TestablePairingClient(http, phonePriv, phonePub, { _, _ -> }, {}, {})
+        val qr = PairingQr(
+            pairUrl = server.url("/devices/pair").toString().replaceFirst("https://", "http://"),
+            code = "X",
+            agentPubkey = Base64.getEncoder().encodeToString(ByteArray(32)),
+            expiresAt = "2099-01-01T00:00:00Z", tenantId = "t",
+        )
+        try {
+            runBlocking { client.pair(qr) }
+            fail("expected an IOException for a non-https pair_url")
+        } catch (e: IOException) {
+            // expected
+        }
+        assertEquals(0, server.requestCount)
     }
 
     @Test

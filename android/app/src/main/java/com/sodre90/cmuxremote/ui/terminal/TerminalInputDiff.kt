@@ -23,13 +23,19 @@ fun diffToKeystrokes(old: String, new: String): String {
     return DEL.repeat(erased) + new.substring(prefixLen)
 }
 
-/** Renders control characters (DEL, ESC, etc.) as readable placeholders for logging. */
+/**
+ * Renders control characters (DEL, ESC, etc.) as readable placeholders for
+ * logging, and redacts everything else to `*`. Text typed into a remote
+ * terminal session can be arbitrarily sensitive (passwords, tokens, private
+ * messages), so only length and control-character structure -- useful for
+ * diagnosing diff/escape-sequence bugs -- are safe to put in logcat.
+ */
 fun describeForLog(text: String): String = buildString {
     for (c in text) {
         when {
             c.code == 127 -> append("<DEL>")
             c.code < 0x20 -> append("<0x%02x>".format(c.code))
-            else -> append(c)
+            else -> append('*')
         }
     }
 }

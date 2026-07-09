@@ -29,6 +29,43 @@ class PairingQrTest {
     }
 
     @Test
+    fun returnsNullForHttpPairUrl() {
+        val raw = """{"pair_url":"http://cmux.example.com/devices/pair","code":"ABC123",
+            "agent_pubkey":"YWJj","expires_at":"2099-01-01T00:00:00Z","tenant_id":"t1"}"""
+        assertNull(parsePairingQr(raw))
+    }
+
+    @Test
+    fun returnsNullForPairUrlWithUserinfo() {
+        val raw = """{"pair_url":"https://user:pass@cmux.example.com/devices/pair","code":"ABC123",
+            "agent_pubkey":"YWJj","expires_at":"2099-01-01T00:00:00Z","tenant_id":"t1"}"""
+        assertNull(parsePairingQr(raw))
+    }
+
+    @Test
+    fun hasSafePairUrlAcceptsPlainHttps() {
+        val qr = PairingQr(pairUrl = "https://cmux.example.com/devices/pair", code = "c", agentPubkey = "p")
+        assertTrue(qr.hasSafePairUrl())
+    }
+
+    @Test
+    fun hasSafePairUrlRejectsNonHttpsSchemes() {
+        assertFalse(PairingQr(pairUrl = "http://cmux.example.com/devices/pair").hasSafePairUrl())
+        assertFalse(PairingQr(pairUrl = "file:///etc/passwd").hasSafePairUrl())
+        assertFalse(PairingQr(pairUrl = "not a url").hasSafePairUrl())
+    }
+
+    @Test
+    fun hasSafePairUrlRejectsUserinfo() {
+        assertFalse(PairingQr(pairUrl = "https://user:pass@cmux.example.com/devices/pair").hasSafePairUrl())
+    }
+
+    @Test
+    fun hasSafePairUrlRejectsMissingHost() {
+        assertFalse(PairingQr(pairUrl = "https:///devices/pair").hasSafePairUrl())
+    }
+
+    @Test
     fun isExpiredTrueForPastTimestamp() {
         val qr = PairingQr(pairUrl = "u", code = "c", agentPubkey = "p", expiresAt = "2000-01-01T00:00:00Z", tenantId = "t")
         assertTrue(qr.isExpired())

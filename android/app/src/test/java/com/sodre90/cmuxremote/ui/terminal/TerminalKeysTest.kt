@@ -1,6 +1,8 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import androidx.compose.ui.input.key.Key
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,4 +37,20 @@ class TerminalKeysTest {
     // Arrows are surfaced via the D-pad, not the scrollable bar.
     @Test fun arrowsNotInScrollableBar() =
         assertTrue(TerminalKeys.none { it.label == "↑" || it.label == "→" })
+
+    // physicalKeySequence: physical/Bluetooth-keyboard key handling.
+    @Test fun physicalArrowUpIsSs3WhenApplication() =
+        assertEquals(esc + "OA", physicalKeySequence(Key.DirectionUp, applicationCursorKeys = true))
+    @Test fun physicalArrowLeftIsCsiWhenNormal() =
+        assertEquals(esc + "[D", physicalKeySequence(Key.DirectionLeft, applicationCursorKeys = false))
+    @Test fun physicalEscapeIsEsc() =
+        assertEquals(esc, physicalKeySequence(Key.Escape, applicationCursorKeys = false))
+    @Test fun physicalTabIsTabChar() =
+        assertEquals("\t", physicalKeySequence(Key.Tab, applicationCursorKeys = false))
+    @Test fun physicalEnterIsCarriageReturn() =
+        assertEquals(Char(13).toString(), physicalKeySequence(Key.Enter, applicationCursorKeys = false))
+    @Test fun physicalNumPadEnterIsCarriageReturn() =
+        assertEquals(Char(13).toString(), physicalKeySequence(Key.NumPadEnter, applicationCursorKeys = false))
+    @Test fun physicalRegularCharKeyIsUnhandled() =
+        assertNull(physicalKeySequence(Key.A, applicationCursorKeys = false))
 }

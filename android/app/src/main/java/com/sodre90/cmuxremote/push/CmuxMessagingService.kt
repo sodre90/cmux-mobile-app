@@ -14,6 +14,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -27,6 +28,11 @@ import kotlinx.coroutines.launch
 class CmuxMessagingService : FirebaseMessagingService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
+    }
 
     override fun onNewToken(token: String) {
         val container = (application as? CmuxApp)?.container ?: return

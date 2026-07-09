@@ -28,6 +28,14 @@ private const val MAX_BACKOFF_MS = 5_000L
 // unreachable, don't retry it on every single reconnect for this long.
 private const val RELAY_PENALTY_MS = 30_000L
 
+// A RELAY connect that drops again within this long of its first frame is
+// treated as a framing failure, not a benign disconnect.
+private const val RELAY_STABLE_MS = 2_000L
+
+// How many framing failures in a row (see RELAY_STABLE_MS) before RELAY is
+// penalized the same as a connect that received zero frames.
+private const val RELAY_DROP_THRESHOLD = 3
+
 // How long a sent-but-unacknowledged message can stay pending before the UI
 // treats it as stuck rather than merely in flight.
 private const val ACK_STALE_MS = 1_500L
@@ -72,6 +80,12 @@ class TerminalViewModel(
     // still-healthy relay.
     @Volatile
     private var relayDownUntil: Long = 0L
+
+    // Consecutive RELAY connects that framed (gotFrame) but dropped again
+    // almost immediately after -- see RELAY_STABLE_MS/RELAY_DROP_THRESHOLD.
+    // One of these alone could be a fluke; several in a row means RELAY
+    // itself is unhealthy, not just a benign single disconnect.
+    private var consecutiveRelayDrops = 0
 
     @Volatile
     private var activeSocket: TerminalSocket? = null
@@ -168,10 +182,12 @@ class TerminalViewModel(
                 if (socket == null) { delay(backoff); continue }
                 activeSocket = socket
                 var gotFrame = false
+                var connectedAtMs = 0L
                 try {
                     socket.connect().collect { frame ->
                         if (!gotFrame) {
                             gotFrame = true
+                            connectedAtMs = System.currentTimeMillis()
                             flushNeverSent()
                             flushPendingOutboundIfIdle()
                         }
@@ -189,8 +205,19 @@ class TerminalViewModel(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    if (!gotFrame && primarySlot == ConnectionSlot.RELAY) {
-                        relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
+                    if (primarySlot == ConnectionSlot.RELAY) {
+                        if (!gotFrame) {
+                            relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
+                            consecutiveRelayDrops = 0
+                        } else if (System.currentTimeMillis() - connectedAtMs < RELAY_STABLE_MS) {
+                            consecutiveRelayDrops++
+                            if (consecutiveRelayDrops >= RELAY_DROP_THRESHOLD) {
+                                relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
+                                consecutiveRelayDrops = 0
+                            }
+                        } else {
+                            consecutiveRelayDrops = 0
+                        }
                     }
                 }
                 // Whether the connection ended gracefully or threw, any

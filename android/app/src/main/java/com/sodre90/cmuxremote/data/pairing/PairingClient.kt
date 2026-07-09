@@ -115,6 +115,11 @@ internal suspend fun pairInternal(
     onSetBaseUrl: (String) -> Unit,
     onSetToken: (String) -> Unit,
 ): Unit = withContext(Dispatchers.IO) {
+    // The manual-entry path (resolvePairingCode) builds its own PairingQr
+    // from a locally-constructed URL and never goes through
+    // parsePairingQr's validation, so this is the one choke point both the
+    // QR-scan and manual-entry flows share before the pairing POST.
+    if (!qr.hasSafePairUrl()) throw IOException("pairing failed: server address must be https://")
     val payload = DevicePairRequest(
         code = qr.code,
         name = "phone",

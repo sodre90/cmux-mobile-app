@@ -1,7 +1,11 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import androidx.compose.ui.input.key.Key
+
 // Control sequences built from code points so no raw control bytes live in source.
-private val ESC = Char(27).toString()
+// ESC is internal (not private) so TerminalScreen's physical-keyboard handling
+// can send it directly, the same sequence the on-screen "Esc" key uses.
+internal val ESC = Char(27).toString()
 private val CTRL_C = Char(3).toString()
 private val CTRL_D = Char(4).toString()
 private val CTRL_Z = Char(26).toString()
@@ -54,3 +58,20 @@ val TerminalKeys: List<TerminalKey> = listOf(
     StaticKey("PgUp", ESC + "[5~"),
     StaticKey("PgDn", ESC + "[6~"),
 )
+
+/**
+ * Resolves a physical keyboard press (e.g. from a Bluetooth keyboard) to the
+ * terminal byte sequence it should send, or null if this key isn't one of the
+ * ones intercepted directly -- regular character keys fall through to the
+ * text field's own IME-driven capture instead.
+ */
+internal fun physicalKeySequence(key: Key, applicationCursorKeys: Boolean): String? = when (key) {
+    Key.DirectionUp -> ArrowUp.sequence(applicationCursorKeys)
+    Key.DirectionDown -> ArrowDown.sequence(applicationCursorKeys)
+    Key.DirectionLeft -> ArrowLeft.sequence(applicationCursorKeys)
+    Key.DirectionRight -> ArrowRight.sequence(applicationCursorKeys)
+    Key.Escape -> ESC
+    Key.Tab -> "\t"
+    Key.Enter, Key.NumPadEnter -> CR
+    else -> null
+}

@@ -54,6 +54,13 @@ val TerminalFont = FontFamily(
  */
 internal const val TerminalLineHeightFactor = 1.25f
 
+/** Scrollback beyond this many lines is dropped from the render buffer -- the
+ *  agent's own history is untouched, only what this view holds/composes. Without
+ *  a ceiling, a long-lived session's buffer (and the per-frame `+` reallocation
+ *  building it) grows without bound, and every one of those rows is composed
+ *  since the Column below has no windowing. */
+internal const val MaxScrollbackLines = 2000
+
 /**
  * Renders a [DecodedGrid] (scrollback + visible screen) on a solid dark canvas:
  * one no-wrap styled line per row, the cursor drawn by inverting its cell, native
@@ -73,8 +80,10 @@ fun RenderGridView(
     val hScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
 
-    val buffer = remember(grid) { grid.scrollbackLines + grid.lines }
-    val cursorRow = grid.cursor?.takeIf { it.visible }?.let { it.row + grid.scrollbackLines.size }
+    val buffer = remember(grid) { cappedScrollback(grid.scrollbackLines) + grid.lines }
+    val cursorRow = grid.cursor?.takeIf { it.visible }?.let {
+        it.row + minOf(grid.scrollbackLines.size, MaxScrollbackLines)
+    }
     val cursorCol = grid.cursor?.column
 
     // Stick to bottom across frames: if we were at (or near) the previous bottom,
@@ -126,8 +135,11 @@ fun RenderGridView(
                         } else {
                             line
                         }
+                        val annotated = remember(rendered, styleMap, colors, cur) {
+                            buildLine(rendered, styleMap, colors, cur)
+                        }
                         Text(
-                            text = buildLine(rendered, styleMap, colors, cur),
+                            text = annotated,
                             fontFamily = TerminalFont,
                             fontSize = fontSizeSp.sp,
                             lineHeight = (fontSizeSp * TerminalLineHeightFactor).sp,
@@ -155,6 +167,10 @@ private val RuleChars = setOf(
     '├', '┤', '┬', '┴', '┼', '╞', '╡', '╪',
     '╔', '╗', '╚', '╝', '╠', '╣', '╦', '╩', '╬',
 )
+
+/** Keeps only the most recent [max] scrollback lines, oldest history dropped. */
+internal fun cappedScrollback(scrollbackLines: List<DecodedLine>, max: Int = MaxScrollbackLines): List<DecodedLine> =
+    if (scrollbackLines.size <= max) scrollbackLines else scrollbackLines.takeLast(max)
 
 /** True if the row's only non-blank glyphs are box-drawing/ASCII rule characters. */
 internal fun isHorizontalRule(line: DecodedLine): Boolean {
