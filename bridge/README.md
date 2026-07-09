@@ -72,13 +72,17 @@ go test ./...        # all tests run with no network and no real cmux
 1. Copy the binary to `/usr/local/bin/cmux-relay`.
 2. Copy `deploy/relay.example.toml` to `/etc/cmux-relay/config.toml` and set
    `relay_token` (a long random secret) and optionally the FCM fields. On
-   first run the relay generates its own CA (`ca_cert`/`ca_key`, default
-   `~/.config/cmux-relay/ca.crt` / `ca.key`) and signs every agent and device
-   cert against it — there's no separate hand-rolled CA to create any more.
-   Migrating an existing deployment that already has a CA (RSA or ECDSA)?
-   Point `ca_cert`/`ca_key` at those files instead and the relay loads and
-   reuses it rather than minting a new one — nginx's trust bundle and any
-   already-issued device certs need no changes.
+   first run the relay generates its own CA (`ca_cert`/`ca_key`) and signs
+   every agent and device cert against it — there's no separate hand-rolled
+   CA to create any more. Migrating an existing deployment that already has a
+   CA (RSA or ECDSA)? Point `ca_cert`/`ca_key` at those files instead and the
+   relay loads and reuses it rather than minting a new one — nginx's trust
+   bundle and any already-issued device certs need no changes.
+   `ca_cert`/`ca_key` default to `~/.config/cmux-relay/ca.crt` / `ca.key` when
+   unset, but the example file sets them under `/var/lib/cmux-relay/` instead
+   — see the next step, `deploy/cmux-relay.service`'s `ProtectSystem=strict` +
+   `StateDirectory=cmux-relay` only allow writes under `/var/lib/cmux-relay`,
+   so the `~/.config` default would fail to create the CA there on first run.
 3. Install the systemd unit and nginx vhost:
 
    ```bash
@@ -103,8 +107,10 @@ the relay can route by CN.
 
 `docker-compose.yml` + `deploy/Containerfile` build and run the relay in a
 rootless container. Copy this tree to the host, drop a `config.toml` beside the
-compose file (from `deploy/relay.example.toml`, with a real `relay_token` and
-`token_store = "/data/store.db"`), then:
+compose file (from `deploy/relay.example.toml`, with a real `relay_token`,
+`token_store = "/data/store.db"`, and `ca_cert`/`ca_key` under `/data/` too —
+the example file's `/var/lib/cmux-relay/` paths are for the systemd unit and
+aren't part of this container's persisted `relay-data` volume), then:
 
 ```bash
 podman-compose up -d --build
