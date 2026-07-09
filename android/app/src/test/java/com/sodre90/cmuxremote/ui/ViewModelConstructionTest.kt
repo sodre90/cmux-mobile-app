@@ -5,6 +5,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.PairingGateway
+import com.sodre90.cmuxremote.data.RelayHealth
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
 import com.sodre90.cmuxremote.data.pairing.PairingClient
@@ -45,6 +46,7 @@ class ViewModelConstructionTest {
         override fun anyBridgeConfigured(): Boolean = false
         override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = null
         override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
+        override fun relayHealth(): RelayHealth = RelayHealth()
     }
 
     private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {

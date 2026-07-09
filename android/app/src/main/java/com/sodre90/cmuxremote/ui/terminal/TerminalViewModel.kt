@@ -4,37 +4,20 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeGateway
-import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
+import com.sodre90.cmuxremote.model.TerminalDown
 import com.sodre90.cmuxremote.model.TerminalUp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-
-// Reconnect backoff: 1s, doubling to a 5s cap so a backgrounded app reconnects
-// within a few seconds of returning to the foreground.
-private const val INITIAL_BACKOFF_MS = 1_000L
-private const val MAX_BACKOFF_MS = 5_000L
-
-// Mirrors FallbackBridgeClient's penalty window: once RELAY has proven
-// unreachable, don't retry it on every single reconnect for this long.
-private const val RELAY_PENALTY_MS = 30_000L
-
-// A RELAY connect that drops again within this long of its first frame is
-// treated as a framing failure, not a benign disconnect.
-private const val RELAY_STABLE_MS = 2_000L
-
-// How many framing failures in a row (see RELAY_STABLE_MS) before RELAY is
-// penalized the same as a connect that received zero frames.
-private const val RELAY_DROP_THRESHOLD = 3
 
 // How long a sent-but-unacknowledged message can stay pending before the UI
 // treats it as stuck rather than merely in flight.
@@ -68,24 +51,15 @@ class TerminalViewModel(
     val state: StateFlow<TerminalUiState> = _state.asStateFlow()
     private var job: Job? = null
 
-    // Set only when a connect attempt against RELAY never receives a single
-    // frame -- a genuine reachability failure, as opposed to a socket that
-    // connected fine and later dropped (e.g. the app was backgrounded). While
-    // set, reconnects prefer DIRECT; once it lapses, RELAY is tried first
-    // again. This matters because DIRECT (Tailscale) keeps OkHttp's normal,
-    // much longer connect timeout (see AppContainer.httpClient) on the
+    // Picks RELAY vs DIRECT per reconnect attempt, preferring DIRECT only
+    // once RELAY has proven unreachable (see SocketReconnector/RelayHealth).
+    // This matters because DIRECT (Tailscale) keeps OkHttp's normal, much
+    // longer connect timeout (see AppContainer.httpClient) on the
     // assumption it's only reached after RELAY has already failed -- so
-    // flipping to DIRECT on a benign disconnect made the UI stall for that
+    // flipping to DIRECT on a benign disconnect would stall the UI for that
     // full timeout with an unreachable Tailscale host instead of using the
     // still-healthy relay.
-    @Volatile
-    private var relayDownUntil: Long = 0L
-
-    // Consecutive RELAY connects that framed (gotFrame) but dropped again
-    // almost immediately after -- see RELAY_STABLE_MS/RELAY_DROP_THRESHOLD.
-    // One of these alone could be a fluke; several in a row means RELAY
-    // itself is unhealthy, not just a benign single disconnect.
-    private var consecutiveRelayDrops = 0
+    private val reconnector = SocketReconnector<TerminalDown>(bridge.relayHealth())
 
     @Volatile
     private var activeSocket: TerminalSocket? = null
@@ -173,68 +147,40 @@ class TerminalViewModel(
         // leaving the user to tap Reconnect. A disconnect keeps the last grid
         // on screen — no jarring error page — while reconnection runs.
         job = viewModelScope.launch {
-            var backoff = INITIAL_BACKOFF_MS
-            while (isActive) {
-                val primarySlot =
-                    if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-                val socket = bridge.terminalSocket(primarySlot, surfaceId)
-                    ?: bridge.terminalSocket(primarySlot.other(), surfaceId)
-                if (socket == null) { delay(backoff); continue }
-                activeSocket = socket
-                var gotFrame = false
-                var connectedAtMs = 0L
-                try {
-                    socket.connect().collect { frame ->
-                        if (!gotFrame) {
-                            gotFrame = true
-                            connectedAtMs = System.currentTimeMillis()
-                            flushNeverSent()
-                            flushPendingOutboundIfIdle()
-                        }
-                        if (frame.type == "ack") {
-                            handleAck(frame.seq, frame.ok)
-                            return@collect
-                        }
-                        val rg = frame.grid ?: return@collect
-                        backoff = INITIAL_BACKOFF_MS
-                        _state.value = TerminalUiState(
-                            grid = RenderGridDecoder.decode(rg),
-                            styles = rg.styles,
-                        )
+            reconnector.run(
+                openSocket = { slot -> bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect() },
+                onConnected = {
+                    flushNeverSent()
+                    flushPendingOutboundIfIdle()
+                },
+                onDisconnected = {
+                    // Whether the connection ended gracefully or threw, any
+                    // still-unacked messages have an unknowable fate now --
+                    // drop them rather than risk a duplicate resend, and
+                    // flag it.
+                    if (pendingAcks.isNotEmpty()) {
+                        pendingAcks.clear()
+                        _lostInputNotice.value = true
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    if (primarySlot == ConnectionSlot.RELAY) {
-                        if (!gotFrame) {
-                            relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
-                            consecutiveRelayDrops = 0
-                        } else if (System.currentTimeMillis() - connectedAtMs < RELAY_STABLE_MS) {
-                            consecutiveRelayDrops++
-                            if (consecutiveRelayDrops >= RELAY_DROP_THRESHOLD) {
-                                relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
-                                consecutiveRelayDrops = 0
-                            }
-                        } else {
-                            consecutiveRelayDrops = 0
-                        }
+                    // The in-flight gate's ack (if any) can never arrive now
+                    // that this socket is gone -- clear it so a new
+                    // connection isn't stuck refusing to flush
+                    // pendingOutbound forever.
+                    inFlightInputSeq = null
+                },
+                onFrame = onFrame@{ frame ->
+                    if (frame.type == "ack") {
+                        handleAck(frame.seq, frame.ok)
+                        return@onFrame false
                     }
-                }
-                // Whether the connection ended gracefully or threw, any
-                // still-unacked messages have an unknowable fate now -- drop
-                // them rather than risk a duplicate resend, and flag it.
-                if (pendingAcks.isNotEmpty()) {
-                    pendingAcks.clear()
-                    _lostInputNotice.value = true
-                }
-                // The in-flight gate's ack (if any) can never arrive now that
-                // this socket is gone -- clear it so a new connection isn't
-                // stuck refusing to flush pendingOutbound forever.
-                inFlightInputSeq = null
-                if (!isActive) break
-                delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
-            }
+                    val rg = frame.grid ?: return@onFrame false
+                    _state.value = TerminalUiState(
+                        grid = RenderGridDecoder.decode(rg),
+                        styles = rg.styles,
+                    )
+                    true
+                },
+            )
         }
     }
 

@@ -101,9 +101,17 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     override fun saveOrder(order: List<String>) = workspaceOrderStore.save(order)
 
+    // Shared with fallbackBridge below and handed out via relayHealth() so
+    // every reconnecting socket subscription and the REST fallback path
+    // learn "relay is down" once, from the same instance.
+    private val sharedRelayHealth = RelayHealth()
+
+    override fun relayHealth(): RelayHealth = sharedRelayHealth
+
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },
         fallback = { bridgeClient(ConnectionSlot.DIRECT) },
+        relayHealth = sharedRelayHealth,
     )
 
     /** The fallback-aware entry point most read/write call sites should use

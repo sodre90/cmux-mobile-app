@@ -4,12 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeException
 import com.sodre90.cmuxremote.data.BridgeGateway
-import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
+import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
+import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @OptIn(FlowPreview::class)
@@ -50,6 +49,8 @@ class SessionsViewModel(
     // one agent turn) into a single refetch instead of hammering `cmux rpc`.
     private val refreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth())
 
     init {
         refresh()
@@ -170,35 +171,12 @@ class SessionsViewModel(
     private fun subscribeToEvents() {
         if (!bridge.anyBridgeConfigured()) return
         viewModelScope.launch {
-            // Set only when a connect attempt against RELAY never receives a single
-            // frame -- a genuine reachability failure, as opposed to a socket that
-            // connected fine and later dropped (e.g. the app was backgrounded). See
-            // TerminalViewModel's relayDownUntil for the full rationale.
-            var relayDownUntil = 0L
-            var backoff = INITIAL_BACKOFF_MS
-            while (isActive) {
-                val primarySlot =
-                    if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-                val events = bridge.eventsSocket(primarySlot) ?: bridge.eventsSocket(primarySlot.other())
-                if (events == null) { delay(backoff); continue } // shouldn't happen given the guard above
-                var gotFrame = false
-                try {
-                    events.connect().collect { frame ->
-                        gotFrame = true
-                        backoff = INITIAL_BACKOFF_MS
-                        if (frame.type != "heartbeat") refreshRequests.tryEmit(Unit)
-                    }
-                } catch (ex: CancellationException) {
-                    throw ex
-                } catch (_: Exception) {
-                    if (!gotFrame && primarySlot == ConnectionSlot.RELAY) {
-                        relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
-                    }
-                }
-                if (!isActive) break
-                delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(MAX_BACKOFF_MS)
-                refreshRequests.tryEmit(Unit) // catch up on anything missed while disconnected
+            reconnector.run(
+                openSocket = { slot -> bridge.eventsSocket(slot)?.connect() },
+                onBeforeReconnect = { refreshRequests.tryEmit(Unit) }, // catch up on anything missed while disconnected
+            ) { frame ->
+                if (frame.type != "heartbeat") refreshRequests.tryEmit(Unit)
+                true
             }
         }
     }
@@ -223,11 +201,6 @@ class SessionsViewModel(
     private companion object {
         const val NOT_PAIRED_RETRY_ATTEMPTS = 3
         const val NOT_PAIRED_RETRY_DELAY_MS = 500L
-        const val INITIAL_BACKOFF_MS = 1_000L
-        const val MAX_BACKOFF_MS = 5_000L
         const val EVENT_REFRESH_DEBOUNCE_MS = 800L
-        // Mirrors FallbackBridgeClient's penalty window: once RELAY has proven
-        // unreachable, don't retry it on every single reconnect for this long.
-        const val RELAY_PENALTY_MS = 30_000L
     }
 }

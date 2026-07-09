@@ -10,4 +10,10 @@ interface BridgeGateway {
     fun anyBridgeConfigured(): Boolean
     fun eventsSocket(slot: ConnectionSlot): EventsSocket?
     fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket?
+
+    /** The process-wide [RelayHealth] instance shared with [activeBridge]'s
+     *  [FallbackBridgeClient], so every reconnecting socket subscription
+     *  (see [SocketReconnector]) and the REST fallback path learn "relay is
+     *  down" from the same source. */
+    fun relayHealth(): RelayHealth
 }
