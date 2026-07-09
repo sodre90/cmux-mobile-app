@@ -7,18 +7,13 @@ import (
 	"strings"
 
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // SetSessions enables the opt-in e2e content-encryption layer. Called only by
 // runAgent's production wiring (Task 14); no test calls this, so every
 // pre-existing test continues to exercise the plaintext code path unchanged.
 func (s *Server) SetSessions(sessions *e2e.Store) { s.sessions = sessions }
-
-func writeEncryptionErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
-}
 
 // encryptionMiddleware transparently decrypts an e2e-enveloped request body
 // and encrypts the response body, keyed by the X-Device-ID header the
@@ -43,11 +38,11 @@ func (s *Server) encryptionMiddleware(next http.Handler) http.Handler {
 			// present-but-unrecognized device (e.g. this agent's local e2e
 			// state was wiped) -- the two point the app at different recovery
 			// UX (re-check auth vs. re-pair).
-			writeEncryptionErr(w, http.StatusUnauthorized, "unknown_device")
+			httpjson.Error(w, http.StatusUnauthorized, "unknown_device")
 			return
 		}
 		if _, ok := s.sessions.SharedSecret(deviceID); !ok {
-			writeEncryptionErr(w, http.StatusConflict, "not_paired")
+			httpjson.Error(w, http.StatusConflict, "not_paired")
 			return
 		}
 
@@ -60,13 +55,13 @@ func (s *Server) encryptionMiddleware(next http.Handler) http.Handler {
 			// arbitrarily large body.
 			envelope, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10))
 			if err != nil {
-				writeEncryptionErr(w, http.StatusBadRequest, "read_failed")
+				httpjson.Error(w, http.StatusBadRequest, "read_failed")
 				return
 			}
 			if len(envelope) > 0 {
 				plaintext, err := s.sessions.DecryptBody(deviceID, envelope)
 				if err != nil {
-					writeEncryptionErr(w, http.StatusBadRequest, "decrypt_failed")
+					httpjson.Error(w, http.StatusBadRequest, "decrypt_failed")
 					return
 				}
 				r.Body = io.NopCloser(bytes.NewReader(plaintext))
@@ -103,7 +98,7 @@ func (w *encryptingResponseWriter) flush() {
 	}
 	envelope, err := w.sessions.EncryptBody(w.deviceID, w.buf.Bytes())
 	if err != nil {
-		writeEncryptionErr(w.ResponseWriter, http.StatusInternalServerError, "encrypt_failed")
+		httpjson.Error(w.ResponseWriter, http.StatusInternalServerError, "encrypt_failed")
 		return
 	}
 	// This is the sole point a body is encrypted; the marker is set here and

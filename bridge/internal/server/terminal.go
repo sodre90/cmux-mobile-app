@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // TerminalDown is a server->client terminal message. Grid carries the cmux
@@ -41,7 +43,7 @@ type TerminalUp struct {
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
-		http.Error(w, "missing surface id", http.StatusBadRequest)
+		httpjson.Error(w, http.StatusBadRequest, "missing surface id")
 		return
 	}
 	var deviceID string
@@ -53,11 +55,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		// different recovery UX.
 		deviceID = r.Header.Get("X-Device-ID")
 		if deviceID == "" {
-			http.Error(w, "unknown_device", http.StatusUnauthorized)
+			httpjson.Error(w, http.StatusUnauthorized, "unknown_device")
 			return
 		}
 		if _, ok := s.sessions.SharedSecret(deviceID); !ok {
-			http.Error(w, "not_paired", http.StatusConflict)
+			httpjson.Error(w, http.StatusConflict, "not_paired")
 			return
 		}
 	}

@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 type renameWorkspaceRequest struct {
@@ -19,19 +21,19 @@ func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
 	var req renameWorkspaceRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httpjson.Error(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	if req.Title == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing title"})
+		httpjson.Error(w, http.StatusBadRequest, "missing title")
 		return
 	}
 	if _, err := s.cmux.Rpc(r.Context(), "workspace.rename", map[string]any{
 		"workspace_id": id,
 		"title":        req.Title,
 	}); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux rename failed"})
+		httpjson.Error(w, http.StatusBadGateway, "cmux rename failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
@@ -22,25 +23,25 @@ func (s *Server) handleSetYoloMode(w http.ResponseWriter, r *http.Request) {
 	var req setYoloModeRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httpjson.Error(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	if !yolo.Valid(req.Mode) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid mode"})
+		httpjson.Error(w, http.StatusBadRequest, "invalid mode")
 		return
 	}
 	if s.yolo == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "yolo store unavailable"})
+		httpjson.Error(w, http.StatusServiceUnavailable, "yolo store unavailable")
 		return
 	}
 	if err := s.yolo.SetMode(id, req.Mode); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "persist failed"})
+		httpjson.Error(w, http.StatusInternalServerError, "persist failed")
 		return
 	}
 	if req.Mode != "" {
 		s.resolvePendingPermission(r.Context(), id, req.Mode)
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // pendingFeedItem is the subset of a `feed.list --pending_only` item this

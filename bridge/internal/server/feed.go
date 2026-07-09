@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // FeedReply answers an agent prompt. Params is forwarded to cmux verbatim and
@@ -41,7 +43,7 @@ func feedMethod(kind string) (string, bool) {
 func (s *Server) handleFeedPending(w http.ResponseWriter, r *http.Request) {
 	raw, err := s.cmux.Rpc(r.Context(), "feed.list", map[string]any{"pending_only": true})
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux feed.list failed"})
+		httpjson.Error(w, http.StatusBadGateway, "cmux feed.list failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -53,16 +55,16 @@ func (s *Server) handleFeedReply(w http.ResponseWriter, r *http.Request) {
 	var fr FeedReply
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&fr); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httpjson.Error(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	method, ok := feedMethod(fr.Kind)
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown kind"})
+		httpjson.Error(w, http.StatusBadRequest, "unknown kind")
 		return
 	}
 	if fr.RequestID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing request_id"})
+		httpjson.Error(w, http.StatusBadRequest, "missing request_id")
 		return
 	}
 	params := map[string]any{}
@@ -72,8 +74,8 @@ func (s *Server) handleFeedReply(w http.ResponseWriter, r *http.Request) {
 	params["request_id"] = fr.RequestID
 
 	if _, err := s.cmux.Rpc(r.Context(), method, params); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux reply failed"})
+		httpjson.Error(w, http.StatusBadGateway, "cmux reply failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }

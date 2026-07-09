@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // Pusher sends an FCM data message to one registration token. push.Sender
@@ -137,18 +138,18 @@ type registerDeviceRequest struct {
 // at the agent, so auth.BearerToken(r) would be meaningless there.
 func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "not_available"})
+		httpjson.Error(w, http.StatusServiceUnavailable, "not_available")
 		return
 	}
 	var rq registerDeviceRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 	if err := json.NewDecoder(r.Body).Decode(&rq); err != nil || rq.FCMToken == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing fcm_token"})
+		httpjson.Error(w, http.StatusBadRequest, "missing fcm_token")
 		return
 	}
 	if !s.store.SetFCMToken(auth.BearerToken(r), rq.FCMToken) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }

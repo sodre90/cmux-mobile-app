@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sodre90/cmux-bridge/internal/backoff"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // EventFrame is the stable, app-facing event pushed over WS /events.
@@ -252,7 +253,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		deviceID = r.Header.Get("X-Device-ID")
 		if deviceID != "" {
 			if _, ok := s.sessions.SharedSecret(deviceID); !ok {
-				http.Error(w, "not_paired", http.StatusConflict)
+				httpjson.Error(w, http.StatusConflict, "not_paired")
 				return
 			}
 		}

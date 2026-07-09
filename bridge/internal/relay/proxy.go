@@ -9,17 +9,12 @@ import (
 	"net/http/httputil"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // ErrAgentOffline is returned by the proxy transport when the target
 // tenant's agent has no active session.
 var ErrAgentOffline = errors.New("agent offline")
-
-func writeJSONErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
-}
 
 // newProxy builds the reverse proxy that forwards an app request over a fresh
 // yamux stream to the agent belonging to the authenticated device's tenant,
@@ -63,11 +58,11 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			if errors.Is(err, ErrAgentOffline) {
 				log.Printf("relay: %s %s -> agent_offline", req.Method, req.URL.Path)
-				writeJSONErr(w, http.StatusServiceUnavailable, "agent_offline")
+				httpjson.Error(w, http.StatusServiceUnavailable, "agent_offline")
 				return
 			}
 			log.Printf("relay: %s %s -> agent_error: %v", req.Method, req.URL.Path, err)
-			writeJSONErr(w, http.StatusBadGateway, "agent_error")
+			httpjson.Error(w, http.StatusBadGateway, "agent_error")
 		},
 	}
 }

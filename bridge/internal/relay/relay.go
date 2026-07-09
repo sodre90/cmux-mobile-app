@@ -16,6 +16,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/ca"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 )
 
@@ -219,7 +220,7 @@ func (r *Relay) requireEdge(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path != "/healthz" &&
 			subtle.ConstantTimeCompare([]byte(req.Header.Get("X-Edge-Token")), want) != 1 {
-			writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
+			httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, req)
@@ -231,7 +232,7 @@ func (r *Relay) requireEdge(next http.Handler) http.Handler {
 func (r *Relay) notAgent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if _, ok := r.verifiedAgentTenant(req); ok {
-			writeJSONErr(w, http.StatusForbidden, "forbidden")
+			httpjson.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next.ServeHTTP(w, req)
@@ -241,7 +242,7 @@ func (r *Relay) notAgent(next http.Handler) http.Handler {
 func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	tenantID, ok := r.verifiedAgentTenant(req)
 	if !ok {
-		writeJSONErr(w, http.StatusForbidden, "forbidden")
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	sess, err := tunnel.Accept(w, req)
@@ -291,18 +292,18 @@ type newPairingCodeReq struct {
 func (r *Relay) handleNewPairingCode(w http.ResponseWriter, req *http.Request) {
 	tenantID, ok := r.agentOnly(req)
 	if !ok {
-		writeJSONErr(w, http.StatusForbidden, "forbidden")
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	var rq newPairingCodeReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
-		writeJSONErr(w, http.StatusBadRequest, "missing agent_pubkey")
+		httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
 		return
 	}
 	code, err := r.store.NewPairingCode(tenantID, rq.AgentPubkey, pairingCodeTTL)
 	if err != nil {
 		log.Printf("relay: new pairing code: %v", err)
-		writeJSONErr(w, http.StatusInternalServerError, "internal_error")
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -334,7 +335,7 @@ func (r *Relay) handlePairingCodeInfo(w http.ResponseWriter, req *http.Request) 
 	code := req.PathValue("code")
 	agentPubkey, tenantID, expiresAt, ok := r.store.PairingCodeInfo(code)
 	if !ok {
-		writeJSONErr(w, http.StatusGone, "pairing_code_invalid")
+		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -358,13 +359,13 @@ type pairingCodeStatusResp struct {
 func (r *Relay) handlePairingCodeStatus(w http.ResponseWriter, req *http.Request) {
 	tenantID, ok := r.agentOnly(req)
 	if !ok {
-		writeJSONErr(w, http.StatusForbidden, "forbidden")
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	code := req.PathValue("code")
 	pubkey, hash, redeemed, ok := r.store.PairingCodeStatus(tenantID, code)
 	if !ok {
-		writeJSONErr(w, http.StatusNotFound, "not_found")
+		httpjson.Error(w, http.StatusNotFound, "not_found")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -382,13 +383,13 @@ type registerReq struct {
 
 func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
 	if _, ok := auth.DeviceFromContext(req.Context()); !ok {
-		writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
+		httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
 	var rq registerReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.FCMToken == "" {
-		writeJSONErr(w, http.StatusBadRequest, "missing fcm_token")
+		httpjson.Error(w, http.StatusBadRequest, "missing fcm_token")
 		return
 	}
 	r.store.SetFCMToken(auth.BearerToken(req), rq.FCMToken)
@@ -413,31 +414,31 @@ type registerTenantResp struct {
 // the design doc's non-goals) — this handler does only basic input hygiene.
 func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	if r.ca == nil {
-		writeJSONErr(w, http.StatusServiceUnavailable, "registration_unavailable")
+		httpjson.Error(w, http.StatusServiceUnavailable, "registration_unavailable")
 		return
 	}
 	if !r.registerLimiter.allow(r.clientIP(req)) {
-		writeJSONErr(w, http.StatusTooManyRequests, "rate_limited")
+		httpjson.Error(w, http.StatusTooManyRequests, "rate_limited")
 		return
 	}
 	if n, err := r.store.TenantCount(); err != nil {
 		log.Printf("relay: tenant count: %v", err)
-		writeJSONErr(w, http.StatusInternalServerError, "internal_error")
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	} else if n >= r.maxTenants {
-		writeJSONErr(w, http.StatusServiceUnavailable, "tenant_limit_reached")
+		httpjson.Error(w, http.StatusServiceUnavailable, "tenant_limit_reached")
 		return
 	}
 	req.Body = http.MaxBytesReader(w, req.Body, 8<<10) // CSRs are a few hundred bytes
 	var rq registerTenantReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.CSR == "" {
-		writeJSONErr(w, http.StatusBadRequest, "missing csr")
+		httpjson.Error(w, http.StatusBadRequest, "missing csr")
 		return
 	}
 	tenantID, err := r.store.CreateTenant()
 	if err != nil {
 		log.Printf("relay: create tenant: %v", err)
-		writeJSONErr(w, http.StatusInternalServerError, "internal_error")
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 	certPEM, serial, err := r.ca.SignCSR([]byte(rq.CSR), agentCNPrefix+tenantID, agentCertValidity)
@@ -447,7 +448,7 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 		if !r.store.RevokeTenant(tenantID) {
 			log.Printf("relay: failed to revoke orphaned tenant %q after invalid CSR", tenantID)
 		}
-		writeJSONErr(w, http.StatusBadRequest, "invalid_csr")
+		httpjson.Error(w, http.StatusBadRequest, "invalid_csr")
 		return
 	}
 	if err := r.store.RecordAgentCert(tenantID, serial); err != nil {
@@ -486,7 +487,7 @@ func (r *Relay) handleDevicePair(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
 	var rq devicePairReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
-		writeJSONErr(w, http.StatusBadRequest, "missing code or device_pubkey")
+		httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
 		return
 	}
 	name := rq.Name
@@ -498,7 +499,7 @@ func (r *Relay) handleDevicePair(w http.ResponseWriter, req *http.Request) {
 		// RedeemPairingCode's bool return doesn't distinguish not-found,
 		// expired, and already-redeemed -- per the spec's error-handling
 		// section, all three map to the same response.
-		writeJSONErr(w, http.StatusGone, "pairing_code_invalid")
+		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

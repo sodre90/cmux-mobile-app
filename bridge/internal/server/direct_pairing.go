@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // pairingCodeTTL mirrors internal/relay/relay.go's constant of the same
@@ -45,12 +46,6 @@ type devicePairResp struct {
 	TenantID string `json:"tenant_id"`
 }
 
-func writeDirectPairingErr(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
-}
-
 // MountDirectPairing registers the four pre-auth pairing routes direct mode
 // needs onto mux, backed by store and scoped to the single implicit tenant
 // tenantID (direct mode has exactly one, created once at agent startup --
@@ -63,12 +58,12 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var rq newPairingCodeReq
 		if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
-			writeDirectPairingErr(w, http.StatusBadRequest, "missing agent_pubkey")
+			httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
 			return
 		}
 		code, err := store.NewPairingCode(tenantID, rq.AgentPubkey, pairingCodeTTL)
 		if err != nil {
-			writeDirectPairingErr(w, http.StatusInternalServerError, "internal_error")
+			httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -84,7 +79,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		code := req.PathValue("code")
 		pubkey, hash, redeemed, ok := store.PairingCodeStatus(tenantID, code)
 		if !ok {
-			writeDirectPairingErr(w, http.StatusNotFound, "not_found")
+			httpjson.Error(w, http.StatusNotFound, "not_found")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -100,7 +95,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		code := req.PathValue("code")
 		agentPubkey, tid, expiresAt, ok := store.PairingCodeInfo(code)
 		if !ok {
-			writeDirectPairingErr(w, http.StatusGone, "pairing_code_invalid")
+			httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -116,7 +111,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
 		var rq devicePairReq
 		if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
-			writeDirectPairingErr(w, http.StatusBadRequest, "missing code or device_pubkey")
+			httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
 			return
 		}
 		name := rq.Name
@@ -125,7 +120,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		}
 		tok, tid, ok := store.RedeemPairingCode(rq.Code, name, rq.DevicePubkey)
 		if !ok {
-			writeDirectPairingErr(w, http.StatusGone, "pairing_code_invalid")
+			httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

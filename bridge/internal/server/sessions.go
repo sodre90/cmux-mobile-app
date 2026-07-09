@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 // Workspace is the app-facing representation of a cmux workspace and its
@@ -56,12 +58,12 @@ func (s *Server) findWorkspace(ctx context.Context, id string) (Workspace, bool)
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	raw, err := s.cmux.Rpc(r.Context(), "mobile.workspace.list", nil)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux unavailable"})
+		httpjson.Error(w, http.StatusBadGateway, "cmux unavailable")
 		return
 	}
 	workspaces, err := parseWorkspaces(raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "cmux parse error"})
+		httpjson.Error(w, http.StatusBadGateway, "cmux parse error")
 		return
 	}
 	if s.yolo != nil {
@@ -69,7 +71,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			workspaces[i].YoloMode = s.yolo.Mode(workspaces[i].ID)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"workspaces": workspaces})
+	httpjson.Write(w, http.StatusOK, map[string]any{"workspaces": workspaces})
 }
 
 // parseWorkspaces normalizes a mobile.workspace.list payload into Workspaces.
@@ -218,10 +220,4 @@ func classifyKind(title string) string {
 		}
 	}
 	return "agent"
-}
-
-func writeJSON(w http.ResponseWriter, code int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(body)
 }
