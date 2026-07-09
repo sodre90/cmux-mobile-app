@@ -6,6 +6,7 @@
 package backoff
 
 import (
+	"context"
 	"math/rand"
 	"time"
 )
@@ -32,4 +33,19 @@ func (b *Backoff) Next() time.Duration {
 		}
 	}
 	return delay
+}
+
+// Sleep blocks for d, or until ctx is done, whichever comes first. It reports
+// whether the full duration elapsed, so a reconnect loop's `for ctx.Err() ==
+// nil` condition can exit immediately on SIGTERM/shutdown instead of sitting
+// out up to the full backoff delay (max is 30s in every caller today).
+func Sleep(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

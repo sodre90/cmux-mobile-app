@@ -312,7 +312,7 @@ func runAgent(args []string) int {
 		if ctx.Err() != nil {
 			break
 		}
-		time.Sleep(retry.Next())
+		backoff.Sleep(ctx, retry.Next())
 	}
 	return 0
 }

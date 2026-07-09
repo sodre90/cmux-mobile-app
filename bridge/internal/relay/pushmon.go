@@ -34,10 +34,8 @@ func MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, rel
 		if err := subscribeOnce(tenantID, sess, relayToken, store, push); err != nil && sess.IsClosed() {
 			return
 		}
-		select {
-		case <-ctx.Done():
+		if !backoff.Sleep(ctx, retry.Next()) {
 			return
-		case <-time.After(retry.Next()):
 		}
 	}
 }

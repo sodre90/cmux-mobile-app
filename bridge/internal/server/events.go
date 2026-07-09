@@ -185,13 +185,13 @@ func (s *Server) RunEvents(ctx context.Context) {
 		cmd, pipe, err := s.cmux.Events(ctx,
 			"--category", "feed", "--category", "notification", "--reconnect")
 		if err != nil {
-			time.Sleep(retry.Next())
+			backoff.Sleep(ctx, retry.Next())
 			continue
 		}
 		s.ingestEvents(ctx, pipe)
 		_ = cmd.Wait()
 		if ctx.Err() == nil {
-			time.Sleep(retry.Next())
+			backoff.Sleep(ctx, retry.Next())
 		}
 	}
 }

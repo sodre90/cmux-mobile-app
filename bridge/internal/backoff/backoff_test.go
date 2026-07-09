@@ -1,6 +1,7 @@
 package backoff
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -40,5 +41,24 @@ func TestNextIsJittered(t *testing.T) {
 	}
 	if len(seen) < 2 {
 		t.Fatalf("expected multiple distinct delays from repeated Next() calls, got %v", seen)
+	}
+}
+
+func TestSleepReturnsTrueWhenDurationElapses(t *testing.T) {
+	if !Sleep(context.Background(), time.Millisecond) {
+		t.Fatal("expected Sleep to report the full duration elapsed")
+	}
+}
+
+func TestSleepReturnsPromptlyOnContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	if Sleep(ctx, 30*time.Second) {
+		t.Fatal("expected Sleep to report early return on cancelled ctx")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Sleep took %v on an already-cancelled ctx, want near-instant", elapsed)
 	}
 }
