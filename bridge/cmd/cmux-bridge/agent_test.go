@@ -16,19 +16,6 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 )
 
-func TestNextBackoffCaps(t *testing.T) {
-	d := time.Second
-	for i := 0; i < 10; i++ {
-		d = nextBackoff(d)
-	}
-	if d != 30*time.Second {
-		t.Fatalf("backoff should cap at 30s, got %v", d)
-	}
-	if got := nextBackoff(time.Second); got != 2*time.Second {
-		t.Fatalf("nextBackoff(1s)=%v want 2s", got)
-	}
-}
-
 func writeSelfSigned(t *testing.T) (certPath, keyPath string) {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)

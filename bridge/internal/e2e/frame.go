@@ -50,19 +50,11 @@ func (s *Store) DecryptFrame(deviceID string, frame []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("no shared secret for device %q", deviceID)
 	}
-	valid, err := s.ValidateRecvCounter(deviceID, n)
-	if err != nil {
-		return nil, err
-	}
-	if !valid {
-		return nil, fmt.Errorf("decrypt_failed")
-	}
-	pt, err := Open(secret, Nonce(DirDeviceToAgent, n), frame[8:])
-	if err != nil {
-		return nil, fmt.Errorf("decrypt_failed")
-	}
-	if err := s.CommitRecvCounter(deviceID, n); err != nil {
-		return nil, err
-	}
-	return pt, nil
+	return s.ValidateAndCommitRecvCounter(deviceID, n, func() ([]byte, error) {
+		pt, err := Open(secret, Nonce(DirDeviceToAgent, n), frame[8:])
+		if err != nil {
+			return nil, fmt.Errorf("decrypt_failed")
+		}
+		return pt, nil
+	})
 }

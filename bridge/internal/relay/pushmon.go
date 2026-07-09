@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/backoff"
 	"github.com/sodre90/cmux-bridge/internal/server"
 )
 
@@ -28,6 +29,7 @@ func MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, rel
 	if push == nil {
 		return
 	}
+	retry := backoff.New(time.Second, 30*time.Second)
 	for ctx.Err() == nil {
 		if err := subscribeOnce(tenantID, sess, relayToken, store, push); err != nil && sess.IsClosed() {
 			return
@@ -35,7 +37,7 @@ func MonitorAgent(ctx context.Context, tenantID string, sess *yamux.Session, rel
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case <-time.After(retry.Next()):
 		}
 	}
 }

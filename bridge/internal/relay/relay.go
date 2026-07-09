@@ -5,9 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -29,16 +31,29 @@ const agentCertValidity = 365 * 24 * time.Hour
 // pairingCodeTTL is how long a self-service pairing code stays redeemable.
 const pairingCodeTTL = 10 * time.Minute
 
+// defaultMaxTenants is a generous safety valve against unbounded tenant
+// growth from /tenants/register abuse, not a real usage limit for a
+// self-hosted relay.
+const defaultMaxTenants = 1000
+
+// tenantRegisterMinInterval bounds how often a single source IP may hit
+// /tenants/register. Defense-in-depth alongside nginx's own limit_req zone
+// (deploy/nginx-cmux-relay-bootstrap.conf) -- this endpoint is reachable with
+// no client cert by design, so both layers matter.
+const tenantRegisterMinInterval = 10 * time.Second
+
 // Relay is the home-server rendezvous: it accepts Mac agents' tunnels and
 // reverse-proxies authenticated app requests over them.
 type Relay struct {
-	store      *auth.Store
-	reg        *Registry
-	ca         *ca.CA
-	relayToken string
-	edgeToken  string
-	proxy      *httputil.ReverseProxy
-	onSession  func(context.Context, string, *yamux.Session)
+	store           *auth.Store
+	reg             *Registry
+	ca              *ca.CA
+	relayToken      string
+	edgeToken       string
+	proxy           *httputil.ReverseProxy
+	onSession       func(context.Context, string, *yamux.Session)
+	registerLimiter *ipRateLimiter
+	maxTenants      int
 }
 
 // New builds a Relay. store may be nil only in tests that never hit auth
@@ -46,12 +61,63 @@ type Relay struct {
 func New(store *auth.Store, signer *ca.CA, relayToken string) *Relay {
 	reg := NewRegistry()
 	return &Relay{
-		store:      store,
-		reg:        reg,
-		ca:         signer,
-		relayToken: relayToken,
-		proxy:      newProxy(reg, relayToken),
+		store:           store,
+		reg:             reg,
+		ca:              signer,
+		relayToken:      relayToken,
+		proxy:           newProxy(reg, relayToken),
+		registerLimiter: newIPRateLimiter(tenantRegisterMinInterval),
+		maxTenants:      defaultMaxTenants,
 	}
+}
+
+// ipRateLimiter allows one call per key per interval, sweeping stale entries
+// on access so the map doesn't grow unboundedly under a distributed-source
+// flood. Not goroutine-hot: only used on the low-frequency
+// /tenants/register path.
+type ipRateLimiter struct {
+	mu       sync.Mutex
+	interval time.Duration
+	last     map[string]time.Time
+}
+
+func newIPRateLimiter(interval time.Duration) *ipRateLimiter {
+	return &ipRateLimiter{interval: interval, last: map[string]time.Time{}}
+}
+
+func (l *ipRateLimiter) allow(key string) bool {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if t, ok := l.last[key]; ok && now.Sub(t) < l.interval {
+		return false
+	}
+	l.last[key] = now
+	for k, t := range l.last {
+		if now.Sub(t) > 10*l.interval {
+			delete(l.last, k)
+		}
+	}
+	return true
+}
+
+// clientIP returns the address to key rate limiting by. When an edge token
+// is configured, requireEdge gates every route so only nginx can reach this
+// handler, and nginx always SETS (never merges) X-Forwarded-For from its own
+// $remote_addr -- exactly as trusted as the existing X-Client-Cert-CN model.
+// Without an edge token there's no guaranteed intermediary, so fall back to
+// the raw TCP peer.
+func (r *Relay) clientIP(req *http.Request) string {
+	if r.edgeToken != "" {
+		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+			return xff
+		}
+	}
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		return req.RemoteAddr
+	}
+	return host
 }
 
 // SetSessionHook registers a callback invoked (in its own goroutine) for each
@@ -180,6 +246,14 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	}
 	sess, err := tunnel.Accept(w, req)
 	if err != nil {
+		return
+	}
+	// A completed WS upgrade doesn't prove the agent is actually driving the
+	// yamux session -- bound the upgrade-to-live latency with a ping (itself
+	// bounded by yamuxCfg's ConnectionWriteTimeout) before registering the
+	// tunnel as "up" and replacing any prior session for this tenant.
+	if _, err := sess.Ping(); err != nil {
+		_ = sess.Close()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -311,6 +385,7 @@ func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
 		writeJSONErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
 	var rq registerReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.FCMToken == "" {
 		writeJSONErr(w, http.StatusBadRequest, "missing fcm_token")
@@ -339,6 +414,18 @@ type registerTenantResp struct {
 func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	if r.ca == nil {
 		writeJSONErr(w, http.StatusServiceUnavailable, "registration_unavailable")
+		return
+	}
+	if !r.registerLimiter.allow(r.clientIP(req)) {
+		writeJSONErr(w, http.StatusTooManyRequests, "rate_limited")
+		return
+	}
+	if n, err := r.store.TenantCount(); err != nil {
+		log.Printf("relay: tenant count: %v", err)
+		writeJSONErr(w, http.StatusInternalServerError, "internal_error")
+		return
+	} else if n >= r.maxTenants {
+		writeJSONErr(w, http.StatusServiceUnavailable, "tenant_limit_reached")
 		return
 	}
 	req.Body = http.MaxBytesReader(w, req.Body, 8<<10) // CSRs are a few hundred bytes

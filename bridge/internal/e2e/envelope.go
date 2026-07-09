@@ -37,23 +37,15 @@ func (s *Store) DecryptBody(deviceID string, envelope []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("no shared secret for device %q", deviceID)
 	}
-	valid, err := s.ValidateRecvCounter(deviceID, env.N)
-	if err != nil {
-		return nil, err
-	}
-	if !valid {
-		return nil, fmt.Errorf("decrypt_failed")
-	}
 	ct, err := base64.StdEncoding.DecodeString(env.CT)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt_failed")
 	}
-	pt, err := Open(secret, Nonce(DirDeviceToAgent, env.N), ct)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt_failed")
-	}
-	if err := s.CommitRecvCounter(deviceID, env.N); err != nil {
-		return nil, err
-	}
-	return pt, nil
+	return s.ValidateAndCommitRecvCounter(deviceID, env.N, func() ([]byte, error) {
+		pt, err := Open(secret, Nonce(DirDeviceToAgent, env.N), ct)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt_failed")
+		}
+		return pt, nil
+	})
 }

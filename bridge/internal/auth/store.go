@@ -199,6 +199,18 @@ func (s *Store) RevokeTenant(id string) bool {
 	return n > 0
 }
 
+// TenantCount returns the total number of tenants ever created (including
+// revoked ones). Used to cap unbounded growth from /tenants/register abuse.
+func (s *Store) TenantCount() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tenants`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count tenants: %w", err)
+	}
+	return n, nil
+}
+
 // ListTenants returns every tenant, oldest first.
 func (s *Store) ListTenants() ([]Tenant, error) {
 	s.mu.Lock()

@@ -3,8 +3,12 @@ package e2e
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testPubKey(t *testing.T) *ecdh.PublicKey {
@@ -66,6 +70,80 @@ func TestDeviceIDsListsAllPairedDevices(t *testing.T) {
 	}
 }
 
+func TestActiveDeviceIDsIncludesFreshlyPairedDevice(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	got := s.ActiveDeviceIDs()
+	if len(got) != 1 || got[0] != "dev1" {
+		t.Fatalf("ActiveDeviceIDs = %v, want [dev1]", got)
+	}
+}
+
+// setLastActive backdates dev's LastActiveUnix directly in the store file,
+// simulating a device that hasn't sent anything in a while -- there's no
+// public API for this since real staleness only ever accrues with time.
+func setLastActive(t *testing.T, s *Store, deviceID string, when time.Time) {
+	t.Helper()
+	f, err := s.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d, ok := f.Devices[deviceID]
+	if !ok {
+		t.Fatalf("device %q not found", deviceID)
+	}
+	d.LastActiveUnix = when.Unix()
+	f.Devices[deviceID] = d
+	if err := s.save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+}
+
+func TestActiveDeviceIDsExcludesStaleDevice(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret1")); err != nil {
+		t.Fatalf("AddDevice dev1: %v", err)
+	}
+	if err := s.AddDevice("dev2", testPubKey(t), []byte("secret2")); err != nil {
+		t.Fatalf("AddDevice dev2: %v", err)
+	}
+	setLastActive(t, s, "dev1", time.Now().Add(-staleDeviceAge-time.Hour))
+
+	active := s.ActiveDeviceIDs()
+	if len(active) != 1 || active[0] != "dev2" {
+		t.Fatalf("ActiveDeviceIDs = %v, want [dev2] (dev1 stale)", active)
+	}
+
+	all := s.DeviceIDs()
+	if len(all) != 2 {
+		t.Fatalf("DeviceIDs = %v, want both dev1 and dev2 (full history, not filtered)", all)
+	}
+}
+
+func TestValidateAndCommitRecvCounterRefreshesLastActive(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	setLastActive(t, s, "dev1", time.Now().Add(-staleDeviceAge-time.Hour))
+	if got := s.ActiveDeviceIDs(); len(got) != 0 {
+		t.Fatalf("expected dev1 to start stale, ActiveDeviceIDs = %v", got)
+	}
+
+	if !acceptCounter(t, s, "dev1", 0) {
+		t.Fatal("expected counter 0 accepted")
+	}
+
+	if got := s.ActiveDeviceIDs(); len(got) != 1 || got[0] != "dev1" {
+		t.Fatalf("expected a successful decrypt to refresh dev1 back to active, got %v", got)
+	}
+}
+
 func TestNextSendCounterIncrementsAndPersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
@@ -93,6 +171,17 @@ func TestNextSendCounterIncrementsAndPersistsAcrossInstances(t *testing.T) {
 	}
 }
 
+// acceptCounter is a store_test.go helper mirroring how frame.go/envelope.go
+// drive ValidateAndCommitRecvCounter: decrypt is a no-op stand-in so these
+// tests can exercise the replay-window bookkeeping without real ciphertext.
+func acceptCounter(t *testing.T, s *Store, deviceID string, n uint64) bool {
+	t.Helper()
+	_, err := s.ValidateAndCommitRecvCounter(deviceID, n, func() ([]byte, error) {
+		return []byte("ok"), nil
+	})
+	return err == nil
+}
+
 func TestValidateAndCommitRecvCounter(t *testing.T) {
 	dir := t.TempDir()
 	s := OpenStore(filepath.Join(dir, "sessions.json"))
@@ -100,25 +189,14 @@ func TestValidateAndCommitRecvCounter(t *testing.T) {
 		t.Fatalf("AddDevice: %v", err)
 	}
 
-	valid, err := s.ValidateRecvCounter("dev1", 0)
-	if err != nil || !valid {
-		t.Fatalf("expected counter 0 valid on fresh device, got valid=%v err=%v", valid, err)
+	if !acceptCounter(t, s, "dev1", 0) {
+		t.Fatal("expected counter 0 accepted on fresh device")
 	}
-	if err := s.CommitRecvCounter("dev1", 0); err != nil {
-		t.Fatalf("CommitRecvCounter(0): %v", err)
-	}
-
-	valid, err = s.ValidateRecvCounter("dev1", 0)
-	if err != nil {
-		t.Fatalf("ValidateRecvCounter replay check: %v", err)
-	}
-	if valid {
+	if acceptCounter(t, s, "dev1", 0) {
 		t.Fatal("expected counter 0 to be rejected as replay after commit")
 	}
-
-	valid, err = s.ValidateRecvCounter("dev1", 1)
-	if err != nil || !valid {
-		t.Fatalf("expected counter 1 valid after committing 0, got valid=%v err=%v", valid, err)
+	if !acceptCounter(t, s, "dev1", 1) {
+		t.Fatal("expected counter 1 accepted after committing 0")
 	}
 }
 
@@ -129,34 +207,20 @@ func TestOutOfOrderWithinWindowIsAccepted(t *testing.T) {
 		t.Fatalf("AddDevice: %v", err)
 	}
 
-	if err := s.CommitRecvCounter("dev1", 10); err != nil {
-		t.Fatalf("CommitRecvCounter(10): %v", err)
+	if !acceptCounter(t, s, "dev1", 10) {
+		t.Fatal("expected counter 10 accepted on fresh device")
 	}
 
 	// 7 arrives late (e.g. a slower HTTP response overtaken by a faster WS
 	// frame) but was never seen and is within the last 64 counters -- must
 	// be accepted, not rejected as "old."
-	valid, err := s.ValidateRecvCounter("dev1", 7)
-	if err != nil || !valid {
-		t.Fatalf("expected counter 7 valid (out-of-order, within window), got valid=%v err=%v", valid, err)
+	if !acceptCounter(t, s, "dev1", 7) {
+		t.Fatal("expected counter 7 accepted (out-of-order, within window)")
 	}
-	if err := s.CommitRecvCounter("dev1", 7); err != nil {
-		t.Fatalf("CommitRecvCounter(7): %v", err)
-	}
-
-	valid, err = s.ValidateRecvCounter("dev1", 7)
-	if err != nil {
-		t.Fatalf("ValidateRecvCounter replay check: %v", err)
-	}
-	if valid {
+	if acceptCounter(t, s, "dev1", 7) {
 		t.Fatal("expected counter 7 to now be rejected as a replay")
 	}
-
-	valid, err = s.ValidateRecvCounter("dev1", 10)
-	if err != nil {
-		t.Fatalf("ValidateRecvCounter: %v", err)
-	}
-	if valid {
+	if acceptCounter(t, s, "dev1", 10) {
 		t.Fatal("expected counter 10 to still be rejected as a replay (it was committed first)")
 	}
 }
@@ -168,21 +232,103 @@ func TestTooOldOutsideWindowIsRejected(t *testing.T) {
 		t.Fatalf("AddDevice: %v", err)
 	}
 
-	if err := s.CommitRecvCounter("dev1", 1000); err != nil {
-		t.Fatalf("CommitRecvCounter(1000): %v", err)
+	if !acceptCounter(t, s, "dev1", 1000) {
+		t.Fatal("expected counter 1000 accepted on fresh device")
 	}
 
-	valid, err := s.ValidateRecvCounter("dev1", 1000-64) // exactly at the boundary: too old
-	if err != nil {
-		t.Fatalf("ValidateRecvCounter: %v", err)
-	}
-	if valid {
+	if acceptCounter(t, s, "dev1", 1000-64) { // exactly at the boundary: too old
 		t.Fatal("expected counter 1000-64 to be rejected as outside the window")
 	}
+	if !acceptCounter(t, s, "dev1", 1000-63) { // one inside the boundary: still fine
+		t.Fatal("expected counter 1000-63 accepted (just inside window)")
+	}
+}
 
-	valid, err = s.ValidateRecvCounter("dev1", 1000-63) // one inside the boundary: still fine
-	if err != nil || !valid {
-		t.Fatalf("expected counter 1000-63 valid (just inside window), got valid=%v err=%v", valid, err)
+func TestValidateAndCommitRecvCounterRejectsWithoutDecrypting(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	if !acceptCounter(t, s, "dev1", 5) {
+		t.Fatal("expected counter 5 accepted on fresh device")
+	}
+
+	decryptCalled := false
+	_, err := s.ValidateAndCommitRecvCounter("dev1", 5, func() ([]byte, error) {
+		decryptCalled = true
+		return []byte("ok"), nil
+	})
+	if err == nil {
+		t.Fatal("expected replayed counter 5 to be rejected")
+	}
+	if decryptCalled {
+		t.Fatal("decrypt must not run for a counter that fails the replay check")
+	}
+}
+
+func TestValidateAndCommitRecvCounterDoesNotAdvanceOnDecryptFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	decryptErr := fmt.Errorf("decrypt_failed")
+	_, err := s.ValidateAndCommitRecvCounter("dev1", 3, func() ([]byte, error) {
+		return nil, decryptErr
+	})
+	if err == nil {
+		t.Fatal("expected decrypt failure to propagate")
+	}
+
+	// A failed decrypt must not burn the counter: a forged envelope with a
+	// guessed, not-yet-used counter and garbage ciphertext must not be able
+	// to make the legitimate sender's real future message at that counter
+	// get rejected as a replay.
+	if !acceptCounter(t, s, "dev1", 3) {
+		t.Fatal("expected counter 3 to still be acceptable after a failed decrypt attempt")
+	}
+}
+
+// TestConcurrentDecryptOfSameCounterAcceptsExactlyOnce is the adversarial
+// regression test for the TOCTOU replay race: two goroutines racing to
+// decrypt the identical captured frame at the same counter must not both
+// succeed. Before ValidateAndCommitRecvCounter combined the check and the
+// commit into one locked transaction, both could pass the replay check
+// (neither had committed yet), both call decrypt, and both "succeed."
+func TestConcurrentDecryptOfSameCounterAcceptsExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	const n = uint64(42)
+	const races = 32
+
+	var wg sync.WaitGroup
+	var successes int64
+	for i := 0; i < races; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.ValidateAndCommitRecvCounter("dev1", n, func() ([]byte, error) {
+				// Simulate AEAD Open taking a moment, widening the race
+				// window that the old two-call Validate/Commit design left
+				// open between the replay check and the commit.
+				time.Sleep(time.Millisecond)
+				return []byte("plaintext"), nil
+			})
+			if err == nil {
+				atomic.AddInt64(&successes, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 of %d concurrent decrypts of the same counter to succeed, got %d", races, successes)
 	}
 }
 

@@ -22,6 +22,12 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 )
 
+// pairingRequestTimeout bounds a single pairing-code request/poll HTTP call.
+// pairDevice's own deadline only gets checked between poll iterations, so
+// without a client-level timeout a single hung relay connection could block
+// pairDevice indefinitely instead of retrying or giving up.
+const pairingRequestTimeout = 10 * time.Second
+
 // pairingQR is the JSON payload rendered into the QR code. The phone scans
 // it, generates its own e2e keypair, and POSTs PairURL directly — it needs
 // nothing else to complete self-service pairing.
@@ -200,7 +206,7 @@ func runPairDevice(args []string) int {
 		// The direct listener's cert is a real, publicly-trusted Let's
 		// Encrypt cert (tailscale cert) -- the default transport's system
 		// root CAs already validate it, no client cert needed at all.
-		client = &http.Client{}
+		client = &http.Client{Timeout: pairingRequestTimeout}
 	} else {
 		if cfg.RelayURL == "" {
 			log.Printf("pair-device: relay_url is required (or pass --direct)")
@@ -216,7 +222,7 @@ func runPairDevice(args []string) int {
 			log.Printf("pair-device: tls: %v", err)
 			return 1
 		}
-		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: pairingRequestTimeout}
 	}
 	// /devices/pair is public on the same vhost as the agent-facing
 	// pairing-code endpoints in both modes.

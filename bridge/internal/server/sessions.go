@@ -78,6 +78,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 // carries a "terminals" array — that array is what distinguishes a workspace
 // from its nested terminal surfaces, which fixes the old flattening that swept
 // panes in as their own (unstreamable) entries. Deduped by id (first wins).
+// maxWorkspaceWalkDepth bounds parseWorkspaces' recursive tree walk. cmux is
+// a trusted local process, so this guards against a corrupted/malformed
+// response nesting deeply enough to exhaust the goroutine stack, not against
+// a hostile cmux.
+const maxWorkspaceWalkDepth = 64
+
 func parseWorkspaces(raw []byte) ([]Workspace, error) {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
@@ -85,8 +91,11 @@ func parseWorkspaces(raw []byte) ([]Workspace, error) {
 	}
 	seen := map[string]bool{}
 	out := []Workspace{}
-	var walk func(any)
-	walk = func(node any) {
+	var walk func(any, int)
+	walk = func(node any, depth int) {
+		if depth > maxWorkspaceWalkDepth {
+			return
+		}
 		switch v := node.(type) {
 		case map[string]any:
 			id, hasID := stringField(v, "id")
@@ -107,15 +116,15 @@ func parseWorkspaces(raw []byte) ([]Workspace, error) {
 				})
 			}
 			for _, child := range v {
-				walk(child)
+				walk(child, depth+1)
 			}
 		case []any:
 			for _, child := range v {
-				walk(child)
+				walk(child, depth+1)
 			}
 		}
 	}
-	walk(root)
+	walk(root, 0)
 	return out, nil
 }
 

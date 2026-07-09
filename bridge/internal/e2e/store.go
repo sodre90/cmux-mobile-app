@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type deviceSession struct {
@@ -17,6 +18,15 @@ type deviceSession struct {
 	RecvHighest    uint64 `json:"recv_highest"`
 	RecvHighestSet bool   `json:"recv_highest_set"`
 	RecvWindowBits uint64 `json:"recv_window_bits"`
+	// LastActiveUnix is the last time this device successfully sent the agent
+	// a decryptable request body or frame (ValidateAndCommitRecvCounter),
+	// seeded to the pairing time so a brand-new device isn't immediately
+	// treated as inactive before it has sent anything. Building or sending a
+	// push for a device (EncryptFrame/NextSendCounter) never updates this --
+	// only genuine inbound traffic proves the device is still in use; if
+	// pushes counted, an unpaired-but-never-explicitly-removed device would
+	// stay "active" forever just by virtue of the agent trying to push to it.
+	LastActiveUnix int64 `json:"last_active_unix"`
 }
 
 type fileFormat struct {
@@ -76,17 +86,18 @@ func (s *Store) AddDevice(deviceID string, devicePub *ecdh.PublicKey, sharedSecr
 		return err
 	}
 	f.Devices[deviceID] = deviceSession{
-		DevicePubKey: base64.StdEncoding.EncodeToString(devicePub.Bytes()),
-		SharedSecret: base64.StdEncoding.EncodeToString(sharedSecret),
+		DevicePubKey:   base64.StdEncoding.EncodeToString(devicePub.Bytes()),
+		SharedSecret:   base64.StdEncoding.EncodeToString(sharedSecret),
+		LastActiveUnix: time.Now().Unix(),
 	}
 	return s.save(f)
 }
 
 // DeviceIDs returns every deviceID this agent has ever paired with (direct or
 // relay-mediated alike -- AddDevice is called identically by both pairing
-// flows, so this one local file is the complete list). Used to build a
-// per-device encrypted push payload for each paired device without needing
-// to know which slot/backend a given device belongs to.
+// flows, so this one local file is the complete list). This includes devices
+// that have gone stale (see ActiveDeviceIDs); callers that need to build
+// per-device push payloads should use ActiveDeviceIDs instead.
 func (s *Store) DeviceIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,6 +108,39 @@ func (s *Store) DeviceIDs() []string {
 	out := make([]string, 0, len(f.Devices))
 	for id := range f.Devices {
 		out = append(out, id)
+	}
+	return out
+}
+
+// staleDeviceAge is how long a device may go without successfully decrypting
+// a request/frame (proving it still holds the shared secret and is in
+// active use) before ActiveDeviceIDs stops considering it paired. There is
+// no cross-process revocation signal from auth.Store reaching this agent-side
+// file in relay mode (see cmd/cmux-relay/commands.go's Revoke, which only
+// touches the relay's own SQLite store), so recent activity is the only
+// locally-available proxy for "still paired" -- generous on purpose to avoid
+// dropping a device that's simply been offline for a while.
+const staleDeviceAge = 30 * 24 * time.Hour
+
+// ActiveDeviceIDs returns DeviceIDs filtered to devices that have
+// successfully decrypted a request or frame within staleDeviceAge (or were
+// paired that recently and have not sent anything yet). Use this, not
+// DeviceIDs, when the result drives an action taken on the device's behalf
+// (e.g. building an encrypted push payload) -- DeviceIDs' full history is
+// intentionally broader than what should be treated as currently paired.
+func (s *Store) ActiveDeviceIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load()
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-staleDeviceAge).Unix()
+	out := make([]string, 0, len(f.Devices))
+	for id, d := range f.Devices {
+		if d.LastActiveUnix >= cutoff {
+			out = append(out, id)
+		}
 	}
 	return out
 }
@@ -180,33 +224,44 @@ func commitRecvCounter(highest uint64, highestSet bool, windowBits uint64, n uin
 	return highest, windowBits | (1 << age)
 }
 
-func (s *Store) ValidateRecvCounter(deviceID string, n uint64) (bool, error) {
+// ValidateAndCommitRecvCounter atomically checks whether n is acceptable for
+// deviceID and, if so, runs decrypt and persists n as seen -- all under one
+// held lock, with no gap between the replay check and the commit. This
+// closes a TOCTOU window that existed when validate and commit were separate
+// locked calls with AEAD Open in between: two concurrent decrypts of the
+// same captured counter could both pass the replay check before either
+// recorded it as seen, so both would decrypt successfully. decrypt is only
+// invoked once n has passed the replay check, and n is only persisted if
+// decrypt succeeds, so a garbage envelope with a guessed-but-unused counter
+// can't burn that counter and cause the legitimate message to be rejected
+// later.
+func (s *Store) ValidateAndCommitRecvCounter(deviceID string, n uint64, decrypt func() ([]byte, error)) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f, err := s.load()
-	if err != nil {
-		return false, err
-	}
-	d, ok := f.Devices[deviceID]
-	if !ok {
-		return false, fmt.Errorf("unknown device %q", deviceID)
-	}
-	return canAcceptRecvCounter(d.RecvHighest, d.RecvHighestSet, d.RecvWindowBits, n), nil
-}
 
-func (s *Store) CommitRecvCounter(deviceID string, n uint64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	f, err := s.load()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	d, ok := f.Devices[deviceID]
 	if !ok {
-		return fmt.Errorf("unknown device %q", deviceID)
+		return nil, fmt.Errorf("unknown device %q", deviceID)
 	}
+	if !canAcceptRecvCounter(d.RecvHighest, d.RecvHighestSet, d.RecvWindowBits, n) {
+		return nil, fmt.Errorf("decrypt_failed")
+	}
+
+	pt, err := decrypt()
+	if err != nil {
+		return nil, err
+	}
+
 	d.RecvHighest, d.RecvWindowBits = commitRecvCounter(d.RecvHighest, d.RecvHighestSet, d.RecvWindowBits, n)
 	d.RecvHighestSet = true
+	d.LastActiveUnix = time.Now().Unix()
 	f.Devices[deviceID] = d
-	return s.save(f)
+	if err := s.save(f); err != nil {
+		return nil, err
+	}
+	return pt, nil
 }

@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/sodre90/cmux-bridge/internal/backoff"
 )
 
 // EventFrame is the stable, app-facing event pushed over WS /events.
@@ -163,23 +166,31 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 			s.hub.broadcast(f)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		// Most commonly bufio.ErrTooLong: a single event line exceeded the
+		// scanner's 4MB cap. That kills the whole stream (Scan stops, not just
+		// the one line), so RunEvents' caller-side restart-with-backoff is what
+		// actually recovers -- this log exists so that isn't silent.
+		log.Printf("server: events stream ended abnormally: %v", err)
+	}
 }
 
 // RunEvents keeps a `cmux events --reconnect` stream flowing into the hub. It is
 // started once by the agent's tunnel handler. The relay subscribes to this same
 // /events stream over the tunnel to drive FCM push (internal/relay/pushmon.go).
 func (s *Server) RunEvents(ctx context.Context) {
+	retry := backoff.New(time.Second, 30*time.Second)
 	for ctx.Err() == nil {
 		cmd, pipe, err := s.cmux.Events(ctx,
 			"--category", "feed", "--category", "notification", "--reconnect")
 		if err != nil {
-			time.Sleep(2 * time.Second)
+			time.Sleep(retry.Next())
 			continue
 		}
 		s.ingestEvents(ctx, pipe)
 		_ = cmd.Wait()
 		if ctx.Err() == nil {
-			time.Sleep(time.Second)
+			time.Sleep(retry.Next())
 		}
 	}
 }

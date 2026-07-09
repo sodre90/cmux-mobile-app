@@ -52,7 +52,13 @@ func (s *Server) encryptionMiddleware(next http.Handler) http.Handler {
 		}
 
 		if r.ContentLength != 0 && r.Body != nil {
-			envelope, err := io.ReadAll(r.Body)
+			// Every plaintext handler behind this middleware caps its own
+			// body at 4KB (see rename.go/feed.go/yolo.go/push.go); the e2e
+			// envelope adds base64 + JSON + AEAD-tag overhead on top of
+			// that, so 8KB bounds the envelope comfortably without letting
+			// a paired-but-malicious device OOM the agent with an
+			// arbitrarily large body.
+			envelope, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8<<10))
 			if err != nil {
 				writeEncryptionErr(w, http.StatusBadRequest, "read_failed")
 				return

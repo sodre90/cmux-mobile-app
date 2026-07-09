@@ -1,8 +1,15 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,12 +17,27 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 )
+
+func generateTestCSR(t *testing.T, cn string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}
+	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+}
 
 func TestParseCN(t *testing.T) {
 	cases := map[string]string{
@@ -181,5 +203,111 @@ func TestRelayTunnelRejectsWrongCN(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("want 403 for wrong CN, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleRegisterCapsBodySize(t *testing.T) {
+	relayStore, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := relayStore.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devTok, err := relayStore.Issue(tenantID, "phone", "test-device-pubkey-b64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(relayStore, nil, "tok")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	post := func(body string) int {
+		req, _ := http.NewRequest("POST", srv.URL+"/devices/register", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+devTok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := post(`{"fcm_token":"tiny-token"}`); got != http.StatusOK {
+		t.Fatalf("small body: want 200, got %d", got)
+	}
+	oversized := `{"fcm_token":"` + strings.Repeat("a", 5<<10) + `"}`
+	if got := post(oversized); got != http.StatusBadRequest {
+		t.Fatalf("body over the 4KB cap: want 400, got %d", got)
+	}
+}
+
+func TestHandleRegisterTenantRateLimitsPerIP(t *testing.T) {
+	dir := t.TempDir()
+	relayStore, err := auth.Open(dir + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ca.LoadOrCreate(dir+"/ca.crt", dir+"/ca.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(relayStore, signer, "tok")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	post := func() int {
+		body, _ := json.Marshal(map[string]string{"csr": string(generateTestCSR(t, "whatever"))})
+		resp, err := http.Post(srv.URL+"/tenants/register", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := post(); got != http.StatusOK {
+		t.Fatalf("first registration: want 200, got %d", got)
+	}
+	if got := post(); got != http.StatusTooManyRequests {
+		t.Fatalf("second registration from the same IP within the interval: want 429, got %d", got)
+	}
+}
+
+func TestHandleRegisterTenantRejectsAtCap(t *testing.T) {
+	dir := t.TempDir()
+	relayStore, err := auth.Open(dir + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ca.LoadOrCreate(dir+"/ca.crt", dir+"/ca.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(relayStore, signer, "tok")
+	rl.maxTenants = 1
+	// Isolate this test from the per-IP rate limit so it exercises only the
+	// tenant-count cap.
+	rl.registerLimiter = newIPRateLimiter(0)
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	post := func() int {
+		body, _ := json.Marshal(map[string]string{"csr": string(generateTestCSR(t, "whatever"))})
+		resp, err := http.Post(srv.URL+"/tenants/register", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := post(); got != http.StatusOK {
+		t.Fatalf("registration under the cap: want 200, got %d", got)
+	}
+	if got := post(); got != http.StatusServiceUnavailable {
+		t.Fatalf("registration at the cap: want 503, got %d", got)
 	}
 }

@@ -59,10 +59,10 @@ type pushPayload struct {
 }
 
 // buildEncryptedPush encrypts f's notification content once per device this
-// agent has ever paired with (direct or relay-mediated alike -- see
-// e2e.Store.DeviceIDs), so relay-mode push never needs the real Title/Preview
-// to build a notification: it only ever receives these opaque, per-device
-// ciphertexts (see writeEventFrame's redaction of the relay's own
+// agent still considers currently paired (direct or relay-mediated alike --
+// see e2e.Store.ActiveDeviceIDs), so relay-mode push never needs the real
+// Title/Preview to build a notification: it only ever receives these opaque,
+// per-device ciphertexts (see writeEventFrame's redaction of the relay's own
 // subscription). Returns nil when e2e isn't configured (s.sessions == nil);
 // callers then send push with no "e2e" data key at all, and the app shows a
 // generic notification instead of silently dropping it.
@@ -75,7 +75,7 @@ func (s *Server) buildEncryptedPush(f EventFrame) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
-	for _, deviceID := range s.sessions.DeviceIDs() {
+	for _, deviceID := range s.sessions.ActiveDeviceIDs() {
 		frame, err := s.sessions.EncryptFrame(deviceID, payload)
 		if err != nil {
 			continue

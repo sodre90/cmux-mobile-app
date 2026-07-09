@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/backoff"
 	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
@@ -68,14 +69,6 @@ func loadTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
 		cfg.RootCAs = pool
 	}
 	return cfg, nil
-}
-
-func nextBackoff(d time.Duration) time.Duration {
-	d *= 2
-	if d > 30*time.Second {
-		return 30 * time.Second
-	}
-	return d
 }
 
 // dialAndServe runs one tunnel lifecycle: dial the relay, then serve the handler
@@ -228,6 +221,8 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return certVal.Load(), nil
 		},
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
 	})
 
 	log.Printf("agent: direct listener up on %s (tailscale-only)", bindAddr)
@@ -308,7 +303,7 @@ func runAgent(args []string) int {
 		}()
 	}
 
-	backoff := time.Second
+	retry := backoff.New(time.Second, 30*time.Second)
 	for ctx.Err() == nil {
 		log.Printf("agent: dialing relay %s", cfg.RelayURL)
 		if err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler); err != nil {
@@ -317,8 +312,7 @@ func runAgent(args []string) int {
 		if ctx.Err() != nil {
 			break
 		}
-		time.Sleep(backoff)
-		backoff = nextBackoff(backoff)
+		time.Sleep(retry.Next())
 	}
 	return 0
 }
