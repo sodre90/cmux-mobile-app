@@ -51,12 +51,14 @@ func defaults() Config {
 
 // Load reads the TOML file at path. If the file does not exist, defaults are
 // returned. Any "~/" prefixes in path-valued fields are expanded to the user's
-// home directory.
+// home directory. CMUX_RELAY_* environment variables, if set, override the
+// secrets and listen address either way (see applyEnvOverrides).
 func Load(path string) (Config, error) {
 	cfg := defaults()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			applyEnvOverrides(&cfg)
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
@@ -74,7 +76,29 @@ func Load(path string) (Config, error) {
 	if cfg.CmuxBin == "" {
 		cfg.CmuxBin = defaults().CmuxBin
 	}
+	applyEnvOverrides(&cfg)
 	return cfg, nil
+}
+
+// applyEnvOverrides lets CMUX_RELAY_TOKEN / CMUX_RELAY_EDGE_TOKEN /
+// CMUX_RELAY_FCM_CREDENTIALS / CMUX_RELAY_LISTEN win over whatever
+// config.toml (or the defaults) set, for exactly these four fields -- the
+// ones a containerized relay deployment wants supplied by its orchestrator's
+// secret store rather than a checked-in file. This is deliberately not a
+// general env-config system: every other field stays TOML-only.
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("CMUX_RELAY_TOKEN"); v != "" {
+		cfg.RelayToken = v
+	}
+	if v := os.Getenv("CMUX_RELAY_EDGE_TOKEN"); v != "" {
+		cfg.EdgeToken = v
+	}
+	if v := os.Getenv("CMUX_RELAY_FCM_CREDENTIALS"); v != "" {
+		cfg.FCMCredentials = expandHome(v)
+	}
+	if v := os.Getenv("CMUX_RELAY_LISTEN"); v != "" {
+		cfg.Listen = v
+	}
 }
 
 // expandHome replaces a leading "~/" with the user's home directory. On

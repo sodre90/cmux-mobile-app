@@ -16,3 +16,9 @@ ca_key      = "/var/lib/cmux-relay/ca.key"
 # Push (optional): leave both empty to disable.
 # fcm_project_id  = "your-firebase-project-id"
 # fcm_credentials = "/etc/cmux-relay/fcm-service-account.json"
+
+# Secrets and listen address may instead (or additionally) be supplied via
+# environment variables, which win over whatever this file sets -- handy for
+# a container orchestrator's secret store instead of a checked-in file:
+#   CMUX_RELAY_TOKEN, CMUX_RELAY_EDGE_TOKEN, CMUX_RELAY_FCM_CREDENTIALS,
+#   CMUX_RELAY_LISTEN
