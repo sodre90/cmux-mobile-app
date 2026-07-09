@@ -133,7 +133,7 @@ fun CmuxNavHost(
 
         composable(Routes.SESSIONS) {
             val vm: SessionsViewModel = viewModel(
-                factory = viewModelFactory { initializer { SessionsViewModel(container) } },
+                factory = viewModelFactory { initializer { SessionsViewModel(container, container) } },
             )
             SessionsScreen(
                 vm = vm,

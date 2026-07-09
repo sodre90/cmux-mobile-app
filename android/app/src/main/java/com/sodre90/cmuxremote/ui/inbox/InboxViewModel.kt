@@ -2,7 +2,7 @@ package com.sodre90.cmuxremote.ui.inbox
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
@@ -33,9 +33,9 @@ private const val RELAY_PENALTY_MS = 30_000L
  * `/events` socket is used only as a trigger to re-fetch when a new prompt
  * appears; the prompt content always comes from a fresh pending-feed fetch.
  */
-class InboxViewModel(container: AppContainer) : ViewModel() {
+class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
 
-    private val client = container.activeBridge()
+    private val client = bridge.activeBridge()
 
     private val _items = MutableStateFlow<List<PendingFeedItem>>(emptyList())
     val items: StateFlow<List<PendingFeedItem>> = _items.asStateFlow()
@@ -50,7 +50,7 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
         // socket is dropped when the app is backgrounded, so reconnect with
         // backoff and re-sync pending items after each gap instead of dying on
         // the first disconnect.
-        if (container.anyBridgeConfigured()) {
+        if (bridge.anyBridgeConfigured()) {
             viewModelScope.launch {
                 // Set only when a connect attempt against RELAY never receives a
                 // single frame -- a genuine reachability failure, as opposed to a
@@ -62,7 +62,7 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
                 while (isActive) {
                     val primarySlot =
                         if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-                    val events = container.eventsSocket(primarySlot) ?: container.eventsSocket(primarySlot.other())
+                    val events = bridge.eventsSocket(primarySlot) ?: bridge.eventsSocket(primarySlot.other())
                     if (events == null) { delay(backoff); continue }
                     var gotFrame = false
                     try {

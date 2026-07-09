@@ -5,8 +5,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.PairingGateway
 import com.sodre90.cmuxremote.data.pairing.PairingCodeInvalidException
 import com.sodre90.cmuxremote.data.pairing.PairingQr
 import com.sodre90.cmuxremote.data.pairing.isExpired
@@ -23,7 +23,7 @@ sealed interface PairingUiState {
 /** Backs the QR-scan onboarding screen. [onQrScanned] is called by the
  *  camera analyzer on every decoded barcode payload -- most calls are
  *  ignored (foreign QR content, or a scan while already mid-pairing). */
-class PairingViewModel(private val container: AppContainer, private val slot: ConnectionSlot) : ViewModel() {
+class PairingViewModel(private val pairing: PairingGateway, private val slot: ConnectionSlot) : ViewModel() {
 
     var state by mutableStateOf<PairingUiState>(PairingUiState.Scanning)
         private set
@@ -50,7 +50,7 @@ class PairingViewModel(private val container: AppContainer, private val slot: Co
         state = PairingUiState.Pairing
         viewModelScope.launch {
             try {
-                val qr = container.pairingClient(slot).resolveManualCode(serverUrl.trim(), code.trim())
+                val qr = pairing.pairingClient(slot).resolveManualCode(serverUrl.trim(), code.trim())
                 pairAndUpdateState(qr, invalidCodeMessage = "This code has expired or was already used -- ask for a fresh one.")
             } catch (e: PairingCodeInvalidException) {
                 state = PairingUiState.Error("This code has expired or was already used -- ask for a fresh one.")
@@ -62,7 +62,7 @@ class PairingViewModel(private val container: AppContainer, private val slot: Co
 
     private suspend fun pairAndUpdateState(qr: PairingQr, invalidCodeMessage: String) {
         try {
-            container.pairingClient(slot).pair(qr)
+            pairing.pairingClient(slot).pair(qr)
             state = PairingUiState.Success
         } catch (e: PairingCodeInvalidException) {
             state = PairingUiState.Error(invalidCodeMessage)

@@ -16,8 +16,13 @@ import java.util.concurrent.TimeUnit
  * [OkHttpClient] per [ConnectionSlot] (bearer token + opt-in e2e encryption) and
  * hands out slot-scoped bridge clients/sockets, plus [activeBridge] for
  * callers that just want "whichever works right now."
+ *
+ * Implements the narrow [BridgeGateway]/[WorkspaceOrderGateway]/[PairingGateway]
+ * interfaces ViewModels depend on instead of this concrete class, so they stay
+ * constructible in a plain JVM test -- this class's init does
+ * EncryptedSharedPreferences + Keystore I/O and can't be.
  */
-class AppContainer(appContext: Context) {
+class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, PairingGateway {
 
     val settings = Settings(appContext)
     val identity = Identity(appContext)
@@ -81,16 +86,20 @@ class AppContainer(appContext: Context) {
     fun bridgeClient(slot: ConnectionSlot): BridgeClient? =
         settings.bridgeConfig(slot)?.let { BridgeClient(httpClient(slot, it), it.baseUrl) }
 
-    fun eventsSocket(slot: ConnectionSlot): EventsSocket? =
+    override fun eventsSocket(slot: ConnectionSlot): EventsSocket? =
         settings.bridgeConfig(slot)?.let { EventsSocket(httpClient(slot, it), it.baseUrl, sessions.getValue(slot), cipher) }
 
-    fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? =
+    override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? =
         settings.bridgeConfig(slot)?.let { TerminalSocket(httpClient(slot, it), it.baseUrl, surfaceId, sessions.getValue(slot), cipher) }
 
     /** Unauthenticated -- POST /devices/pair takes no bearer token (see
      *  bridge/internal/relay/relay.go's handleDevicePair). */
-    fun pairingClient(slot: ConnectionSlot): PairingClient =
+    override fun pairingClient(slot: ConnectionSlot): PairingClient =
         PairingClient(OkHttpClient(), identity, sessions.getValue(slot), settings, slot)
+
+    override fun loadOrder(): List<String> = workspaceOrderStore.load()
+
+    override fun saveOrder(order: List<String>) = workspaceOrderStore.save(order)
 
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },
@@ -104,9 +113,9 @@ class AppContainer(appContext: Context) {
      *  shape change). A single shared instance is kept (not rebuilt per
      *  call) so FallbackBridgeClient's 30s "primary is down" penalty window
      *  actually persists across repeated calls from ViewModels. */
-    fun activeBridge(): FallbackBridgeClient? = if (anyBridgeConfigured()) fallbackBridge else null
+    override fun activeBridge(): FallbackBridgeClient? = if (anyBridgeConfigured()) fallbackBridge else null
 
-    fun anyBridgeConfigured(): Boolean = ConnectionSlot.entries.any { settings.bridgeConfig(it) != null }
+    override fun anyBridgeConfigured(): Boolean = ConnectionSlot.entries.any { settings.bridgeConfig(it) != null }
 
     /** The paired session for [slot] -- used by CmuxMessagingService to decrypt an
      *  incoming push, which arrives tagged with the slot that sent it rather than

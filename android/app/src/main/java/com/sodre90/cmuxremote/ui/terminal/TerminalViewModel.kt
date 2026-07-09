@@ -3,7 +3,7 @@ package com.sodre90.cmuxremote.ui.terminal
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.DecodedGrid
@@ -60,7 +60,7 @@ data class TerminalUiState(
 enum class DeliveryStatus { CONFIRMED, SENDING, DELAYED }
 
 class TerminalViewModel(
-    private val container: AppContainer,
+    private val bridge: BridgeGateway,
     private val surfaceId: String,
 ) : ViewModel() {
 
@@ -147,7 +147,7 @@ class TerminalViewModel(
     // this finds the owning workspace via the existing sessions list rather
     // than needing a new bridge endpoint or extra nav args.
     private fun loadYoloMode() {
-        val client = container.activeBridge() ?: return
+        val client = bridge.activeBridge() ?: return
         viewModelScope.launch {
             try {
                 val ws = client.sessions().firstOrNull { ws -> ws.terminals.any { it.id == surfaceId } }
@@ -162,7 +162,7 @@ class TerminalViewModel(
     fun reconnect() = connect()
 
     private fun connect() {
-        if (!container.anyBridgeConfigured()) {
+        if (!bridge.anyBridgeConfigured()) {
             _state.value = TerminalUiState(error = "Bridge not configured")
             return
         }
@@ -177,8 +177,8 @@ class TerminalViewModel(
             while (isActive) {
                 val primarySlot =
                     if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-                val socket = container.terminalSocket(primarySlot, surfaceId)
-                    ?: container.terminalSocket(primarySlot.other(), surfaceId)
+                val socket = bridge.terminalSocket(primarySlot, surfaceId)
+                    ?: bridge.terminalSocket(primarySlot.other(), surfaceId)
                 if (socket == null) { delay(backoff); continue }
                 activeSocket = socket
                 var gotFrame = false

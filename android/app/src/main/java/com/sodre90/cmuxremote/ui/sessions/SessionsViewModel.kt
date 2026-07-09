@@ -2,10 +2,11 @@ package com.sodre90.cmuxremote.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.BridgeException
+import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
+import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.CancellationException
@@ -21,7 +22,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @OptIn(FlowPreview::class)
-class SessionsViewModel(private val container: AppContainer) : ViewModel() {
+class SessionsViewModel(
+    private val bridge: BridgeGateway,
+    private val workspaceOrder: WorkspaceOrderGateway,
+) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
     val state: StateFlow<UiState<List<Workspace>>> = _state.asStateFlow()
@@ -56,14 +60,14 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /** The phone-local custom sort order (see [com.sodre90.cmuxremote.data.WorkspaceOrderStore]). */
-    fun loadOrder(): List<String> = container.workspaceOrderStore.load()
+    fun loadOrder(): List<String> = workspaceOrder.loadOrder()
 
-    fun saveOrder(order: List<String>) = container.workspaceOrderStore.save(order)
+    fun saveOrder(order: List<String>) = workspaceOrder.saveOrder(order)
 
     /** Sets a workspace's display title in cmux, then reloads the list so the
      *  new title (cmux's single source of truth for it) comes back fresh. */
     fun renameWorkspace(id: String, title: String) {
-        val client = container.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
         viewModelScope.launch {
             try {
                 client.renameWorkspace(id, title)
@@ -81,7 +85,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
      *  in place rather than dropping into [UiState.Loading] and reloading
      *  the whole screen. */
     fun setYoloMode(id: String, mode: String) {
-        val client = container.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
         viewModelScope.launch {
             try {
                 client.setYoloMode(id, mode)
@@ -99,7 +103,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun refresh() {
-        val client = container.activeBridge()
+        val client = bridge.activeBridge()
         if (client == null) {
             _state.value = UiState.Error("Bridge not configured")
             return
@@ -119,7 +123,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
      *  shows [isRefreshing] so PullToRefreshBox's spinner appears. Skips if a
      *  fetch is already in flight. */
     fun silentRefresh() {
-        val client = container.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
         if (fetchInFlight) return
         viewModelScope.launch {
             fetchInFlight = true
@@ -138,7 +142,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
      *  so cmux agent activity the user didn't ask about never pops the
      *  pull-to-refresh spinner. */
     private fun autoRefresh() {
-        val client = container.activeBridge() ?: return
+        val client = bridge.activeBridge() ?: return
         if (fetchInFlight) return
         viewModelScope.launch {
             fetchInFlight = true
@@ -164,7 +168,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
     // InboxViewModel's reconnect-with-backoff loop over the same /events
     // socket.
     private fun subscribeToEvents() {
-        if (!container.anyBridgeConfigured()) return
+        if (!bridge.anyBridgeConfigured()) return
         viewModelScope.launch {
             // Set only when a connect attempt against RELAY never receives a single
             // frame -- a genuine reachability failure, as opposed to a socket that
@@ -175,7 +179,7 @@ class SessionsViewModel(private val container: AppContainer) : ViewModel() {
             while (isActive) {
                 val primarySlot =
                     if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-                val events = container.eventsSocket(primarySlot) ?: container.eventsSocket(primarySlot.other())
+                val events = bridge.eventsSocket(primarySlot) ?: bridge.eventsSocket(primarySlot.other())
                 if (events == null) { delay(backoff); continue } // shouldn't happen given the guard above
                 var gotFrame = false
                 try {
