@@ -3,6 +3,7 @@ package auth
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -79,9 +80,9 @@ func TestIssueVerifyRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dev, ok := s.Verify(tok)
-	if !ok {
-		t.Fatal("issued token should verify")
+	dev, err := s.Verify(tok)
+	if err != nil {
+		t.Fatalf("issued token should verify: %v", err)
 	}
 	if dev.TenantID != tenant {
 		t.Fatalf("Verify TenantID = %q want %q", dev.TenantID, tenant)
@@ -92,20 +93,20 @@ func TestIssueVerifyRevoke(t *testing.T) {
 	if dev.TokenHash == "" || len(dev.TokenHash) != 64 {
 		t.Fatalf("Verify TokenHash should be a full 64-char hex digest, got %q", dev.TokenHash)
 	}
-	if _, ok := s.Verify("bogus"); ok {
-		t.Fatal("bogus token must not verify")
+	if _, err := s.Verify("bogus"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bogus token must not verify, got err=%v", err)
 	}
-	if _, ok := s.Verify(""); ok {
-		t.Fatal("empty token must not verify")
+	if _, err := s.Verify(""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("empty token must not verify, got err=%v", err)
 	}
-	if !s.Revoke(tok) {
-		t.Fatal("revoke should report removal")
+	if err := s.Revoke(tok); err != nil {
+		t.Fatalf("revoke should report removal: %v", err)
 	}
-	if _, ok := s.Verify(tok); ok {
-		t.Fatal("revoked token must not verify")
+	if _, err := s.Verify(tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked token must not verify, got err=%v", err)
 	}
-	if s.Revoke(tok) {
-		t.Fatal("double revoke should report false")
+	if err := s.Revoke(tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("double revoke should report ErrNotFound, got err=%v", err)
 	}
 }
 
@@ -122,8 +123,8 @@ func TestVerifyFailsClosedWhenTenantRevoked(t *testing.T) {
 	tenant := newTenant(t, s)
 	tok, _ := s.Issue(tenant, "phone", testPubkey)
 	s.RevokeTenant(tenant)
-	if _, ok := s.Verify(tok); ok {
-		t.Fatal("a device token must stop verifying once its tenant is revoked")
+	if _, err := s.Verify(tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a device token must stop verifying once its tenant is revoked, got err=%v", err)
 	}
 }
 
@@ -157,8 +158,8 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
 		t.Fatal("reuse of a code must fail")
 	}
-	if _, ok := s.Verify(tok); !ok {
-		t.Fatal("redeemed token should verify")
+	if _, err := s.Verify(tok); err != nil {
+		t.Fatalf("redeemed token should verify: %v", err)
 	}
 }
 
@@ -304,8 +305,8 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s2.Verify(tok); !ok {
-		t.Fatal("token must survive reopening the database file")
+	if _, err := s2.Verify(tok); err != nil {
+		t.Fatalf("token must survive reopening the database file: %v", err)
 	}
 }
 
@@ -340,14 +341,14 @@ func TestTenantFCMDevicesScopedPerTenant(t *testing.T) {
 	if got := s.TenantFCMDevices(tenantA); len(got) != 0 {
 		t.Fatalf("expected no FCM devices yet, got %v", got)
 	}
-	if !s.SetFCMToken(tokA, "fcm-a") {
-		t.Fatal("SetFCMToken should succeed for a known device")
+	if err := s.SetFCMToken(tokA, "fcm-a"); err != nil {
+		t.Fatalf("SetFCMToken should succeed for a known device: %v", err)
 	}
-	if !s.SetFCMToken(tokB, "fcm-b") {
-		t.Fatal("SetFCMToken should succeed for a known device")
+	if err := s.SetFCMToken(tokB, "fcm-b"); err != nil {
+		t.Fatalf("SetFCMToken should succeed for a known device: %v", err)
 	}
-	if s.SetFCMToken("bogus", "x") {
-		t.Fatal("SetFCMToken must fail for unknown device")
+	if err := s.SetFCMToken("bogus", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetFCMToken must fail for unknown device, got err=%v", err)
 	}
 
 	gotA := s.TenantFCMDevices(tenantA)
@@ -367,14 +368,14 @@ func TestTenantFCMDevicesDedupesRepeatedPairingsKeepingNewest(t *testing.T) {
 	tok1, _ := s.Issue(tenant, "phone", testPubkey)
 	tok2, _ := s.Issue(tenant, "phone", testPubkey)
 	tok3, _ := s.Issue(tenant, "phone", testPubkey)
-	if !s.SetFCMToken(tok1, "fcm-shared") {
-		t.Fatal("SetFCMToken should succeed for a known device")
+	if err := s.SetFCMToken(tok1, "fcm-shared"); err != nil {
+		t.Fatalf("SetFCMToken should succeed for a known device: %v", err)
 	}
-	if !s.SetFCMToken(tok2, "fcm-shared") {
-		t.Fatal("SetFCMToken should succeed for a known device")
+	if err := s.SetFCMToken(tok2, "fcm-shared"); err != nil {
+		t.Fatalf("SetFCMToken should succeed for a known device: %v", err)
 	}
-	if !s.SetFCMToken(tok3, "fcm-shared") {
-		t.Fatal("SetFCMToken should succeed for a known device")
+	if err := s.SetFCMToken(tok3, "fcm-shared"); err != nil {
+		t.Fatalf("SetFCMToken should succeed for a known device: %v", err)
 	}
 
 	got := s.TenantFCMDevices(tenant)
@@ -435,9 +436,9 @@ func TestMigrationAddsDevicePubkeyColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue after migration: %v", err)
 	}
-	dev, ok := s.Verify(tok)
-	if !ok {
-		t.Fatal("issued token should verify after migration")
+	dev, err := s.Verify(tok)
+	if err != nil {
+		t.Fatalf("issued token should verify after migration: %v", err)
 	}
 	if dev.DevicePubkey != testPubkey {
 		t.Fatalf("DevicePubkey = %q, want %q", dev.DevicePubkey, testPubkey)

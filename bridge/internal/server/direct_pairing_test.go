@@ -184,9 +184,9 @@ func TestDirectDevicePairRedeemsCode(t *testing.T) {
 	if got.Token == "" || got.TenantID != tenantID {
 		t.Fatalf("unexpected response: %+v", got)
 	}
-	dev, ok := store.Verify(got.Token)
-	if !ok || dev.Name != "my-phone" || dev.DevicePubkey != "device-pubkey-b64" {
-		t.Fatalf("unexpected device: %+v", dev)
+	dev, err := store.Verify(got.Token)
+	if err != nil || dev.Name != "my-phone" || dev.DevicePubkey != "device-pubkey-b64" {
+		t.Fatalf("unexpected device: %+v (err=%v)", dev, err)
 	}
 }
 

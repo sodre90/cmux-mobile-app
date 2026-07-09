@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -392,10 +393,16 @@ func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "missing fcm_token")
 		return
 	}
-	r.store.SetFCMToken(auth.BearerToken(req), rq.FCMToken)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"ok":true}`))
+	if err := r.store.SetFCMToken(auth.BearerToken(req), rq.FCMToken); err != nil {
+		if errors.Is(err, auth.ErrNotFound) {
+			httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		log.Printf("relay: set fcm token: %v", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 type registerTenantReq struct {

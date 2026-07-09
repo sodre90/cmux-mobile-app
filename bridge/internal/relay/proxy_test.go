@@ -57,9 +57,9 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dev, ok := store.Verify(devTok)
-	if !ok {
-		t.Fatal("issued token should verify")
+	dev, err := store.Verify(devTok)
+	if err != nil {
+		t.Fatalf("issued token should verify: %v", err)
 	}
 
 	reg := NewRegistry()

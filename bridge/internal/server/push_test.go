@@ -158,9 +158,9 @@ func TestMaybeSendPushSendsEncryptedPayload(t *testing.T) {
 	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
 	s.SetSessions(sessions)
 	tok, secret := directPairedDevice(t, store, sessions)
-	dev, ok := store.Verify(tok)
-	if !ok {
-		t.Fatal("issued token should verify")
+	dev, err := store.Verify(tok)
+	if err != nil {
+		t.Fatalf("issued token should verify: %v", err)
 	}
 	store.SetFCMToken(tok, "fcm-1")
 
@@ -373,9 +373,9 @@ func TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope(t *testing.T) {
 	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
 
 	tok, secret := directPairedDevice(t, authStore, sessions)
-	dev, ok := authStore.Verify(tok)
-	if !ok {
-		t.Fatal("issued token should verify")
+	dev, err := authStore.Verify(tok)
+	if err != nil {
+		t.Fatalf("issued token should verify: %v", err)
 	}
 
 	s := New(&cmux.Client{}, authStore)

@@ -68,9 +68,9 @@ func TestDevicePairRedeemsCode(t *testing.T) {
 	if got.TenantID != tenantID {
 		t.Fatalf("TenantID = %q, want %q", got.TenantID, tenantID)
 	}
-	dev, ok := store.Verify(got.Token)
-	if !ok {
-		t.Fatal("returned token should verify")
+	dev, err := store.Verify(got.Token)
+	if err != nil {
+		t.Fatalf("returned token should verify: %v", err)
 	}
 	if dev.Name != "my-phone" || dev.DevicePubkey != "device-pubkey-b64" || dev.TenantID != tenantID {
 		t.Fatalf("unexpected device: %+v", dev)
@@ -104,9 +104,9 @@ func TestDevicePairDefaultsName(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	dev, ok := store.Verify(got.Token)
-	if !ok || dev.Name != "phone" {
-		t.Fatalf("expected default name %q, got device: %+v ok=%v", "phone", dev, ok)
+	dev, err := store.Verify(got.Token)
+	if err != nil || dev.Name != "phone" {
+		t.Fatalf("expected default name %q, got device: %+v err=%v", "phone", dev, err)
 	}
 }
 

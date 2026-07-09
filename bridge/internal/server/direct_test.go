@@ -39,9 +39,9 @@ func directPairedDevice(t *testing.T, store *auth.Store, sessions *e2e.Store) (t
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	dev, ok := store.Verify(tok)
-	if !ok {
-		t.Fatal("issued token should verify")
+	dev, err := store.Verify(tok)
+	if err != nil {
+		t.Fatalf("issued token should verify: %v", err)
 	}
 	secret, err = e2e.DeriveSharedSecret(agentPriv, devicePriv.PublicKey())
 	if err != nil {

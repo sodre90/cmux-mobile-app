@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,14 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrNotFound is returned by Verify, Revoke, and SetFCMToken when no
+// matching device (or, for Verify, no matching active-tenant device) exists
+// -- as opposed to a genuine infrastructure error (a failed query), which
+// those methods return unwrapped so callers can tell "no such device" apart
+// from "the store is unhealthy" and respond accordingly (see auth.Require,
+// which must never turn an infra error into a 401).
+var ErrNotFound = errors.New("auth: not found")
 
 const schema = `
 CREATE TABLE IF NOT EXISTS tenants (
@@ -274,9 +283,11 @@ func (s *Store) Issue(tenantID, name, devicePubkey string) (string, error) {
 // revoked. A SHA-256 digest lookup needs no constant-time comparison here:
 // unlike a raw-token equality check with early-exit branching, an indexed
 // lookup on a fully-avalanching hash leaks no exploitable timing signal.
-func (s *Store) Verify(token string) (Device, bool) {
+// Returns ErrNotFound when the token is empty or matches no active-tenant
+// device; any other error is a genuine store failure.
+func (s *Store) Verify(token string) (Device, error) {
 	if token == "" {
-		return Device{}, false
+		return Device{}, ErrNotFound
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,13 +300,16 @@ func (s *Store) Verify(token string) (Device, bool) {
 	var fcm sql.NullString
 	var created string
 	if err := row.Scan(&dev.TenantID, &dev.Name, &fcm, &dev.DevicePubkey, &created); err != nil {
-		return Device{}, false
+		if errors.Is(err, sql.ErrNoRows) {
+			return Device{}, ErrNotFound
+		}
+		return Device{}, fmt.Errorf("verify device: %w", err)
 	}
 	dev.FCM = fcm.String
 	dev.Created, _ = time.Parse(time.RFC3339, created)
 	dev.TokenHash = hash
 	dev.HashSuffix = hash[len(hash)-6:]
-	return dev, true
+	return dev, nil
 }
 
 // List returns all devices across all tenants.
@@ -325,29 +339,38 @@ func (s *Store) List() []Device {
 	return out
 }
 
-// Revoke removes a device by its raw token. Reports whether a device was
-// removed.
-func (s *Store) Revoke(token string) bool {
+// Revoke removes a device by its raw token. Returns ErrNotFound if no device
+// matched (already revoked, or never existed); any other error is a genuine
+// store failure.
+func (s *Store) Revoke(token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(`DELETE FROM devices WHERE token_hash = ?`, hashToken(token))
 	if err != nil {
-		return false
+		return fmt.Errorf("revoke device: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return n > 0
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
-// SetFCMToken records the FCM registration token for a device token.
-func (s *Store) SetFCMToken(token, fcm string) bool {
+// SetFCMToken records the FCM registration token for a device token. Returns
+// ErrNotFound if token matches no device; any other error is a genuine store
+// failure.
+func (s *Store) SetFCMToken(token, fcm string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	res, err := s.db.Exec(`UPDATE devices SET fcm_token = ? WHERE token_hash = ?`, fcm, hashToken(token))
 	if err != nil {
-		return false
+		return fmt.Errorf("set fcm token: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return n > 0
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // FCMDevice pairs a device's e2e deviceID (its bearer-token hash -- the same

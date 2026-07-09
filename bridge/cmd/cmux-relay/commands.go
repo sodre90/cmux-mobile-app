@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
+	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cli"
 )
 
@@ -39,12 +41,16 @@ func runDevices(args []string) int {
 			fmt.Fprintln(os.Stderr, "usage: cmux-relay devices revoke <token>")
 			return 2
 		}
-		if store.Revoke(rest[1]) {
-			fmt.Println("revoked")
-			return 0
+		if err := store.Revoke(rest[1]); err != nil {
+			if errors.Is(err, auth.ErrNotFound) {
+				fmt.Fprintln(os.Stderr, "no such token")
+			} else {
+				fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
+			}
+			return 1
 		}
-		fmt.Fprintln(os.Stderr, "no such token")
-		return 1
+		fmt.Println("revoked")
+		return 0
 	default:
 		fmt.Fprintln(os.Stderr, "usage: cmux-relay devices [list|revoke <token>]")
 		return 2

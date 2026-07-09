@@ -2,8 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
+
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
 )
 
 type ctxKey int
@@ -11,17 +15,22 @@ type ctxKey int
 const deviceKey ctxKey = 0
 
 // Require wraps next so that only requests bearing a valid device token reach
-// it. The token is read from the "Authorization: Bearer <token>" header. On
-// failure it writes a 401 JSON body. On success the resolved Device is attached
-// to the request context (see DeviceFromContext).
+// it. The token is read from the "Authorization: Bearer <token>" header. A
+// token that verifies against no device gets a 401; a genuine store failure
+// (the DB itself misbehaving) gets a 500 instead -- an infra error must never
+// masquerade as an authentication failure. On success the resolved Device is
+// attached to the request context (see DeviceFromContext).
 func Require(s *Store, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok := BearerToken(r)
-		dev, ok := s.Verify(tok)
-		if !ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+		dev, err := s.Verify(tok)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			log.Printf("auth: verify: %v", err)
+			httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
 		ctx := context.WithValue(r.Context(), deviceKey, dev)

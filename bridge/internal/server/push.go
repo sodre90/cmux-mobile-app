@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -147,8 +148,13 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusBadRequest, "missing fcm_token")
 		return
 	}
-	if !s.store.SetFCMToken(auth.BearerToken(r), rq.FCMToken) {
-		httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
+	if err := s.store.SetFCMToken(auth.BearerToken(r), rq.FCMToken); err != nil {
+		if errors.Is(err, auth.ErrNotFound) {
+			httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		log.Printf("agent: set fcm token: %v", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
