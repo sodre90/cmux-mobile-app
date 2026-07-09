@@ -266,18 +266,16 @@ func TestIngestEventsAutoResolvesWhenYoloEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// maybeAutoResolve spawns the reply in a goroutine (see yolo.go); poll
-	// rather than sleep-then-check so this doesn't flake under load.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		data, _ := os.ReadFile(logPath)
-		if strings.Contains(string(data), "feed.permission.reply") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("expected an auto-reply for the yolo-enabled workspace; log:\n%s", data)
-		}
-		time.Sleep(20 * time.Millisecond)
+	// autoResolveYolo runs synchronously before broadcast (see events.go), so
+	// by the time the frame arrives the reply has already happened and
+	// NeedsAttention has been cleared -- neither this agent's own push nor
+	// the relay's pushmon (which trusts this flag alone) should fire.
+	if got.NeedsAttention {
+		t.Fatal("NeedsAttention should be cleared once YOLO auto-resolves the pending permission")
+	}
+	data, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(data), "feed.permission.reply") {
+		t.Fatalf("expected an auto-reply for the yolo-enabled workspace; log:\n%s", data)
 	}
 }
 

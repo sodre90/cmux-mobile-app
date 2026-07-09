@@ -52,26 +52,35 @@ type pendingFeedItem struct {
 	Status    string `json:"status"`
 }
 
-// maybeAutoResolve checks a NeedsAttention frame's workspace for a non-off
-// YOLO mode and, if set, resolves any pending permission in the background.
+// autoResolveYolo checks a NeedsAttention frame's workspace for a non-off
+// YOLO mode and, if set, synchronously resolves any matching pending
+// permission request before the caller broadcasts/pushes the frame -- a
+// permission prompt YOLO is about to silently approve must never also alert
+// the phone (that alert would fire on both the agent's own direct-mode push
+// and, since the relay's pushmon trusts NeedsAttention with no YOLO
+// visibility of its own, the relay-mode push too). Returns whether something
+// was actually resolved, so the caller can suppress NeedsAttention.
+//
 // The mode lookup itself is a cheap local read (no RPC cost at all when YOLO
-// is off, the common case); only a non-off mode spawns the goroutine that
-// makes cmux RPC calls, so ingestEvents's single-goroutine scan loop is never
-// blocked waiting on cmux for a workspace that isn't opted in.
-func (s *Server) maybeAutoResolve(ctx context.Context, workspaceID string) {
+// is off, the common case); only a non-off mode makes the cmux RPC calls in
+// resolvePendingPermission, briefly blocking ingestEvents's single-goroutine
+// scan loop for that one frame -- an acceptable tradeoff since YOLO-on
+// workspaces are the deliberately opted-in minority.
+func (s *Server) autoResolveYolo(ctx context.Context, workspaceID string) bool {
 	if s.yolo == nil || workspaceID == "" {
-		return
+		return false
 	}
 	mode := s.yolo.Mode(workspaceID)
 	if mode == "" {
-		return
+		return false
 	}
-	go s.resolvePendingPermission(ctx, workspaceID, mode)
+	return s.resolvePendingPermission(ctx, workspaceID, mode)
 }
 
 // resolvePendingPermission finds any pending "permissionRequest" feed item
 // whose cwd matches workspaceID's live working directory and replies to it
-// with mode, unblocking the agent without a phone tap.
+// with mode, unblocking the agent without a phone tap. Returns whether at
+// least one item was found and successfully replied to.
 //
 // Pending items are keyed by workstream_id -- the agent's own session ID
 // (e.g. "claude-<uuid>"), confirmed live to be a different ID space than
@@ -84,31 +93,35 @@ func (s *Server) maybeAutoResolve(ctx context.Context, workspaceID string) {
 // resolves /tmp -> /private/tmp). Comparing raw strings would silently drop
 // every match for a workspace under /tmp, /var, /etc, or any other
 // symlinked path, so both sides are canonicalized before comparing.
-func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode string) {
+func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode string) bool {
 	ws, ok := s.findWorkspace(ctx, workspaceID)
 	if !ok || ws.CWD == "" {
-		return
+		return false
 	}
 	wantCWD := canonicalPath(ws.CWD)
 	raw, err := s.cmux.Rpc(ctx, "feed.list", map[string]any{"pending_only": true})
 	if err != nil {
-		return
+		return false
 	}
 	var resp struct {
 		Items []pendingFeedItem `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return
+		return false
 	}
+	resolvedAny := false
 	for _, item := range resp.Items {
 		if item.Kind != "permissionRequest" || item.Status != "pending" || canonicalPath(item.CWD) != wantCWD {
 			continue
 		}
-		_, _ = s.cmux.Rpc(ctx, "feed.permission.reply", map[string]any{
+		if _, err := s.cmux.Rpc(ctx, "feed.permission.reply", map[string]any{
 			"request_id": item.RequestID,
 			"mode":       mode,
-		})
+		}); err == nil {
+			resolvedAny = true
+		}
 	}
+	return resolvedAny
 }
 
 // canonicalPath resolves symlinks so paths reported through different cmux

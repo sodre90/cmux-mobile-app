@@ -149,9 +149,16 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		if f, ok := classify(m); ok {
 			if f.NeedsAttention {
 				s.enrichTitle(ctx, &f)
-				f.EncryptedPush = s.buildEncryptedPush(f)
-				s.maybeAutoResolve(ctx, f.WorkspaceID)
-				s.maybeSendPush(ctx, f)
+				// Give YOLO a chance to silently resolve this before anyone is
+				// alerted: if it does, clear NeedsAttention so neither this
+				// agent's own push nor the relay's pushmon (which trusts this
+				// flag with no YOLO visibility of its own) ever fires for it.
+				if s.autoResolveYolo(ctx, f.WorkspaceID) {
+					f.NeedsAttention = false
+				} else {
+					f.EncryptedPush = s.buildEncryptedPush(f)
+					s.maybeSendPush(ctx, f)
+				}
 			}
 			s.hub.broadcast(f)
 		}

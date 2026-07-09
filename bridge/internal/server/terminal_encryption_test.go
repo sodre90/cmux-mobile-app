@@ -118,6 +118,57 @@ func TestTerminalInputDispatchedWhenEncrypted(t *testing.T) {
 	t.Fatalf("input rpc not dispatched; log:\n%s", data)
 }
 
+func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
+	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	sessions, deviceID, secret := pairedSessions(t)
+	s.SetSessions(sessions)
+
+	const relayTok = "relay-secret"
+	srv := httptest.NewServer(s.TrustedHandler(relayTok))
+	defer srv.Close()
+
+	c := wsConnectEncrypted(t, srv.URL, "/terminal/SURF1", relayTok, deviceID)
+	defer c.Close()
+
+	// Drain the initial encrypted replay frame (agent->device counter 0).
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := c.ReadMessage(); err != nil {
+		t.Fatal(err)
+	}
+
+	upBytes, err := json.Marshal(TerminalUp{Type: "input", Text: "ls\r", Seq: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := e2e.EncodeFrame(secret, e2e.DirDeviceToAgent, 0, upBytes)
+	if err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	if err := c.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, raw, err := c.ReadMessage()
+	if err != nil {
+		t.Fatalf("expected an encrypted ack frame, got: %v", err)
+	}
+	_, plain, err := e2e.DecodeFrame(secret, e2e.DirAgentToDevice, raw)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	var ack TerminalDown
+	if err := json.Unmarshal(plain, &ack); err != nil {
+		t.Fatalf("unmarshal decrypted ack: %v", err)
+	}
+	if ack.Type != "ack" || ack.Seq != 9 || !ack.Ok {
+		t.Fatalf("unexpected ack frame: %+v", ack)
+	}
+}
+
 func TestTerminalRejectsMissingDeviceIDWhenEncrypted(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
 	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)

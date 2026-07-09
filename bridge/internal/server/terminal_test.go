@@ -117,6 +117,119 @@ func TestTerminalInputDispatched(t *testing.T) {
 	t.Fatalf("input rpc not dispatched; log:\n%s", data)
 }
 
+// fakeTerminalFailingInputScript replays fine but fails every
+// mobile.terminal.input call, so the read loop's resulting ack carries Ok: false.
+const fakeTerminalFailingInputScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    cat <<'JSON'
+{"columns":80,"rows":24,"seq":1,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"row_spans":[]}}
+JSON
+    ;;
+  mobile.terminal.input)
+    echo "boom" >&2
+    exit 1
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+func TestTerminalInputAcked(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	// Drain the initial replay frame.
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var down TerminalDown
+	if err := c.ReadJSON(&down); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.WriteJSON(TerminalUp{Type: "input", Text: "ls\r", Seq: 42}); err != nil {
+		t.Fatal(err)
+	}
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ack TerminalDown
+	if err := c.ReadJSON(&ack); err != nil {
+		t.Fatalf("expected an ack frame, got: %v", err)
+	}
+	if ack.Type != "ack" || ack.Seq != 42 || !ack.Ok {
+		t.Fatalf("unexpected ack frame: %+v", ack)
+	}
+}
+
+func TestTerminalInputAckReflectsRpcFailure(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeTerminalFailingInputScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var down TerminalDown
+	if err := c.ReadJSON(&down); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.WriteJSON(TerminalUp{Type: "input", Text: "ls\r", Seq: 7}); err != nil {
+		t.Fatal(err)
+	}
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ack TerminalDown
+	if err := c.ReadJSON(&ack); err != nil {
+		t.Fatalf("expected an ack frame, got: %v", err)
+	}
+	if ack.Type != "ack" || ack.Seq != 7 || ack.Ok {
+		t.Fatalf("expected a failed ack (ok=false), got: %+v", ack)
+	}
+}
+
+func TestTerminalNoAckWhenSeqUnset(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var down TerminalDown
+	if err := c.ReadJSON(&down); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.WriteJSON(TerminalUp{Type: "resize", Columns: 80, Rows: 24}); err != nil {
+		t.Fatal(err)
+	}
+	// Nudge a second, seq'd message through and confirm *its* ack is the very
+	// next frame -- proving the unseq'd resize above never produced one.
+	if err := c.WriteJSON(TerminalUp{Type: "resize", Columns: 81, Rows: 24, Seq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ack TerminalDown
+	if err := c.ReadJSON(&ack); err != nil {
+		t.Fatalf("expected an ack frame, got: %v", err)
+	}
+	if ack.Type != "ack" || ack.Seq != 1 {
+		t.Fatalf("expected the seq=1 ack directly (no stray ack for the unseq'd resize), got: %+v", ack)
+	}
+}
+
 func TestTerminalForwardsContentChange(t *testing.T) {
 	logPath := t.TempDir() + "/cmux.log"
 	t.Setenv("CMUX_FAKE_LOG", logPath)

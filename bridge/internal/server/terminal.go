@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,21 +14,28 @@ import (
 
 // TerminalDown is a server->client terminal message. Grid carries the cmux
 // render-grid object (format "cmux.render-grid.v1") verbatim; the app renders it
-// as a styled cell grid.
+// as a styled cell grid. "ack" echoes back an input/paste/resize message's Seq
+// once its RPC has run, with Ok reflecting whether that RPC actually succeeded.
 type TerminalDown struct {
-	Type    string          `json:"type"` // "replay" | "output"
+	Type    string          `json:"type"` // "replay" | "output" | "ack"
 	Grid    json.RawMessage `json:"grid,omitempty"`
 	Columns int             `json:"columns,omitempty"`
 	Rows    int             `json:"rows,omitempty"`
-	Seq     int             `json:"seq,omitempty"`
+	Seq     int64           `json:"seq,omitempty"`
+	// Ok is only meaningful for "ack" frames; not omitempty because a failed
+	// RPC's ack (Ok: false) must be distinguishable on the wire from an "ok"
+	// field that was never set.
+	Ok bool `json:"ok"`
 }
 
-// TerminalUp is a client->server terminal message.
+// TerminalUp is a client->server terminal message. Seq is a client-assigned
+// monotonic id echoed back in the matching "ack" TerminalDown.
 type TerminalUp struct {
 	Type    string `json:"type"` // "input" | "paste" | "resize"
 	Text    string `json:"text,omitempty"`
 	Columns int    `json:"columns,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
+	Seq     int64  `json:"seq,omitempty"`
 }
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
@@ -63,15 +71,28 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
+	// gorilla/websocket allows only one concurrent writer per connection. The
+	// poll loop below and terminalReadLoop's ack writes both write to c, so
+	// every write goes through this mutex-guarded helper instead of calling
+	// writeTerminalFrame directly.
+	var writeMu sync.Mutex
+	write := func(fr TerminalDown) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		return s.writeTerminalFrame(c, deviceID, fr)
+	}
+
 	// Initial full replay.
 	fr, err := s.fetchReplay(ctx, id)
 	if err != nil {
-		log.Printf("terminal %s: initial replay failed after %s: %v", id, time.Since(start), err)
+		if ctx.Err() == nil {
+			log.Printf("terminal %s: initial replay failed after %s: %v", id, time.Since(start), err)
+		}
 		return
 	}
 	fr.Type = "replay"
-	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := s.writeTerminalFrame(c, deviceID, fr); err != nil {
+	if err := write(fr); err != nil {
 		log.Printf("terminal %s: initial write failed after %s: %v", id, time.Since(start), err)
 		return
 	}
@@ -80,7 +101,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	lastGrid := fr.Grid
 
 	// Read loop (client input) runs in its own goroutine; it only reads.
-	go s.terminalReadLoop(ctx, cancel, c, id, deviceID)
+	go s.terminalReadLoop(ctx, cancel, c, id, deviceID, write)
 
 	// Output poll loop is the sole writer after the initial replay.
 	t := time.NewTicker(s.terminalPoll)
@@ -93,7 +114,15 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		case <-t.C:
 			next, err := s.fetchReplay(ctx, id)
 			if err != nil {
-				log.Printf("terminal %s: poll replay failed after %s: %v", id, time.Since(start), err)
+				// A cancelled ctx means the connection is already closing
+				// (terminalReadLoop's disconnect handler called cancel,
+				// which SIGKILLs any in-flight `cmux rpc` subprocess via
+				// exec.CommandContext) -- that's an expected side effect
+				// of the disconnect already logged by the read loop, not
+				// a genuine RPC failure worth alarming about.
+				if ctx.Err() == nil {
+					log.Printf("terminal %s: poll replay failed after %s: %v", id, time.Since(start), err)
+				}
 				return
 			}
 			if bytes.Equal(next.Grid, lastGrid) {
@@ -101,8 +130,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 			lastGrid = next.Grid
 			next.Type = "output"
-			_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := s.writeTerminalFrame(c, deviceID, next); err != nil {
+			if err := write(next); err != nil {
 				log.Printf("terminal %s: output write failed after %s: %v", id, time.Since(start), err)
 				return
 			}
@@ -127,7 +155,7 @@ func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr Termi
 	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string) {
+func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(TerminalDown) error) {
 	defer cancel()
 	for {
 		var up TerminalUp
@@ -152,16 +180,26 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 				return
 			}
 		}
+		var rpcErr error
 		switch up.Type {
 		case "input":
-			_, _ = s.cmux.Rpc(ctx, "mobile.terminal.input",
+			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.input",
 				map[string]any{"surface_id": id, "text": up.Text})
 		case "paste":
-			_, _ = s.cmux.Rpc(ctx, "mobile.terminal.paste",
+			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.paste",
 				map[string]any{"surface_id": id, "text": up.Text})
 		case "resize":
-			_, _ = s.cmux.Rpc(ctx, "mobile.terminal.viewport",
+			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.viewport",
 				map[string]any{"surface_id": id, "columns": up.Columns, "rows": up.Rows})
+		default:
+			continue
+		}
+		if up.Seq == 0 {
+			continue // no seq set (shouldn't happen from the app) -- nothing to ack.
+		}
+		if err := write(TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil}); err != nil {
+			log.Printf("terminal %s: ack write failed: %v", id, err)
+			return
 		}
 	}
 }
@@ -187,6 +225,6 @@ func (s *Server) fetchReplay(ctx context.Context, id string) (TerminalDown, erro
 		Grid:    top.RenderGrid,
 		Columns: top.Columns,
 		Rows:    top.Rows,
-		Seq:     top.Seq,
+		Seq:     int64(top.Seq),
 	}, nil
 }
