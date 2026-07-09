@@ -11,7 +11,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 )
@@ -33,7 +32,7 @@ func wsDialEncrypted(t *testing.T, srvURL, relayTok, deviceID string) *websocket
 
 func TestEventsBroadcastEncryptedWhenSessionsSet(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, deviceID, secret := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -78,7 +77,7 @@ func TestEventsBroadcastEncryptedWhenSessionsSet(t *testing.T) {
 // Without this, enabling encryption silently breaks FCM push forever.
 func TestEventsServesPlaintextForRelayPushWhenSessionsSet(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, _, _ := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -118,7 +117,7 @@ func TestEventsServesPlaintextForRelayPushWhenSessionsSet(t *testing.T) {
 // to fan out push notifications.
 func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, _, _ := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -170,7 +169,7 @@ func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 
 func TestEventsRejectsUnrecognizedDeviceIDWhenEncrypted(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, _, _ := pairedSessions(t)
 	s.SetSessions(sessions)
 

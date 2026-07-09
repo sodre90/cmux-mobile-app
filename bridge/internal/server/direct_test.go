@@ -11,7 +11,6 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 )
@@ -60,7 +59,7 @@ func TestDirectHandlerRejectsMissingBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, authStore)
+	s := New(&cmux.Client{Bin: bin}, authStore)
 	s.SetSessions(e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json")))
 
 	srv := httptest.NewServer(s.DirectHandler())
@@ -90,7 +89,7 @@ func TestDirectHandlerOverwritesForgedDeviceIDHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, authStore)
+	s := New(&cmux.Client{Bin: bin}, authStore)
 	s.SetSessions(sessions)
 
 	tok, _ := directPairedDevice(t, authStore, sessions)
@@ -120,7 +119,7 @@ func TestDirectHandlerRejectsUnpairedDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, authStore)
+	s := New(&cmux.Client{Bin: bin}, authStore)
 	s.SetSessions(e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json")))
 
 	tenantID, err := authStore.CreateTenant()

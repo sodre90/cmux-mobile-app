@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 )
@@ -255,7 +254,7 @@ func TestEncryptionMiddlewareEncryptsAndMarksNon2xxHandlerBody(t *testing.T) {
 func TestTrustedHandlerEncryptsSessionsWhenSessionsSet(t *testing.T) {
 	script := "#!/bin/sh\ncat <<'JSON'\n" + fakeWorkspaceList + "\nJSON\n"
 	bin := testutil.WriteFakeCmux(t, script)
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, deviceID, secret := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -305,7 +304,7 @@ func TestTrustedHandlerStillPlaintextWhenSessionsUnset(t *testing.T) {
 	// opt-in: a TrustedHandler that never calls SetSessions must behave
 	// exactly as before this feature existed.
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	const relayTok = "relay-secret"
 	srv := httptest.NewServer(s.TrustedHandler(relayTok))
 	defer srv.Close()

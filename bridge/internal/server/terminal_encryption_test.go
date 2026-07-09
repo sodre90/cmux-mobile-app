@@ -12,7 +12,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 )
@@ -36,7 +35,7 @@ func TestTerminalReplayEncryptedWhenSessionsSet(t *testing.T) {
 	logPath := t.TempDir() + "/cmux.log"
 	t.Setenv("CMUX_FAKE_LOG", logPath)
 	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, deviceID, secret := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -75,7 +74,7 @@ func TestTerminalInputDispatchedWhenEncrypted(t *testing.T) {
 	logPath := t.TempDir() + "/cmux.log"
 	t.Setenv("CMUX_FAKE_LOG", logPath)
 	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, deviceID, secret := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -122,7 +121,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 	logPath := t.TempDir() + "/cmux.log"
 	t.Setenv("CMUX_FAKE_LOG", logPath)
 	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, deviceID, secret := pairedSessions(t)
 	s.SetSessions(sessions)
 
@@ -171,7 +170,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 
 func TestTerminalRejectsMissingDeviceIDWhenEncrypted(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, fakeTerminalScript)
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	s := New(&cmux.Client{Bin: bin}, nil)
 	sessions, _, _ := pairedSessions(t)
 	s.SetSessions(sessions)
 

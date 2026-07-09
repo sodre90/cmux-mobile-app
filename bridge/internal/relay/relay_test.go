@@ -19,7 +19,6 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
@@ -70,7 +69,7 @@ func waitFor(t *testing.T, cond func() bool) {
 func TestRelayEndToEndSessions(t *testing.T) {
 	const ws = `{"workspaces":[{"id":"E43BBF04","current_directory":"/x","preview":"u@h:~/x","terminals":[{"id":"E43BBF04-T1","current_directory":"/x","title":"~/x","is_focused":true,"is_ready":true}]}]}`
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\ncat <<'JSON'\n"+ws+"\nJSON\n")
-	agentSrv := server.New(config.Config{}, &cmux.Client{Bin: bin}, nil)
+	agentSrv := server.New(&cmux.Client{Bin: bin}, nil)
 	const relayTok = "relay-secret"
 	trusted := agentSrv.TrustedHandler(relayTok)
 

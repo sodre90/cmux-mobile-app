@@ -9,14 +9,12 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
 // Server holds the dependencies shared by all handlers.
 type Server struct {
-	cfg          config.Config
 	cmux         *cmux.Client
 	store        *auth.Store
 	hub          *hub
@@ -59,9 +57,8 @@ func (s *Server) SetPusher(p Pusher, tenantID string) {
 }
 
 // New constructs a Server.
-func New(cfg config.Config, c *cmux.Client, s *auth.Store) *Server {
+func New(c *cmux.Client, s *auth.Store) *Server {
 	return &Server{
-		cfg:          cfg,
 		cmux:         c,
 		store:        s,
 		hub:          newHub(),

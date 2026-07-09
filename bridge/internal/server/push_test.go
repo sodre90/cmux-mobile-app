@@ -13,7 +13,6 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 )
 
@@ -82,7 +81,7 @@ func newPushTestServer(t *testing.T) (*Server, *auth.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(config.Config{}, &cmux.Client{}, store)
+	s := New(&cmux.Client{}, store)
 	return s, store
 }
 
@@ -97,7 +96,7 @@ func TestMaybeSendPushNoopWithoutPusher(t *testing.T) {
 }
 
 func TestMaybeSendPushNoopWithoutStore(t *testing.T) {
-	s := New(config.Config{}, &cmux.Client{}, nil) // store nil: direct mode off
+	s := New(&cmux.Client{}, nil) // store nil: direct mode off
 	fp := &fakePusher{}
 	s.SetPusher(fp, "some-tenant")
 	s.maybeSendPush(context.Background(), EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
@@ -242,7 +241,7 @@ func newDirectRegisterTestServer(t *testing.T) (*Server, *auth.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(config.Config{}, &cmux.Client{}, store)
+	s := New(&cmux.Client{}, store)
 	return s, store
 }
 
@@ -379,7 +378,7 @@ func TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope(t *testing.T) {
 		t.Fatal("issued token should verify")
 	}
 
-	s := New(config.Config{}, &cmux.Client{}, authStore)
+	s := New(&cmux.Client{}, authStore)
 	s.SetSessions(sessions)
 
 	plaintextReq := []byte(`{"fcm_token":"fcm-real"}`)

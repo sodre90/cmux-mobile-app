@@ -11,7 +11,6 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
@@ -23,8 +22,8 @@ func TestRelayIsolatesTenants(t *testing.T) {
 	binA := testutil.WriteFakeCmux(t, "#!/bin/sh\ncat <<'JSON'\n"+wsA+"\nJSON\n")
 	binB := testutil.WriteFakeCmux(t, "#!/bin/sh\ncat <<'JSON'\n"+wsB+"\nJSON\n")
 	const relayTok = "relay-secret"
-	agentA := server.New(config.Config{}, &cmux.Client{Bin: binA}, nil).TrustedHandler(relayTok)
-	agentB := server.New(config.Config{}, &cmux.Client{Bin: binB}, nil).TrustedHandler(relayTok)
+	agentA := server.New(&cmux.Client{Bin: binA}, nil).TrustedHandler(relayTok)
+	agentB := server.New(&cmux.Client{Bin: binB}, nil).TrustedHandler(relayTok)
 
 	store, err := auth.Open(filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {

@@ -8,7 +8,6 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
-	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
@@ -45,7 +44,7 @@ func newTestServer(t *testing.T, script string) (*Server, string) {
 	}
 	tenant, _ := store.CreateTenant()
 	tok, _ := store.Issue(tenant, "phone", "test-device-pubkey-b64")
-	s := New(config.Config{}, &cmux.Client{Bin: bin}, store)
+	s := New(&cmux.Client{Bin: bin}, store)
 	s.SetYoloStore(yolo.OpenStore(t.TempDir() + "/yolo.json"))
 	return s, tok
 }
