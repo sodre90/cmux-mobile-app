@@ -80,8 +80,13 @@ fun RenderGridView(
     // Stick to bottom across frames: if we were at (or near) the previous bottom,
     // re-pin after the new content lays out. prevMax remembers the bottom before
     // this frame so growth above (scrollback) or below keeps the live screen visible.
+    // Keyed on scroll.maxValue too, not just buffer -- maxValue also moves when the
+    // viewport itself shrinks with no new content at all (e.g. the IME's own
+    // suggestion strip growing taller as you type), and without that key this stayed
+    // pinned to the *old* bottom, leaving the real bottom (and the cursor) below the
+    // fold until you manually swiped down.
     var prevMax by remember { mutableStateOf(0) }
-    LaunchedEffect(buffer) {
+    LaunchedEffect(buffer, scroll.maxValue) {
         val wasAtBottom = scroll.value >= prevMax - 4
         if (wasAtBottom) scroll.scrollTo(scroll.maxValue)
         prevMax = scroll.maxValue

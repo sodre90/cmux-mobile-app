@@ -63,10 +63,15 @@ class TerminalSocket(
         }
     }
 
-    /** Sends a client->server message; no-op if the socket is not open. */
-    fun send(up: TerminalUp) {
+    /**
+     * Sends a client->server message. Returns false (a no-op) if the socket
+     * isn't open -- the caller can use that to know the message definitely
+     * never left the phone, as opposed to having been sent but not yet (or
+     * never) acknowledged.
+     */
+    fun send(up: TerminalUp): Boolean {
         val plaintext = BridgeJson.encodeToString(TerminalUp.serializer(), up).toByteArray(Charsets.UTF_8)
-        socket?.send(encryptFrame(session, cipher, plaintext).toByteString())
+        return socket?.send(encryptFrame(session, cipher, plaintext).toByteString()) ?: false
     }
 
     fun close() {

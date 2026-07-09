@@ -26,6 +26,35 @@ class SessionsLogicTest {
         assertNull(singlePaneTarget(ws()))
     }
 
+    private fun wsWithFocus(vararg panes: Pair<String, Boolean>) =
+        Workspace(id = "w", terminals = panes.map { (id, focused) -> TerminalPane(id = id, focused = focused) })
+
+    @Test
+    fun notificationTargetUsesSinglePaneDirectly() {
+        assertEquals("p1", notificationTarget(ws("p1")))
+    }
+
+    @Test
+    fun notificationTargetFallsBackToTheSoleFocusedPane() {
+        val target = notificationTarget(wsWithFocus("p1" to false, "p2" to true, "p3" to false))
+        assertEquals("p2", target)
+    }
+
+    @Test
+    fun notificationTargetIsNullWhenNoPaneIsFocused() {
+        assertNull(notificationTarget(wsWithFocus("p1" to false, "p2" to false)))
+    }
+
+    @Test
+    fun notificationTargetIsNullWhenMultiplePanesAreFocused() {
+        assertNull(notificationTarget(wsWithFocus("p1" to true, "p2" to true)))
+    }
+
+    @Test
+    fun notificationTargetIsNullForZeroPanes() {
+        assertNull(notificationTarget(ws()))
+    }
+
     @Test
     fun paneCountLabelIsSingularOrPlural() {
         assertEquals("0 panes", paneCountLabel(0))

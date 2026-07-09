@@ -10,6 +10,20 @@ import com.sodre90.cmuxremote.model.Workspace
 fun singlePaneTarget(ws: Workspace): String? =
     if (ws.terminals.size == 1) ws.terminals[0].id else null
 
+/**
+ * The surface id to open when a push notification for [ws] is tapped. Unlike
+ * [singlePaneTarget] (a manual workspace-card tap, where ambiguity should
+ * expand the card for the user to pick), a notification tap has no better
+ * fallback than the undifferentiated sessions list -- so with several panes
+ * this still resolves directly when exactly one is cmux's own focused pane.
+ * cmux never reports which pane raised a given event, so this is a
+ * best-effort heuristic, not a guarantee: "focused" reflects whichever pane
+ * was last selected in cmux's own UI, which can be stale if several agents
+ * run in parallel and attention has since moved to a different one.
+ */
+fun notificationTarget(ws: Workspace): String? =
+    singlePaneTarget(ws) ?: ws.terminals.singleOrNull { it.focused }?.id
+
 /** Trailing pane-count label, e.g. "0 panes" / "1 pane" / "3 panes". */
 fun paneCountLabel(count: Int): String =
     if (count == 1) "1 pane" else "$count panes"

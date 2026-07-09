@@ -22,7 +22,7 @@ import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
-import com.sodre90.cmuxremote.ui.sessions.singlePaneTarget
+import com.sodre90.cmuxremote.ui.sessions.notificationTarget
 import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
@@ -43,9 +43,10 @@ fun CmuxNavHost(
     // tells us the exact pane). Resolve it once after launch, but only when the
     // bridge is configured — otherwise onboarding must come first: if the
     // surface id is already known, jump straight there; otherwise fetch the
-    // live session list and apply the same singlePaneTarget rule the sessions
-    // list itself uses on tap — one pane opens directly, several fall back to
-    // the (attention-striped) sessions list. That fallback must navigate there
+    // live session list and resolve a target pane via notificationTarget — one
+    // pane opens directly, several resolve to cmux's own focused pane if there
+    // is exactly one, and anything still ambiguous falls back to the
+    // (attention-striped) sessions list. That fallback must navigate there
     // explicitly: the tap can arrive while a different, unrelated terminal is
     // already open, so doing nothing would strand the user on it.
     LaunchedEffect(pendingWorkspaceId, pendingSurfaceId, configured) {
@@ -58,7 +59,7 @@ fun CmuxNavHost(
             val target = runCatching { container.activeBridge()?.sessions() }
                 .getOrNull()
                 ?.firstOrNull { it.id == pendingWorkspaceId }
-                ?.let { singlePaneTarget(it) }
+                ?.let { notificationTarget(it) }
             if (target != null) {
                 navController.navigate(Routes.terminal(target))
             } else {

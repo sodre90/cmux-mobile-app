@@ -22,6 +22,10 @@ import kotlinx.serialization.json.putJsonArray
 private const val INITIAL_BACKOFF_MS = 1_000L
 private const val MAX_BACKOFF_MS = 5_000L
 
+// Mirrors FallbackBridgeClient's penalty window: once RELAY has proven
+// unreachable, don't retry it on every single reconnect for this long.
+private const val RELAY_PENALTY_MS = 30_000L
+
 /**
  * Backs the agent inbox. Pending blocking prompts come from `GET /feed/pending`
  * (cmux `feed.list`), which carries the real `request_id` and the choosable
@@ -48,20 +52,31 @@ class InboxViewModel(container: AppContainer) : ViewModel() {
         // the first disconnect.
         if (container.anyBridgeConfigured()) {
             viewModelScope.launch {
-                var preferred = ConnectionSlot.RELAY
+                // Set only when a connect attempt against RELAY never receives a
+                // single frame -- a genuine reachability failure, as opposed to a
+                // socket that connected fine and later dropped (e.g. the app was
+                // backgrounded). See TerminalViewModel's relayDownUntil for the
+                // full rationale.
+                var relayDownUntil = 0L
                 var backoff = INITIAL_BACKOFF_MS
                 while (isActive) {
-                    val events = container.eventsSocket(preferred) ?: container.eventsSocket(preferred.other())
+                    val primarySlot =
+                        if (System.currentTimeMillis() < relayDownUntil) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
+                    val events = container.eventsSocket(primarySlot) ?: container.eventsSocket(primarySlot.other())
                     if (events == null) { delay(backoff); continue }
+                    var gotFrame = false
                     try {
                         events.connect().collect { frame ->
+                            gotFrame = true
                             backoff = INITIAL_BACKOFF_MS
                             if (frame.type == "feed" && frame.needsAttention) refresh()
                         }
                     } catch (ex: CancellationException) {
                         throw ex
                     } catch (_: Exception) {
-                        preferred = preferred.other()
+                        if (!gotFrame && primarySlot == ConnectionSlot.RELAY) {
+                            relayDownUntil = System.currentTimeMillis() + RELAY_PENALTY_MS
+                        }
                     }
                     if (!isActive) break
                     delay(backoff)

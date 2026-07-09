@@ -86,7 +86,11 @@ data class EventFrame(
     val kind: String? = null,
 )
 
-/** A terminal frame pushed down to the client (replay snapshot or update). */
+/**
+ * A terminal frame pushed down to the client: a "replay"/"output" render-grid
+ * snapshot, or an "ack" echoing a [TerminalUp.seq] back with [ok] reflecting
+ * whether the bridge's cmux RPC for that message actually succeeded.
+ */
 @Serializable
 data class TerminalDown(
     val type: String = "",
@@ -94,15 +98,21 @@ data class TerminalDown(
     val columns: Int = 0,
     val rows: Int = 0,
     val seq: Long = 0L,
+    val ok: Boolean = false,
 )
 
-/** A terminal message sent up from the client: input, paste, or resize. */
+/**
+ * A terminal message sent up from the client: input, paste, or resize. [seq]
+ * is a client-assigned monotonic id (starting at 1; 0 means unset) echoed back
+ * in the matching "ack" [TerminalDown].
+ */
 @Serializable
 data class TerminalUp(
     val type: String,
     val text: String? = null,
     val columns: Int? = null,
     val rows: Int? = null,
+    val seq: Long = 0L,
 )
 
 /** A reply to a pending feed item (permission / question / exit-plan). */

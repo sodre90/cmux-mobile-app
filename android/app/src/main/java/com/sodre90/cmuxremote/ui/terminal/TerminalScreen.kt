@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.terminal
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,15 +18,19 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,18 +46,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.yoloModeLabel
+import kotlinx.coroutines.delay
 
 // Reference size for the surface-viewport resize math (decoupled from the display
 // zoom so pinching never re-resizes the surface).
@@ -76,8 +94,26 @@ fun TerminalScreen(
 ) {
     val state by vm.state.collectAsState()
     val yoloMode by vm.yoloMode.collectAsState()
+    val deliveryStatus by vm.deliveryStatus.collectAsState()
+    val lostInputNotice by vm.lostInputNotice.collectAsState()
+    // Not rendered anywhere -- kept only so diffToKeystrokes has an old value
+    // to diff each keystroke against. The invisible capture field below is the
+    // only place typed input touches the UI; the terminal's own echo is the
+    // single visible record of what's been typed, instead of mirroring it in
+    // a second, separately-scrolling box.
     var input by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // The "lost input" notice is a one-shot signal (see TerminalViewModel) --
+    // show it briefly, then tell the view model it's been seen.
+    LaunchedEffect(lostInputNotice) {
+        if (lostInputNotice) {
+            delay(4_000)
+            vm.dismissLostInputNotice()
+        }
+    }
 
     // Remote terminal sessions are watched, not typed into continuously - don't
     // let the screen sleep mid-session. Reset on leaving so the rest of the app
@@ -108,6 +144,7 @@ fun TerminalScreen(
                 },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
+                    TextButton(onClick = { vm.reconnect() }) { Text("Refresh") }
                     TextButton(onClick = { wrap = !wrap }) {
                         Text(if (wrap) "Wrap: on" else "Wrap: off")
                     }
@@ -125,28 +162,13 @@ fun TerminalScreen(
                 ),
             ) {
                 val appCursorKeys = state.grid?.applicationCursorKeys ?: false
-                ArrowPad(applicationCursorKeys = appCursorKeys, onKey = vm::sendText)
+                ArrowPad(
+                    applicationCursorKeys = appCursorKeys,
+                    onKey = vm::sendText,
+                    onPaste = { clipboard.getText()?.text?.let { vm.sendText(it) } },
+                )
                 KeyBar(applicationCursorKeys = appCursorKeys, onKey = vm::sendText)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        label = { Text("input") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedButton(onClick = {
-                        clipboard.getText()?.text?.let { vm.sendText(it) }
-                    }) { Text("Paste") }
-                    Button(onClick = {
-                        vm.sendText(input + "\r")
-                        input = ""
-                    }) { Text("Send") }
-                }
+                DeliveryStatusLabel(status = deliveryStatus, lostInputNotice = lostInputNotice)
             }
         },
     ) { inner ->
@@ -204,6 +226,14 @@ fun TerminalScreen(
                                         }
                                     } while (event.changes.any { it.pressed })
                                 }
+                            }
+                            // Tapping the terminal is how you start typing -- there's no
+                            // separate input box to tap into anymore.
+                            .pointerInput(Unit) {
+                                detectTapGestures {
+                                    focusRequester.requestFocus()
+                                    keyboardController?.show()
+                                }
                             },
                     ) {
                         // RenderGridView insets its content by 8.dp on every side; subtract
@@ -228,10 +258,79 @@ fun TerminalScreen(
                             wrap = wrap,
                             modifier = Modifier.fillMaxSize().padding(8.dp),
                         )
+
+                        // The real capture point for the keyboard: fully transparent and
+                        // 1dp so nothing renders, but still focusable, so the terminal's
+                        // own echo (via RenderGridView above) is the only place typed text
+                        // is visible -- not duplicated in a second on-screen field.
+                        BasicTextField(
+                            value = input,
+                            onValueChange = { new ->
+                                val diff = diffToKeystrokes(input, new)
+                                android.util.Log.d(
+                                    "TerminalInput",
+                                    "onValueChange old=${describeForLog(input)} new=${describeForLog(new)} diff=${describeForLog(diff)}",
+                                )
+                                if (diff.isNotEmpty()) vm.sendText(diff)
+                                input = new
+                            },
+                            textStyle = TextStyle(color = Color.Transparent),
+                            cursorBrush = SolidColor(Color.Transparent),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = {
+                                vm.sendText("\r")
+                                input = ""
+                            }),
+                            modifier = Modifier
+                                .size(1.dp)
+                                .alpha(0f)
+                                .focusRequester(focusRequester)
+                                // Backspace on an already-empty field is a no-op as far as
+                                // the field's own text is concerned, so onValueChange never
+                                // fires -- there's nothing for diffToKeystrokes to diff. Most
+                                // IMEs (Gboard included) still dispatch a raw KEYCODE_DEL in
+                                // that case for compatibility; catch it here and send the
+                                // erase byte directly.
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown &&
+                                        event.key == Key.Backspace &&
+                                        input.isEmpty()
+                                    ) {
+                                        vm.sendText(DEL)
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                },
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * A small, easy-to-miss-on-purpose line reporting delivery trouble: recent
+ * input that's stuck unconfirmed, or a reconnect that dropped some in-flight
+ * input whose fate is now unknowable. Renders nothing when everything's
+ * confirmed, so normal typing never shows a persistent status line.
+ */
+@Composable
+private fun DeliveryStatusLabel(status: DeliveryStatus, lostInputNotice: Boolean) {
+    val text = when {
+        lostInputNotice -> "Reconnected — check your last few keystrokes went through"
+        status == DeliveryStatus.DELAYED -> "Input not confirmed — check connection"
+        status == DeliveryStatus.SENDING -> "Sending…"
+        else -> null
+    }
+    if (text != null) {
+        Text(
+            text,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+        )
     }
 }
 
@@ -241,15 +340,19 @@ fun TerminalScreen(
  * against [applicationCursorKeys] like any cursor key.
  */
 @Composable
-private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
+private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit, onPaste: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        ArrowButton(ArrowLeft, applicationCursorKeys, onKey)
-        ArrowButton(ArrowUp, applicationCursorKeys, onKey)
-        ArrowButton(ArrowDown, applicationCursorKeys, onKey)
-        ArrowButton(ArrowRight, applicationCursorKeys, onKey)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ArrowButton(ArrowLeft, applicationCursorKeys, onKey)
+            ArrowButton(ArrowUp, applicationCursorKeys, onKey)
+            ArrowButton(ArrowDown, applicationCursorKeys, onKey)
+            ArrowButton(ArrowRight, applicationCursorKeys, onKey)
+        }
+        OutlinedButton(onClick = onPaste) { Text("Paste") }
     }
 }
 
