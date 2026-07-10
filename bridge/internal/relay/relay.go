@@ -43,18 +43,27 @@ const defaultMaxTenants = 1000
 // no client cert by design, so both layers matter.
 const tenantRegisterMinInterval = 10 * time.Second
 
+// devicePairMinInterval bounds how often a single source IP may hit
+// POST /devices/pair. Pairing codes are single-use with a 10-minute TTL
+// (wire.PairingCodeTTL) and drawn from a large alphabet, so brute force is
+// already unrealistic -- this is cheap defense-in-depth on an
+// internet-reachable endpoint, not the primary control. Same order of
+// magnitude as tenantRegisterMinInterval.
+const devicePairMinInterval = 5 * time.Second
+
 // Relay is the home-server rendezvous: it accepts Mac agents' tunnels and
 // reverse-proxies authenticated app requests over them.
 type Relay struct {
-	store           *auth.Store
-	reg             *Registry
-	ca              *ca.CA
-	relayToken      string
-	edgeToken       string
-	proxy           *httputil.ReverseProxy
-	onSession       func(context.Context, string, *yamux.Session)
-	registerLimiter *ipRateLimiter
-	maxTenants      int
+	store             *auth.Store
+	reg               *Registry
+	ca                *ca.CA
+	relayToken        string
+	edgeToken         string
+	proxy             *httputil.ReverseProxy
+	onSession         func(context.Context, string, *yamux.Session)
+	registerLimiter   *ipRateLimiter
+	devicePairLimiter *ipRateLimiter
+	maxTenants        int
 }
 
 // New builds a Relay. store may be nil only in tests that never hit auth
@@ -62,13 +71,14 @@ type Relay struct {
 func New(store *auth.Store, signer *ca.CA, relayToken string) *Relay {
 	reg := NewRegistry()
 	return &Relay{
-		store:           store,
-		reg:             reg,
-		ca:              signer,
-		relayToken:      relayToken,
-		proxy:           newProxy(reg, relayToken),
-		registerLimiter: newIPRateLimiter(tenantRegisterMinInterval),
-		maxTenants:      defaultMaxTenants,
+		store:             store,
+		reg:               reg,
+		ca:                signer,
+		relayToken:        relayToken,
+		proxy:             newProxy(reg, relayToken),
+		registerLimiter:   newIPRateLimiter(tenantRegisterMinInterval),
+		devicePairLimiter: newIPRateLimiter(devicePairMinInterval),
+		maxTenants:        defaultMaxTenants,
 	}
 }
 
@@ -210,8 +220,11 @@ func (r *Relay) Handler() http.Handler {
 	// /devices/pair-info are public by design -- a brand-new phone has no
 	// cert to present yet (see deploy/nginx-cmux-relay.conf's optional
 	// ssl_verify_client), mirroring handleRegisterTenant's bootstrap story
-	// for agents.
-	pairing.Mount(mux, r.store, r.agentOnly)
+	// for agents. /devices/pair additionally gets the same per-IP throttle
+	// as /tenants/register, since it's equally reachable with no credential.
+	pairing.Mount(mux, r.store, r.agentOnly, func(req *http.Request) bool {
+		return r.devicePairLimiter.allow(r.clientIP(req))
+	})
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))

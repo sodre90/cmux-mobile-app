@@ -30,10 +30,26 @@ func ConstantTenant(tenantID string) TenantResolver {
 	return func(*http.Request) (string, bool) { return tenantID, true }
 }
 
+// RateLimiter reports whether req may proceed. It gates POST /devices/pair
+// only -- pairing codes are already single-use with a short TTL, so this is
+// defense-in-depth against brute-force guessing on an endpoint that, for the
+// relay, is reachable with no credential by design. Kept as a plain function
+// type (mirroring TenantResolver) rather than importing a concrete limiter
+// type, so this package stays free of relay-only concerns: the relay passes
+// a closure around its own ipRateLimiter, direct mode passes AllowAll.
+type RateLimiter func(*http.Request) bool
+
+// AllowAll is a RateLimiter that never throttles. Direct mode's default:
+// Tailscale's own network ACLs are that listener's access-control boundary,
+// not this package's concern.
+func AllowAll(*http.Request) bool { return true }
+
 // Mount registers the four pairing routes onto mux, backed by store, with
-// tenant deciding which tenant the agent-facing routes act for.
-func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver) {
-	h := &handlers{store: store, tenant: tenant}
+// tenant deciding which tenant the agent-facing routes act for and
+// devicePairLimit gating POST /devices/pair specifically (pass AllowAll to
+// disable).
+func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, devicePairLimit RateLimiter) {
+	h := &handlers{store: store, tenant: tenant, devicePairLimit: devicePairLimit}
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(h.newPairingCode))
 	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(h.pairingCodeStatus))
 	mux.Handle("GET /devices/pair-info/{code}", http.HandlerFunc(h.pairingCodeInfo))
@@ -41,8 +57,9 @@ func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver) {
 }
 
 type handlers struct {
-	store  *auth.Store
-	tenant TenantResolver
+	store           *auth.Store
+	tenant          TenantResolver
+	devicePairLimit RateLimiter
 }
 
 // newPairingCode lets an agent request a fresh single-use pairing code to
@@ -131,6 +148,10 @@ func (h *handlers) pairingCodeInfo(w http.ResponseWriter, req *http.Request) {
 // hold or forward e2e key material) but keeps tenant_id, informationally,
 // so the app knows which workspace it just joined.
 func (h *handlers) devicePair(w http.ResponseWriter, req *http.Request) {
+	if !h.devicePairLimit(req) {
+		httpjson.Error(w, http.StatusTooManyRequests, "rate_limited")
+		return
+	}
 	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
 	var rq wire.DevicePairReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {

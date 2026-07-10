@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,6 +76,61 @@ func TestDevicePairRedeemsCode(t *testing.T) {
 	}
 	if dev.Name != "my-phone" || dev.DevicePubkey != "device-pubkey-b64" || dev.TenantID != tenantID {
 		t.Fatalf("unexpected device: %+v", dev)
+	}
+}
+
+// TestDevicePairRateLimitedPerIP proves the accept criterion for
+// docs/improvement-guide.md §6.4: a legitimate pairing attempt succeeds, and
+// a second attempt from the same source within devicePairMinInterval is
+// throttled with the same 429/rate_limited shape as /tenants/register's
+// existing per-IP limiter -- even though the second code is itself
+// perfectly valid, proving the limiter (not code validation) is what blocks
+// it.
+func TestDevicePairRateLimitedPerIP(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	pair := func(code, devicePubkey string) (status int, body string) {
+		reqBody := `{"code":"` + code + `","device_pubkey":"` + devicePubkey + `","name":"my-phone"}`
+		resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(reqBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(b)
+	}
+
+	code1, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := pair(code1, "device-pubkey-b64"); status != http.StatusOK {
+		t.Fatalf("first pairing attempt: want 200, got %d", status)
+	}
+
+	code2, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body := pair(code2, "device-pubkey-b64-2")
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("second pairing attempt from the same IP within the interval (a fresh, otherwise-valid code): want 429, got %d", status)
+	}
+	if !strings.Contains(body, "rate_limited") {
+		t.Fatalf("body = %q, want it to contain rate_limited", body)
 	}
 }
 

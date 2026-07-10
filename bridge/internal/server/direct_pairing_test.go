@@ -191,6 +191,37 @@ func TestDirectDevicePairRedeemsCode(t *testing.T) {
 	}
 }
 
+// TestDirectDevicePairNotRateLimited asserts direct mode's /devices/pair
+// stays unthrottled (pairing.AllowAll) unlike the relay's copy -- this
+// listener only binds this Mac's own Tailscale IPv4 address, so it's never
+// internet-reachable the way the relay's is; Tailscale's own network ACLs
+// are its access-control boundary.
+func TestDirectDevicePairNotRateLimited(t *testing.T) {
+	srv, store, tenantID := newDirectPairingServer(t)
+	defer srv.Close()
+
+	pair := func() int {
+		code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+		resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := pair(); got != http.StatusOK {
+		t.Fatalf("first pairing attempt: want 200, got %d", got)
+	}
+	if got := pair(); got != http.StatusOK {
+		t.Fatalf("second immediate pairing attempt: want 200 (direct mode is unthrottled), got %d", got)
+	}
+}
+
 func TestDirectDevicePairRejectsUnknownCode(t *testing.T) {
 	srv, _, _ := newDirectPairingServer(t)
 	defer srv.Close()
