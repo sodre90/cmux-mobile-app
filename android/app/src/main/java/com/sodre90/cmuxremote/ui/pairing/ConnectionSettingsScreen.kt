@@ -9,6 +9,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -33,8 +34,10 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 fun ConnectionSettingsScreen(
     relayConfigured: Boolean,
     directConfigured: Boolean,
+    testPushState: TestPushUiState,
     onPair: (ConnectionSlot) -> Unit,
     onForget: (ConnectionSlot) -> Unit,
+    onSendTestPush: () -> Unit,
     onDone: () -> Unit,
 ) {
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
@@ -58,6 +61,9 @@ fun ConnectionSettingsScreen(
                 onPair = { onPair(ConnectionSlot.DIRECT) },
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },
             )
+            if (relayConfigured || directConfigured) {
+                TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
+            }
             if (relayConfigured || directConfigured) {
                 Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
             }
@@ -95,6 +101,38 @@ private fun ConnectionRow(
                 OutlinedButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) {
                     Text("Forget")
                 }
+            }
+        }
+    }
+}
+
+/** A real, end-to-end push to this device only (see BridgeClient.sendTestPush)
+ *  -- a 30-second way to check push setup actually works instead of waiting
+ *  to notice it's broken. Failure surfaces the real error text: this is a
+ *  debugging tool, so a silent failure defeats the point. */
+@Composable
+private fun TestPushRow(state: TestPushUiState, onSendTestPush: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Push notifications")
+            Text("Send a real test push to this device to confirm push setup works.")
+            Button(
+                onClick = onSendTestPush,
+                enabled = state !is TestPushUiState.Sending,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (state is TestPushUiState.Sending) "Sending…" else "Send test notification")
+            }
+            when (state) {
+                is TestPushUiState.Success -> Text(
+                    "Sent — check your notification shade",
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                is TestPushUiState.Error -> Text(
+                    "Failed: ${state.message}",
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TestPushUiState.Idle, TestPushUiState.Sending -> Unit
             }
         }
     }

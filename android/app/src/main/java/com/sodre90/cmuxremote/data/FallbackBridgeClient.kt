@@ -89,6 +89,11 @@ class FallbackBridgeClient(
     suspend fun setYoloMode(id: String, mode: String) = call { it.setYoloMode(id, mode) }
     suspend fun registerDevice(fcmToken: String) = call { it.registerDevice(fcmToken) }
 
+    /** Same fallback philosophy as [registerDevice]: whichever slot is
+     *  actually reachable handles the test push, since either one may be
+     *  the connection real pushes later arrive through. */
+    suspend fun sendTestPush() = call { it.sendTestPush() }
+
     private companion object {
         const val NOT_PAIRED_RETRY_ATTEMPTS = 3
         const val NOT_PAIRED_RETRY_DELAY_MS = 500L

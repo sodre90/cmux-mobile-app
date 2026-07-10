@@ -4,6 +4,7 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -21,6 +22,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsScreen
+import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsViewModel
 import com.sodre90.cmuxremote.ui.pairing.PairingScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
@@ -101,14 +103,20 @@ fun CmuxNavHost(
             val directConfigured = remember(
                 forgetGeneration
             ) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
+            val testPushVm: ConnectionSettingsViewModel = viewModel(
+                factory = viewModelFactory { initializer { ConnectionSettingsViewModel(container) } },
+            )
+            val testPushState by testPushVm.testPushState.collectAsState()
             ConnectionSettingsScreen(
                 relayConfigured = relayConfigured,
                 directConfigured = directConfigured,
+                testPushState = testPushState,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
                 onForget = { slot ->
                     container.forgetSlot(slot)
                     forgetGeneration++
                 },
+                onSendTestPush = testPushVm::sendTestPush,
                 onDone = {
                     navController.navigate(Routes.SESSIONS) {
                         popUpTo(Routes.SETTINGS) { inclusive = true }

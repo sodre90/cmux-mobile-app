@@ -77,6 +77,16 @@ class BridgeClient(
         post("$root/sessions/$id/yolo-mode", payload)
     }
 
+    /** Triggers one real, end-to-end test push to this device (see
+     *  bridge/internal/server/test_push.go's handleTestPushDevice and
+     *  bridge/internal/relay/testpush.go's handleTestPush). Takes no
+     *  request body and returns a bare `{"ok":true}` on success, like
+     *  [registerDevice] -- callers only care about success/failure, so
+     *  there's nothing to decode from the response body. */
+    suspend fun sendTestPush() {
+        post("$root/devices/test-push", "{}")
+    }
+
     private suspend fun post(url: String, json: String) = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(url)
