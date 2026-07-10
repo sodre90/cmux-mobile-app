@@ -8,6 +8,7 @@ import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.sessions.pendingItemTarget
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -104,5 +105,22 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
                 _actionError.value = ex.message ?: "Reply failed"
             }
         }
+    }
+
+    /**
+     * Resolves [item]'s originating terminal surface id for the inbox row's
+     * "open terminal" affordance, or null (with [actionError] set) if none is
+     * found. [PendingFeedItem] carries no workspace/surface id of its own (see
+     * [pendingItemTarget]'s doc comment), so this always does a fresh live
+     * lookup rather than reusing [state].
+     */
+    suspend fun terminalTarget(item: PendingFeedItem): String? {
+        val c = client ?: run {
+            _actionError.value = "Bridge not configured"
+            return null
+        }
+        val target = runCatching { c.sessions() }.getOrNull()?.let { pendingItemTarget(item, it) }
+        if (target == null) _actionError.value = "Couldn't find that item's terminal"
+        return target
     }
 }

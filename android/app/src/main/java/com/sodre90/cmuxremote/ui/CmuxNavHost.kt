@@ -172,7 +172,13 @@ fun CmuxNavHost(
             val vm: InboxViewModel = viewModel(
                 factory = viewModelFactory { initializer { InboxViewModel(container) } },
             )
-            InboxScreen(vm = vm, onBack = { navController.popBackStack() })
+            InboxScreen(
+                vm = vm,
+                onBack = { navController.popBackStack() },
+                onOpenTerminal = { surfaceId ->
+                    navController.navigate(Routes.terminal(surfaceId)) { launchSingleTop = true }
+                },
+            )
         }
     }
 }

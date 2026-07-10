@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import org.junit.Assert.assertEquals
@@ -53,6 +54,35 @@ class SessionsLogicTest {
     @Test
     fun notificationTargetIsNullForZeroPanes() {
         assertNull(notificationTarget(ws()))
+    }
+
+    @Test
+    fun pendingItemTargetMatchesWorkspaceByCwdThenUsesNotificationTargetHeuristic() {
+        val item = PendingFeedItem(id = "i1", cwd = "/home/dev/proj")
+        val workspaces = listOf(
+            Workspace(id = "other", cwd = "/home/dev/other", terminals = listOf(TerminalPane(id = "op1"))),
+            ws("p1").copy(cwd = "/home/dev/proj"),
+        )
+        assertEquals("p1", pendingItemTarget(item, workspaces))
+    }
+
+    @Test
+    fun pendingItemTargetFallsBackToFirstPaneWhenNoPaneIsFocused() {
+        val item = PendingFeedItem(id = "i1", cwd = "/home/dev/proj")
+        val matching = wsWithFocus("p1" to false, "p2" to false).copy(cwd = "/home/dev/proj")
+        assertEquals("p1", pendingItemTarget(item, listOf(matching)))
+    }
+
+    @Test
+    fun pendingItemTargetIsNullWhenNoWorkspaceCwdMatches() {
+        val item = PendingFeedItem(id = "i1", cwd = "/home/dev/proj")
+        assertNull(pendingItemTarget(item, listOf(ws("p1").copy(cwd = "/home/dev/other"))))
+    }
+
+    @Test
+    fun pendingItemTargetIsNullWhenItemHasNoCwd() {
+        val item = PendingFeedItem(id = "i1", cwd = "")
+        assertNull(pendingItemTarget(item, listOf(ws("p1").copy(cwd = ""))))
     }
 
     @Test

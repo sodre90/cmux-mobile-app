@@ -25,6 +25,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -32,15 +33,18 @@ import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InboxScreen(
     vm: InboxViewModel,
     onBack: () -> Unit,
+    onOpenTerminal: (String) -> Unit,
 ) {
     val state by vm.state.collectAsState()
     val actionError by vm.actionError.collectAsState()
+    val scope = rememberCoroutineScope()
 
     Scaffold(
         topBar = {
@@ -72,7 +76,13 @@ fun InboxScreen(
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(s.data, key = { it.id }) { item ->
-                                InboxRow(item) { labels -> vm.reply(item, labels) }
+                                InboxRow(
+                                    item = item,
+                                    onSend = { labels -> vm.reply(item, labels) },
+                                    onOpenTerminal = {
+                                        scope.launch { vm.terminalTarget(item)?.let(onOpenTerminal) }
+                                    },
+                                )
                             }
                         }
                     }
@@ -86,6 +96,7 @@ fun InboxScreen(
 private fun InboxRow(
     item: PendingFeedItem,
     onSend: (List<String>) -> Unit,
+    onOpenTerminal: () -> Unit,
 ) {
     // cmux usually populates questions[]; fall back to the flat question_options.
     val questions = remember(item.id) {
@@ -113,7 +124,17 @@ private fun InboxRow(
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text(text = agent, style = MaterialTheme.typography.titleMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = agent, style = MaterialTheme.typography.titleMedium)
+                // Additional affordance alongside the reply flow below -- jumps
+                // straight to the terminal this prompt came from instead of
+                // making the user back out to Sessions and hunt for it.
+                TextButton(onClick = onOpenTerminal) { Text("Open terminal") }
+            }
             questions.forEach { q ->
                 val heading = q.prompt.ifBlank { q.header }
                 if (heading.isNotBlank()) {

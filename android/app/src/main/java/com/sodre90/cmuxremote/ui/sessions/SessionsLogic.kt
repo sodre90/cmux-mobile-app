@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
 
 /**
@@ -23,6 +24,26 @@ fun singlePaneTarget(ws: Workspace): String? =
  */
 fun notificationTarget(ws: Workspace): String? =
     singlePaneTarget(ws) ?: ws.terminals.singleOrNull { it.focused }?.id
+
+/**
+ * The surface id to open for [item]'s originating terminal, resolved against
+ * the live [workspaces] list, or null if none matches. [PendingFeedItem]
+ * carries no workspace/surface id of its own -- its `workstream_id` is the
+ * agent's own session id, a different id space than cmux's workspace id (see
+ * bridge yolo.go's `resolvePendingPermission` doc comment) -- so [cwd] is the
+ * only field it shares with a [Workspace]; matching on it mirrors the same
+ * correlation the bridge already relies on server-side for YOLO auto-resolve.
+ * Once a workspace is found, pane selection goes one step further than
+ * [notificationTarget]: falling back to the first pane rather than giving up,
+ * since -- unlike a notification tap, which can fall back to the whole
+ * sessions list -- an inbox row's whole point is jumping straight to a
+ * terminal.
+ */
+fun pendingItemTarget(item: PendingFeedItem, workspaces: List<Workspace>): String? {
+    if (item.cwd.isBlank()) return null
+    val ws = workspaces.firstOrNull { it.cwd.isNotBlank() && it.cwd == item.cwd } ?: return null
+    return notificationTarget(ws) ?: ws.terminals.firstOrNull()?.id
+}
 
 /** Trailing pane-count label, e.g. "0 panes" / "1 pane" / "3 panes". */
 fun paneCountLabel(count: Int): String =

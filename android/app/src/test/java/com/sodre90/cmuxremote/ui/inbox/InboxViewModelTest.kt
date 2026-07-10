@@ -7,8 +7,10 @@ import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RelayHealth
 import com.sodre90.cmuxremote.data.TerminalSocket
+import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -161,5 +163,58 @@ class InboxViewModelTest {
 
         waitUntil { vm.actionError.value != null }
         assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })
+    }
+
+    @Test
+    fun terminalTargetResolvesTheSurfaceOfTheWorkspaceMatchingTheItemsCwd() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"id":"i1","kind":"question","cwd":"/home/dev/proj"}]}""",
+            ),
+        )
+        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+        val item = (vm.state.value as UiState.Ready).data.first()
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"workspaces":[{"id":"w1","cwd":"/home/dev/proj","terminals":[{"id":"p1"}]}]}""",
+            ),
+        )
+        val target = runBlocking { vm.terminalTarget(item) }
+
+        assertEquals("p1", target)
+    }
+
+    @Test
+    fun terminalTargetSetsActionErrorWhenNoWorkspaceCwdMatches() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"id":"i1","kind":"question","cwd":"/home/dev/proj"}]}""",
+            ),
+        )
+        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+        val item = (vm.state.value as UiState.Ready).data.first()
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"workspaces":[{"id":"w1","cwd":"/home/dev/other","terminals":[{"id":"p1"}]}]}""",
+            ),
+        )
+        val target = runBlocking { vm.terminalTarget(item) }
+
+        assertEquals(null, target)
+        assertEquals("Couldn't find that item's terminal", vm.actionError.value)
+    }
+
+    @Test
+    fun terminalTargetWithNoBridgeConfiguredReturnsNullAndSetsActionError() {
+        val vm = InboxViewModel(FakeInboxBridgeGateway(null))
+
+        val target = runBlocking { vm.terminalTarget(PendingFeedItem(id = "i1", cwd = "/home/dev/proj")) }
+
+        assertEquals(null, target)
+        assertEquals("Bridge not configured", vm.actionError.value)
     }
 }
