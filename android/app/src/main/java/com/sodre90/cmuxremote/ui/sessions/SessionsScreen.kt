@@ -68,6 +68,7 @@ import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloAccent
 import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.theme.AppColors
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import sh.calvin.reorderable.ReorderableItem
@@ -571,13 +572,10 @@ private fun WorkspaceCardAttentionPreview() {
     }
 }
 
-// Accent colors for the attention stripe. Null = no stripe (normal workspace).
-private val PermissionAccent = Color(0xFFE53935) // red — agent blocked on a prompt
-private val WaitingAccent = Color(0xFFFFB300) // amber — agent idle, waiting for input
-
+// Null = no stripe (normal workspace); the color values live in AppColors (theme-level).
 private fun attentionAccent(attention: String): Color? = when (attention) {
-    "permission" -> PermissionAccent
-    "input" -> WaitingAccent
+    "permission" -> AppColors.PermissionAccent
+    "input" -> AppColors.WaitingAccent
     else -> null
 }
 
