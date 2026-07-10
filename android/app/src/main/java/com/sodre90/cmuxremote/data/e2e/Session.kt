@@ -81,31 +81,44 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
      * result), since a Session has no way to see the base URL its legacy
      * pairing belonged to and infer the right slot on its own. No-op if
      * there's no legacy record. Self-terminating: always clears the legacy
-     * keys the first time it finds data.
+     * keys the first time it finds data. The migrate-or-not decision and the
+     * legacy-record shape are factored into [absorbLegacyIfTargetInternal]
+     * so a JVM test can exercise them against in-memory maps; this method
+     * keeps only what needs the real prefs/in-memory-cache/writeScope.
      */
     fun absorbLegacyIfTarget(isMigrationTarget: Boolean) {
-        if (!isMigrationTarget) return
-        if (!prefs.contains(KEY_SHARED_SECRET)) return
-        val send = prefs.getLong(KEY_SEND_COUNTER, 0L)
-        val recvHighest = prefs.getLong(KEY_RECV_HIGHEST, -1L)
-        val recvWindowBits = prefs.getLong(KEY_RECV_WINDOW_BITS, 0L)
-        prefs.edit()
-            .putString(key(KEY_PEER_PUBLIC_KEY), prefs.getString(KEY_PEER_PUBLIC_KEY, null))
-            .putString(key(KEY_SHARED_SECRET), prefs.getString(KEY_SHARED_SECRET, null))
-            .remove(KEY_PEER_PUBLIC_KEY)
-            .remove(KEY_SHARED_SECRET)
-            .remove(KEY_SEND_COUNTER)
-            .remove(KEY_RECV_HIGHEST)
-            .remove(KEY_RECV_WINDOW_BITS)
-            .apply()
+        val record = absorbLegacyIfTargetInternal(
+            isMigrationTarget = isMigrationTarget,
+            hasLegacyRecord = { prefs.contains(KEY_SHARED_SECRET) },
+            readLegacyRecord = {
+                LegacySessionRecord(
+                    peerPublicKeyB64 = prefs.getString(KEY_PEER_PUBLIC_KEY, null),
+                    sharedSecretB64 = requireNotNull(prefs.getString(KEY_SHARED_SECRET, null)),
+                    sendCounter = prefs.getLong(KEY_SEND_COUNTER, 0L),
+                    recvHighest = prefs.getLong(KEY_RECV_HIGHEST, -1L),
+                    recvWindowBits = prefs.getLong(KEY_RECV_WINDOW_BITS, 0L),
+                )
+            },
+            applyMigration = { record ->
+                prefs.edit()
+                    .putString(key(KEY_PEER_PUBLIC_KEY), record.peerPublicKeyB64)
+                    .putString(key(KEY_SHARED_SECRET), record.sharedSecretB64)
+                    .remove(KEY_PEER_PUBLIC_KEY)
+                    .remove(KEY_SHARED_SECRET)
+                    .remove(KEY_SEND_COUNTER)
+                    .remove(KEY_RECV_HIGHEST)
+                    .remove(KEY_RECV_WINDOW_BITS)
+                    .apply()
+            },
+        ) ?: return
         synchronized(this) {
-            sendCounter = send
-            replayWindow = ReplayWindow(recvHighest, recvWindowBits)
+            sendCounter = record.sendCounter
+            replayWindow = ReplayWindow(record.recvHighest, record.recvWindowBits)
         }
         persist {
-            putLong(key(KEY_SEND_COUNTER), send)
-            putLong(key(KEY_RECV_HIGHEST), recvHighest)
-            putLong(key(KEY_RECV_WINDOW_BITS), recvWindowBits)
+            putLong(key(KEY_SEND_COUNTER), record.sendCounter)
+            putLong(key(KEY_RECV_HIGHEST), record.recvHighest)
+            putLong(key(KEY_RECV_WINDOW_BITS), record.recvWindowBits)
         }
     }
 
@@ -188,4 +201,34 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
         const val KEY_RECV_HIGHEST = "recv_highest"
         const val KEY_RECV_WINDOW_BITS = "recv_window_bits"
     }
+}
+
+/** The legacy pre-dual-pairing e2e session fields [absorbLegacyIfTargetInternal]
+ *  moves into whichever slot's [Session] is the migration target. */
+internal data class LegacySessionRecord(
+    val peerPublicKeyB64: String?,
+    val sharedSecretB64: String,
+    val sendCounter: Long,
+    val recvHighest: Long,
+    val recvWindowBits: Long,
+)
+
+/** Free function form of [Session.absorbLegacyIfTarget], parameterized over
+ *  plain read/write callbacks so a JVM test can exercise it against
+ *  in-memory maps instead of real EncryptedSharedPreferences -- mirrors
+ *  [com.sodre90.cmuxremote.data.pairing.pairInternal]'s injectable-I/O
+ *  pattern. Returns the migrated record (for the caller to also update its
+ *  own in-memory counter cache), or null if [isMigrationTarget] is false or
+ *  there was nothing to migrate. */
+internal fun absorbLegacyIfTargetInternal(
+    isMigrationTarget: Boolean,
+    hasLegacyRecord: () -> Boolean,
+    readLegacyRecord: () -> LegacySessionRecord,
+    applyMigration: (LegacySessionRecord) -> Unit,
+): LegacySessionRecord? {
+    if (!isMigrationTarget) return null
+    if (!hasLegacyRecord()) return null
+    val record = readLegacyRecord()
+    applyMigration(record)
+    return record
 }

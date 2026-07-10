@@ -1,0 +1,297 @@
+package com.sodre90.cmuxremote.ui.sessions
+
+import com.goterl.lazysodium.LazySodiumJava
+import com.goterl.lazysodium.SodiumJava
+import com.sodre90.cmuxremote.data.BridgeClient
+import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.EventsSocket
+import com.sodre90.cmuxremote.data.FallbackBridgeClient
+import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.TerminalSocket
+import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
+import com.sodre90.cmuxremote.data.e2e.Cipher
+import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
+import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.ReplayWindow
+import com.sodre90.cmuxremote.data.e2e.nonce
+import com.sodre90.cmuxremote.ui.UiState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import okhttp3.OkHttpClient
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okio.ByteString.Companion.toByteString
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+
+/** A [PairedSession] fixed to [secret] with no persistence, so frames pushed
+ *  from the fake server can be decrypted by a real [EventsSocket]. Only the
+ *  receive side is used by these tests. */
+private class RecordingSession(private val secret: ByteArray) : PairedSession {
+    private var window = ReplayWindow()
+    override fun sharedSecret(): ByteArray = secret
+    override fun nextSendCounter(): Long = error("not used by these tests")
+    override fun canAcceptRecvCounter(n: Long): Boolean = window.canAccept(n)
+    override fun commitRecvCounter(n: Long) {
+        window = window.commit(n)
+    }
+}
+
+private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {
+    private var order: List<String> = emptyList()
+    override fun loadOrder(): List<String> = order
+    override fun saveOrder(order: List<String>) {
+        this.order = order
+    }
+}
+
+/** A [BridgeGateway] whose bridge/events wiring can be swapped in after
+ *  construction -- lets a test skip the automatic init-time refresh()/
+ *  subscribeToEvents() by starting unconfigured, or start pre-wired to a
+ *  [MockWebServer] when a test needs the real events flow. Only RELAY is
+ *  ever configured; DIRECT always reports unconfigured, matching a
+ *  single-slot pairing. */
+private class FakeSessionsBridgeGateway : BridgeGateway {
+    var bridge: FallbackBridgeClient? = null
+    var events: EventsSocket? = null
+    override fun activeBridge(): FallbackBridgeClient? = bridge
+    override fun anyBridgeConfigured(): Boolean = bridge != null
+    override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = if (slot == ConnectionSlot.RELAY) events else null
+    override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
+    override fun relayHealth(): RelayHealth = RelayHealth()
+}
+
+/**
+ * Covers the two pieces of SessionsViewModel's refresh machinery that had no
+ * JVM tests before: the `fetchInFlight` overlap guard shared by
+ * silentRefresh/autoRefresh (and refresh()'s deliberate exemption from it),
+ * and the debounced coalescing of cmux event-driven refetches. All
+ * synchronization is on observable side effects (request counts / VM state)
+ * via polling rather than assumptions about coroutine dispatch order, since
+ * the real network calls run on the real Dispatchers.IO thread pool
+ * regardless of which dispatcher backs Dispatchers.Main in the test.
+ */
+class SessionsViewModelTest {
+
+    private lateinit var server: MockWebServer
+    private val orderGateway = FakeWorkspaceOrderGateway()
+    private val secret = ByteArray(32) { it.toByte() }
+    private val cipher = Cipher(LazySodiumJava(SodiumJava()))
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(Dispatchers.Default)
+        server = MockWebServer().apply { start() }
+    }
+
+    @After
+    fun tearDown() {
+        server.shutdown()
+        Dispatchers.resetMain()
+    }
+
+    private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (block()) return
+            Thread.sleep(20)
+        }
+        assertTrue("condition not met within ${timeoutMs}ms", block())
+    }
+
+    private fun bridgeFor(server: MockWebServer) = FallbackBridgeClient(
+        primary = { BridgeClient(OkHttpClient(), server.url("/").toString()) },
+        fallback = { null },
+    )
+
+    private fun frameFor(json: String, counter: Long): okio.ByteString {
+        val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, counter), json.toByteArray(Charsets.UTF_8))
+        val frame = ByteArray(8 + ct.size)
+        ByteBuffer.wrap(frame, 0, 8).putLong(counter)
+        ct.copyInto(frame, 8)
+        return frame.toByteString()
+    }
+
+    @Test
+    fun silentRefreshSkipsAConcurrentCallWhileAFetchIsAlreadyInFlight() {
+        val requestCount = AtomicInteger(0)
+        val gate = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requestCount.incrementAndGet()
+                gate.await()
+                return MockResponse().setBody("""{"workspaces":[]}""")
+            }
+        }
+
+        // Starts unconfigured so init's own refresh() (not gated by
+        // fetchInFlight at all) never touches the server -- this test is
+        // only about silentRefresh deduping against itself.
+        val gw = FakeSessionsBridgeGateway()
+        val vm = SessionsViewModel(gw, orderGateway)
+        gw.bridge = bridgeFor(server)
+
+        vm.silentRefresh()
+        waitUntil { requestCount.get() == 1 } // in flight, blocked on the gate
+
+        vm.silentRefresh() // must be a no-op: a fetch is already in flight
+        Thread.sleep(200) // give a wrongly-issued second request a chance to arrive
+        assertEquals(1, requestCount.get())
+
+        gate.countDown()
+        waitUntil { !vm.isRefreshing.value }
+
+        vm.silentRefresh() // fetchInFlight is clear again -> must proceed
+        waitUntil { requestCount.get() == 2 }
+    }
+
+    @Test
+    fun refreshProceedsEvenWhileASilentRefreshIsInFlight() {
+        val requestCount = AtomicInteger(0)
+        val gate = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requestCount.incrementAndGet()
+                gate.await()
+                return MockResponse().setBody("""{"workspaces":[]}""")
+            }
+        }
+
+        val gw = FakeSessionsBridgeGateway()
+        val vm = SessionsViewModel(gw, orderGateway)
+        gw.bridge = bridgeFor(server)
+
+        vm.silentRefresh()
+        waitUntil { requestCount.get() == 1 } // in flight, blocked on the gate
+
+        // refresh() is NOT gated by fetchInFlight -- it's the "hard reload"
+        // path (init, post-rename) and must issue its own request even
+        // though silentRefresh's fetch hasn't resolved yet.
+        vm.refresh()
+        waitUntil { requestCount.get() == 2 }
+
+        gate.countDown()
+        waitUntil { vm.state.value is UiState.Ready }
+    }
+
+    @Test
+    fun rapidEventFramesCoalesceIntoASingleAutoRefresh() {
+        val requestCount = AtomicInteger(0)
+        val socketRef = AtomicReference<WebSocket>()
+        val socketOpened = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/events" -> MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            socketRef.set(webSocket)
+                            socketOpened.countDown()
+                        }
+                    },
+                )
+                "/sessions" -> {
+                    requestCount.incrementAndGet()
+                    MockResponse().setBody("""{"workspaces":[]}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+
+        val gw = FakeSessionsBridgeGateway().apply {
+            bridge = bridgeFor(server)
+            events = EventsSocket(OkHttpClient(), server.url("/").toString(), RecordingSession(secret), cipher)
+        }
+        SessionsViewModel(gw, orderGateway) // init's refresh() + subscribeToEvents()
+
+        assertTrue(socketOpened.await(5, TimeUnit.SECONDS))
+        waitUntil { requestCount.get() >= 1 } // init's own refresh()
+        val baseline = requestCount.get()
+
+        val socket = socketRef.get()
+        repeat(3) { i -> socket.send(frameFor("""{"type":"feed","name":"feed.updated"}""", i.toLong())) }
+
+        Thread.sleep(300) // well inside the 800ms debounce window -- must not have fired yet
+        assertEquals(baseline, requestCount.get())
+
+        waitUntil(timeoutMs = 3_000) { requestCount.get() == baseline + 1 }
+        Thread.sleep(500) // give a wrongly-uncoalesced extra trigger a chance to show up
+        assertEquals(baseline + 1, requestCount.get())
+    }
+
+    @Test
+    fun autoRefreshSkipsWhileASilentRefreshIsInFlight() {
+        val requestCount = AtomicInteger(0)
+        val gate = CountDownLatch(1)
+        val gateEnabled = AtomicBoolean(false)
+        val socketRef = AtomicReference<WebSocket>()
+        val socketOpened = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/events" -> MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            socketRef.set(webSocket)
+                            socketOpened.countDown()
+                        }
+                    },
+                )
+                "/sessions" -> {
+                    requestCount.incrementAndGet()
+                    if (gateEnabled.get()) gate.await()
+                    MockResponse().setBody("""{"workspaces":[]}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+
+        val gw = FakeSessionsBridgeGateway().apply {
+            bridge = bridgeFor(server)
+            events = EventsSocket(OkHttpClient(), server.url("/").toString(), RecordingSession(secret), cipher)
+        }
+        val vm = SessionsViewModel(gw, orderGateway)
+
+        assertTrue(socketOpened.await(5, TimeUnit.SECONDS))
+        waitUntil { requestCount.get() >= 1 } // init's own refresh(), ungated
+        val socket = socketRef.get()
+
+        // Put a silentRefresh fetch in flight and hold it there.
+        gateEnabled.set(true)
+        vm.silentRefresh()
+        waitUntil { requestCount.get() >= 2 } // silentRefresh's request has arrived and is now blocked
+        val blockedAt = requestCount.get()
+
+        // A cmux event fires while that fetch is still in flight: after the
+        // debounce window elapses, autoRefresh's fetchInFlight guard must
+        // skip it entirely -- no new request at all, not even a blocked one.
+        socket.send(frameFor("""{"type":"feed","name":"feed.updated"}""", 0L))
+        Thread.sleep(1_200) // past the 800ms debounce window
+        assertEquals(blockedAt, requestCount.get())
+
+        // Release the blocked silentRefresh fetch; fetchInFlight clears.
+        gateEnabled.set(false)
+        gate.countDown()
+        waitUntil { !vm.isRefreshing.value }
+        assertEquals(blockedAt, requestCount.get()) // still just the one blocked request
+
+        // A later event, once nothing is in flight, must trigger autoRefresh normally.
+        socket.send(frameFor("""{"type":"feed","name":"feed.updated"}""", 1L))
+        waitUntil(timeoutMs = 3_000) { requestCount.get() == blockedAt + 1 }
+        assertTrue(vm.state.value is UiState.Ready)
+    }
+}

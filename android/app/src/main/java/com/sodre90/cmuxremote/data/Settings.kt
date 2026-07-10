@@ -74,20 +74,22 @@ class Settings(context: Context) {
      * Returns the slot migrated into, or null if there was nothing to
      * migrate (already migrated on a prior run, or a genuinely fresh
      * install). Self-terminating: always clears the legacy keys the first
-     * time it finds data, so this never fires twice.
+     * time it finds data, so this never fires twice. The actual decision
+     * logic lives in [migrateLegacyIfNeededInternal] -- this is a thin
+     * wrapper supplying the real prefs-backed read/write callbacks.
      */
-    fun migrateLegacyIfNeeded(): ConnectionSlot? {
-        val legacyUrl = prefs.getString(KEY_BASE_URL, null)?.takeIf { it.isNotBlank() } ?: return null
-        val legacyToken = prefs.getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
-        val slot = inferLegacySlot(legacyUrl)
-        prefs.edit()
-            .putString(key(slot, KEY_BASE_URL), legacyUrl)
-            .putString(key(slot, KEY_TOKEN), legacyToken)
-            .remove(KEY_BASE_URL)
-            .remove(KEY_TOKEN)
-            .apply()
-        return slot
-    }
+    fun migrateLegacyIfNeeded(): ConnectionSlot? = migrateLegacyIfNeededInternal(
+        readLegacyBaseUrl = { prefs.getString(KEY_BASE_URL, null) },
+        readLegacyToken = { prefs.getString(KEY_TOKEN, null) },
+        applyMigration = { slot, url, token ->
+            prefs.edit()
+                .putString(key(slot, KEY_BASE_URL), url)
+                .putString(key(slot, KEY_TOKEN), token)
+                .remove(KEY_BASE_URL)
+                .remove(KEY_TOKEN)
+                .apply()
+        },
+    )
 
     private fun key(slot: ConnectionSlot, base: String) = "${slot.name.lowercase()}_$base"
 
@@ -97,4 +99,23 @@ class Settings(context: Context) {
         const val KEY_TOKEN = "device_token"
         const val KEY_P12 = "client_p12_b64"
     }
+}
+
+/** Free function form of [Settings.migrateLegacyIfNeeded], parameterized over
+ *  plain read/write callbacks so a JVM test can exercise it against
+ *  in-memory maps instead of real EncryptedSharedPreferences -- mirrors
+ *  [com.sodre90.cmuxremote.data.pairing.pairInternal]'s injectable-I/O
+ *  pattern. [applyMigration] is expected to persist [ConnectionSlot]'s new
+ *  base_url/device_token and clear the legacy keys in one atomic commit,
+ *  same as the real prefs transaction it replaces. */
+internal fun migrateLegacyIfNeededInternal(
+    readLegacyBaseUrl: () -> String?,
+    readLegacyToken: () -> String?,
+    applyMigration: (slot: ConnectionSlot, baseUrl: String, token: String) -> Unit,
+): ConnectionSlot? {
+    val legacyUrl = readLegacyBaseUrl()?.takeIf { it.isNotBlank() } ?: return null
+    val legacyToken = readLegacyToken()?.takeIf { it.isNotBlank() } ?: return null
+    val slot = inferLegacySlot(legacyUrl)
+    applyMigration(slot, legacyUrl, legacyToken)
+    return slot
 }
