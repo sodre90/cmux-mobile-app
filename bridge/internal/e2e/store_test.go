@@ -1,10 +1,14 @@
 package e2e
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -354,5 +358,249 @@ func TestCrossProcessVisibilityNoInMemoryCache(t *testing.T) {
 	}
 	if _, ok := reader.SharedSecret("dev1"); !ok {
 		t.Fatal("expected a second independent *Store instance on the same file to see the write immediately, with no reload call")
+	}
+}
+
+// TestConcurrentPairAndCounterCommitLosesNeither is the direct regression
+// test for the cross-process clobber bug this migration fixes: two
+// independent *Store handles on the same file (standing in for the running
+// `agent` process and the short-lived `pair-device` process) racing
+// AddDevice against NextSendCounter must not lose either side's write.
+//
+// Run unmodified against the pre-migration JSON-backed Store, this test is
+// expected to fail or flake: two JSON-backed *Store handles racing
+// AddDevice/NextSendCounter on the same file can clobber each other's
+// writes, since whichever save()'s os.Rename lands last wins in full,
+// discarding whatever the other process's stale load() didn't already have.
+func TestConcurrentPairAndCounterCommitLosesNeither(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.json")
+	s1 := mustOpen(t, path)
+	s2 := mustOpen(t, path)
+
+	secret1 := []byte("dev1-shared-secret-0123456789ab")
+	if err := s1.AddDevice("dev1", testPubKey(t), secret1); err != nil {
+		t.Fatalf("AddDevice dev1: %v", err)
+	}
+
+	secret2 := []byte("dev2-shared-secret-0123456789ab")
+	pub2 := testPubKey(t)
+
+	const m = 200
+	counters := make([]uint64, m)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := s2.AddDevice("dev2", pub2, secret2); err != nil {
+			t.Errorf("AddDevice dev2 (from second Store handle): %v", err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < m; i++ {
+			n, err := s1.NextSendCounter("dev1")
+			if err != nil {
+				t.Errorf("NextSendCounter[%d]: %v", i, err)
+				return
+			}
+			counters[i] = n
+		}
+	}()
+	wg.Wait()
+
+	gotSecret, ok := s1.SharedSecret("dev2")
+	if !ok {
+		t.Fatal("expected dev2's AddDevice (from the second, concurrent Store handle) to not be lost")
+	}
+	if string(gotSecret) != string(secret2) {
+		t.Fatalf("dev2 shared secret = %q, want %q", gotSecret, secret2)
+	}
+
+	seen := make(map[uint64]bool, m)
+	for _, c := range counters {
+		if seen[c] {
+			t.Fatalf("duplicate counter value %d among %v -- a NextSendCounter increment was lost", c, counters)
+		}
+		seen[c] = true
+	}
+	for i := uint64(0); i < m; i++ {
+		if !seen[i] {
+			t.Fatalf("missing counter value %d among %v -- a NextSendCounter increment was lost", i, counters)
+		}
+	}
+}
+
+// TestNextSendCounterCostDoesNotScaleWithDeviceCount is a proxy for "no
+// full-file rewrite per frame," not a literal instruction-count assertion:
+// it checks that a single NextSendCounter call's cost does not grow with
+// the total number of paired devices, whereas the pre-migration JSON
+// design's cost was O(total devices) per call (a whole-map marshal every
+// time) regardless of which device was touched. A ratio bound (not an
+// absolute latency bound) keeps this robust to test-machine speed while
+// still clearly failing under the old design at a 50x device-count
+// increase (500 vs 10 devices).
+func TestNextSendCounterCostDoesNotScaleWithDeviceCount(t *testing.T) {
+	dir := t.TempDir()
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
+
+	pairDevices := func(from, to int) {
+		t.Helper()
+		for i := from; i < to; i++ {
+			if err := s.AddDevice(fmt.Sprintf("dev%d", i), testPubKey(t), []byte("secret")); err != nil {
+				t.Fatalf("AddDevice dev%d: %v", i, err)
+			}
+		}
+	}
+
+	const calls = 2000
+	timeNextSendCounter := func() time.Duration {
+		t.Helper()
+		// Warm up -- discard first-call filesystem/page-cache effects.
+		for i := 0; i < 20; i++ {
+			if _, err := s.NextSendCounter("dev0"); err != nil {
+				t.Fatalf("warm-up NextSendCounter: %v", err)
+			}
+		}
+		start := time.Now()
+		for i := 0; i < calls; i++ {
+			if _, err := s.NextSendCounter("dev0"); err != nil {
+				t.Fatalf("NextSendCounter: %v", err)
+			}
+		}
+		return time.Since(start) / calls
+	}
+
+	pairDevices(0, 10)
+	avgSmall := timeNextSendCounter()
+
+	pairDevices(10, 500)
+	avgLarge := timeNextSendCounter()
+
+	if avgLarge > avgSmall*3 {
+		t.Fatalf("NextSendCounter average cost grew with device count: avgSmall(10 devices)=%v avgLarge(500 devices)=%v (ratio %.2fx, want <= 3x)",
+			avgSmall, avgLarge, float64(avgLarge)/float64(avgSmall))
+	}
+}
+
+// captureLog redirects the standard logger to a buffer for the duration of
+// the test, restoring it on cleanup.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// TestOpenRecoversFromCorruptFileLoudly is the acceptance test for "loud
+// corruption is not silent at every call": a genuinely corrupt (not valid
+// SQLite) store file must not block agent startup, must be moved aside
+// intact for forensics, must be logged loudly, and the resulting fresh
+// store must be immediately usable.
+func TestOpenRecoversFromCorruptFileLoudly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.json")
+	garbage := []byte("not a database")
+	if err := os.WriteFile(path, garbage, 0o600); err != nil {
+		t.Fatalf("write garbage file: %v", err)
+	}
+
+	logBuf := captureLog(t)
+
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore on corrupt file: %v", err)
+	}
+	if s == nil {
+		t.Fatal("expected a non-nil *Store even after recovering from a corrupt file")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read recovered path: %v", err)
+	}
+	if bytes.Equal(got, garbage) {
+		t.Fatal("expected the corrupt garbage to no longer be at the original path")
+	}
+
+	matches, err := filepath.Glob(path + ".corrupt.*")
+	if err != nil {
+		t.Fatalf("glob corrupt sibling: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one <path>.corrupt.* sibling, got %v", matches)
+	}
+	corruptContent, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read corrupt sibling: %v", err)
+	}
+	if !bytes.Equal(corruptContent, garbage) {
+		t.Fatalf("corrupt sibling content = %q, want original garbage %q", corruptContent, garbage)
+	}
+
+	logged := logBuf.String()
+	if logged == "" {
+		t.Fatal("expected non-empty log output for a corrupt store recovery")
+	}
+	if !strings.Contains(logged, path) {
+		t.Fatalf("expected log output to name the original path %q, got: %s", path, logged)
+	}
+	if !strings.Contains(strings.ToLower(logged), "corrupt") {
+		t.Fatalf("expected log output to mention corruption, got: %s", logged)
+	}
+
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("expected the recovered store to be immediately usable, AddDevice failed: %v", err)
+	}
+}
+
+// TestRecvWindowBitsBit63RoundTrips guards the int64<->uint64
+// bit-reinterpretation used to persist recv_window_bits: replayWindowSize
+// is 64, so commitRecvCounter can legitimately set bit 63 of the returned
+// bitmask (age == replayWindowSize-1). SQLite's INTEGER column is a signed
+// 64-bit value, and Go's database/sql refuses to Scan a negative driver
+// int64 directly into a *uint64 destination -- so this value must round
+// trip via an explicit int64<->uint64 reinterpretation, not a direct
+// uint64 Scan (see ValidateAndCommitRecvCounter's doc comment). This test
+// proves that reinterpretation is wired correctly end to end, reading back
+// through a second, independent *Store handle so the assertion is against
+// what SQLite actually persisted, not a Go-side value that never left
+// process memory.
+func TestRecvWindowBitsBit63RoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions.json")
+	s1 := mustOpen(t, path)
+	if err := s1.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	// Commit highest=1000, then accept n=1000-63: age = highest-n = 63, so
+	// commitRecvCounter ORs in (1 << 63) -- the exact bit this test exists
+	// to cover.
+	if !acceptCounter(t, s1, "dev1", 1000) {
+		t.Fatal("expected counter 1000 accepted on fresh device")
+	}
+	if !acceptCounter(t, s1, "dev1", 1000-63) {
+		t.Fatal("expected counter 1000-63 accepted (sets replay-window bit 63)")
+	}
+
+	s2 := mustOpen(t, path)
+	var raw int64
+	if err := s2.db.QueryRow(`SELECT recv_window_bits FROM devices WHERE device_id = ?`, "dev1").Scan(&raw); err != nil {
+		t.Fatalf("query recv_window_bits: %v", err)
+	}
+	gotBits := uint64(raw)
+	if gotBits&(1<<63) == 0 {
+		t.Fatalf("recv_window_bits = %#x, want bit 63 set", gotBits)
+	}
+
+	// The replay-window semantics for that bit must still behave correctly
+	// after the round trip: counter 1000-63 (age 63, the bit just verified
+	// above) must now be rejected as a replay.
+	if acceptCounter(t, s2, "dev1", 1000-63) {
+		t.Fatal("expected counter 1000-63 to now be rejected as a replay (bit 63 of the persisted window)")
 	}
 }
