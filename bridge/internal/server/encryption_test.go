@@ -36,7 +36,10 @@ func pairedSessions(t *testing.T) (sessions *e2e.Store, deviceID string, secret 
 	if err != nil {
 		t.Fatalf("DeriveSharedSecret: %v", err)
 	}
-	sessions = e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err = e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
 	deviceID = "dev1-token-hash"
 	if err := sessions.AddDevice(deviceID, devicePriv.PublicKey(), secret); err != nil {
 		t.Fatalf("AddDevice: %v", err)

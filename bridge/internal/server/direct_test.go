@@ -60,7 +60,11 @@ func TestDirectHandlerRejectsMissingBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(&cmux.Client{Bin: bin}, authStore)
-	s.SetSessions(e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json")))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetSessions(sessions)
 
 	srv := httptest.NewServer(s.DirectHandler())
 	defer srv.Close()
@@ -88,7 +92,10 @@ func TestDirectHandlerOverwritesForgedDeviceIDHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := New(&cmux.Client{Bin: bin}, authStore)
 	s.SetSessions(sessions)
 
@@ -120,7 +127,11 @@ func TestDirectHandlerRejectsUnpairedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := New(&cmux.Client{Bin: bin}, authStore)
-	s.SetSessions(e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json")))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetSessions(sessions)
 
 	tenantID, err := authStore.CreateTenant()
 	if err != nil {

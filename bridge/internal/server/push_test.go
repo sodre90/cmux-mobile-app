@@ -156,7 +156,10 @@ func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 // on Android expects to decrypt.
 func TestMaybeSendPushSendsEncryptedPayload(t *testing.T) {
 	s, store := newPushTestServer(t)
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.SetSessions(sessions)
 	tok, secret := directPairedDevice(t, store, sessions)
 	dev, err := store.Verify(tok)
@@ -371,7 +374,10 @@ func TestHandleRegisterDeviceAcceptsRealEncryptedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tok, secret := directPairedDevice(t, authStore, sessions)
 	dev, err := authStore.Verify(tok)

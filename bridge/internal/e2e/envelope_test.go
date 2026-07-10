@@ -10,7 +10,7 @@ import (
 func setupPairedStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	pub := testPubKey(t)
 	secret := make([]byte, 32)
 	for i := range secret {

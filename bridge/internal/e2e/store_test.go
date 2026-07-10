@@ -20,9 +20,21 @@ func testPubKey(t *testing.T) *ecdh.PublicKey {
 	return priv.PublicKey()
 }
 
+// mustOpen opens a Store at path, failing the test on error -- every test
+// below stands in for a fresh agent/pair-device process opening its own
+// handle on the store file.
+func mustOpen(t *testing.T, path string) *Store {
+	t.Helper()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore(%q): %v", path, err)
+	}
+	return s
+}
+
 func TestAddDeviceAndSharedSecret(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	pub := testPubKey(t)
 	secret := []byte("0123456789abcdef0123456789abcdef")
 
@@ -40,7 +52,7 @@ func TestAddDeviceAndSharedSecret(t *testing.T) {
 
 func TestSharedSecretUnknownDevice(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if _, ok := s.SharedSecret("nope"); ok {
 		t.Fatal("expected SharedSecret to fail for unknown device")
 	}
@@ -48,7 +60,7 @@ func TestSharedSecretUnknownDevice(t *testing.T) {
 
 func TestDeviceIDsListsAllPairedDevices(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if got := s.DeviceIDs(); len(got) != 0 {
 		t.Fatalf("expected no devices yet, got %v", got)
 	}
@@ -72,7 +84,7 @@ func TestDeviceIDsListsAllPairedDevices(t *testing.T) {
 
 func TestActiveDeviceIDsIncludesFreshlyPairedDevice(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -82,29 +94,27 @@ func TestActiveDeviceIDsIncludesFreshlyPairedDevice(t *testing.T) {
 	}
 }
 
-// setLastActive backdates dev's LastActiveUnix directly in the store file,
+// setLastActive backdates dev's LastActiveUnix directly in the store,
 // simulating a device that hasn't sent anything in a while -- there's no
 // public API for this since real staleness only ever accrues with time.
 func setLastActive(t *testing.T, s *Store, deviceID string, when time.Time) {
 	t.Helper()
-	f, err := s.load()
+	res, err := s.db.Exec(`UPDATE devices SET last_active_unix = ? WHERE device_id = ?`, when.Unix(), deviceID)
 	if err != nil {
-		t.Fatalf("load: %v", err)
+		t.Fatalf("backdate last_active_unix: %v", err)
 	}
-	d, ok := f.Devices[deviceID]
-	if !ok {
+	n, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("backdate last_active_unix: rows affected: %v", err)
+	}
+	if n == 0 {
 		t.Fatalf("device %q not found", deviceID)
-	}
-	d.LastActiveUnix = when.Unix()
-	f.Devices[deviceID] = d
-	if err := s.save(f); err != nil {
-		t.Fatalf("save: %v", err)
 	}
 }
 
 func TestActiveDeviceIDsExcludesStaleDevice(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret1")); err != nil {
 		t.Fatalf("AddDevice dev1: %v", err)
 	}
@@ -126,7 +136,7 @@ func TestActiveDeviceIDsExcludesStaleDevice(t *testing.T) {
 
 func TestValidateAndCommitRecvCounterRefreshesLastActive(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -147,7 +157,7 @@ func TestValidateAndCommitRecvCounterRefreshesLastActive(t *testing.T) {
 func TestNextSendCounterIncrementsAndPersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
-	s1 := OpenStore(path)
+	s1 := mustOpen(t, path)
 	if err := s1.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -161,7 +171,7 @@ func TestNextSendCounterIncrementsAndPersistsAcrossInstances(t *testing.T) {
 		}
 	}
 
-	s2 := OpenStore(path)
+	s2 := mustOpen(t, path)
 	got, err := s2.NextSendCounter("dev1")
 	if err != nil {
 		t.Fatalf("NextSendCounter on fresh Store instance: %v", err)
@@ -184,7 +194,7 @@ func acceptCounter(t *testing.T, s *Store, deviceID string, n uint64) bool {
 
 func TestValidateAndCommitRecvCounter(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -202,7 +212,7 @@ func TestValidateAndCommitRecvCounter(t *testing.T) {
 
 func TestOutOfOrderWithinWindowIsAccepted(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -227,7 +237,7 @@ func TestOutOfOrderWithinWindowIsAccepted(t *testing.T) {
 
 func TestTooOldOutsideWindowIsRejected(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -246,7 +256,7 @@ func TestTooOldOutsideWindowIsRejected(t *testing.T) {
 
 func TestValidateAndCommitRecvCounterRejectsWithoutDecrypting(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -269,7 +279,7 @@ func TestValidateAndCommitRecvCounterRejectsWithoutDecrypting(t *testing.T) {
 
 func TestValidateAndCommitRecvCounterDoesNotAdvanceOnDecryptFailure(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -299,7 +309,7 @@ func TestValidateAndCommitRecvCounterDoesNotAdvanceOnDecryptFailure(t *testing.T
 // (neither had committed yet), both call decrypt, and both "succeed."
 func TestConcurrentDecryptOfSameCounterAcceptsExactlyOnce(t *testing.T) {
 	dir := t.TempDir()
-	s := OpenStore(filepath.Join(dir, "sessions.json"))
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
 	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
 		t.Fatalf("AddDevice: %v", err)
 	}
@@ -335,8 +345,8 @@ func TestConcurrentDecryptOfSameCounterAcceptsExactlyOnce(t *testing.T) {
 func TestCrossProcessVisibilityNoInMemoryCache(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
-	writer := OpenStore(path)
-	reader := OpenStore(path)
+	writer := mustOpen(t, path)
+	reader := mustOpen(t, path)
 	pub := testPubKey(t)
 
 	if err := writer.AddDevice("dev1", pub, []byte("secret")); err != nil {
