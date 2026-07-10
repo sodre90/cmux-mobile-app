@@ -87,13 +87,6 @@ class SessionsLogicTest {
     }
 
     @Test
-    fun paneCountLabelIsSingularOrPlural() {
-        assertEquals("0 panes", paneCountLabel(0))
-        assertEquals("1 pane", paneCountLabel(1))
-        assertEquals("3 panes", paneCountLabel(3))
-    }
-
-    @Test
     fun needsAttentionIsTrueForPermissionOrInput() {
         assertEquals(true, needsAttention(Workspace(id = "w", attention = "permission")))
         assertEquals(true, needsAttention(Workspace(id = "w", attention = "input")))
@@ -161,16 +154,19 @@ class SessionsLogicTest {
         assertEquals(0, unreadWorkspaceCount(workspaces))
     }
 
+    private fun statusDescription(ws: Workspace) =
+        workspaceStatusDescription(ws, "needs permission", "waiting for input", "unread")
+
     @Test
     fun workspaceStatusDescriptionIsNullForACalmReadWorkspace() {
-        assertNull(workspaceStatusDescription(Workspace(id = "w")))
+        assertNull(statusDescription(Workspace(id = "w")))
     }
 
     @Test
     fun workspaceStatusDescriptionNamesThePermissionState() {
         assertEquals(
             "needs permission",
-            workspaceStatusDescription(Workspace(id = "w", attention = "permission")),
+            statusDescription(Workspace(id = "w", attention = "permission")),
         )
     }
 
@@ -178,54 +174,54 @@ class SessionsLogicTest {
     fun workspaceStatusDescriptionNamesTheInputWaitState() {
         assertEquals(
             "waiting for input",
-            workspaceStatusDescription(Workspace(id = "w", attention = "input")),
+            statusDescription(Workspace(id = "w", attention = "input")),
         )
     }
 
     @Test
     fun workspaceStatusDescriptionNamesUnread() {
-        assertEquals("unread", workspaceStatusDescription(Workspace(id = "w", hasUnread = true)))
+        assertEquals("unread", statusDescription(Workspace(id = "w", hasUnread = true)))
     }
 
     @Test
     fun workspaceStatusDescriptionCombinesAttentionAndUnread() {
         assertEquals(
             "needs permission, unread",
-            workspaceStatusDescription(Workspace(id = "w", attention = "permission", hasUnread = true)),
+            statusDescription(Workspace(id = "w", attention = "permission", hasUnread = true)),
         )
     }
 
     @Test
-    fun autopilotSummaryLabelIsNullWhenNoneAreOnAnAutoReplyMode() {
+    fun autopilotSummaryIsNullWhenNoneAreOnAnAutoReplyMode() {
         val workspaces = listOf(
             Workspace(id = "a", title = "foo", yoloMode = YoloMode.OFF),
             Workspace(id = "b", title = "bar"),
         )
-        assertNull(autopilotSummaryLabel(workspaces))
+        assertNull(autopilotSummary(workspaces))
     }
 
     @Test
-    fun autopilotSummaryLabelListsOnlyAutoReplyWorkspacesSingular() {
+    fun autopilotSummaryListsOnlyAutoReplyWorkspaces() {
         val workspaces = listOf(
             Workspace(id = "a", title = "foo", yoloMode = YoloMode.ALWAYS),
             Workspace(id = "b", title = "bar", yoloMode = YoloMode.OFF),
         )
-        assertEquals("1 workspace on autopilot: foo", autopilotSummaryLabel(workspaces))
+        assertEquals(AutopilotSummary(count = 1, names = "foo"), autopilotSummary(workspaces))
     }
 
     @Test
-    fun autopilotSummaryLabelListsAllAutoReplyWorkspacesPlural() {
+    fun autopilotSummaryListsAllAutoReplyWorkspaces() {
         val workspaces = listOf(
             Workspace(id = "a", title = "foo", yoloMode = YoloMode.ALWAYS),
             Workspace(id = "b", title = "bar", yoloMode = YoloMode.BYPASS),
             Workspace(id = "c", title = "baz", yoloMode = YoloMode.OFF),
         )
-        assertEquals("2 workspaces on autopilot: foo, bar", autopilotSummaryLabel(workspaces))
+        assertEquals(AutopilotSummary(count = 2, names = "foo, bar"), autopilotSummary(workspaces))
     }
 
     @Test
-    fun autopilotSummaryLabelFallsBackToPreviewThenCwdForAnUntitledWorkspace() {
+    fun autopilotSummaryFallsBackToPreviewThenCwdForAnUntitledWorkspace() {
         val workspaces = listOf(Workspace(id = "a", cwd = "/repo", yoloMode = YoloMode.ALL_TOOLS))
-        assertEquals("1 workspace on autopilot: /repo", autopilotSummaryLabel(workspaces))
+        assertEquals(AutopilotSummary(count = 1, names = "/repo"), autopilotSummary(workspaces))
     }
 }

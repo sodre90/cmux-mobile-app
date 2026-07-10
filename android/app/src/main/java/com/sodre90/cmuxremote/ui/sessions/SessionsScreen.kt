@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -57,11 +58,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.YoloMode
@@ -88,15 +92,15 @@ fun SessionsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("cmux sessions") },
+                title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
                     BadgedBox(
                         badge = { if (unreadCount > 0) Badge { Text(unreadCount.toString()) } },
                     ) {
-                        TextButton(onClick = onOpenInbox) { Text("Inbox") }
+                        TextButton(onClick = onOpenInbox) { Text(stringResource(R.string.sessions_inbox_button)) }
                     }
-                    TextButton(onClick = { vm.userRefresh() }) { Text("Refresh") }
-                    TextButton(onClick = onSettings) { Text("Re-pair device") }
+                    TextButton(onClick = { vm.userRefresh() }) { Text(stringResource(R.string.action_refresh)) }
+                    TextButton(onClick = onSettings) { Text(stringResource(R.string.sessions_settings_button)) }
                 },
             )
         },
@@ -136,7 +140,7 @@ private val ExpandedMapSaver = mapSaver(
 @Composable
 private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, onOpen: (String) -> Unit) {
     if (workspaces.isEmpty()) {
-        Box(Modifier.fillMaxSize()) { Text("No sessions", Modifier.align(Alignment.Center)) }
+        Box(Modifier.fillMaxSize()) { Text(stringResource(R.string.sessions_empty), Modifier.align(Alignment.Center)) }
         return
     }
     val expanded = rememberSaveable(saver = ExpandedMapSaver) { mutableStateMapOf() }
@@ -163,17 +167,21 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
     var yoloPickerWorkspace by remember { mutableStateOf<Workspace?>(null) }
 
     // Computed off the unsorted list so it doesn't flicker as "Waiting first" toggles.
-    val autopilotLabel = remember(workspaces) { autopilotSummaryLabel(workspaces) }
+    val autopilot = remember(workspaces) { autopilotSummary(workspaces) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        autopilotLabel?.let { AutopilotBanner(it) }
+        autopilot?.let {
+            AutopilotBanner(
+                pluralStringResource(R.plurals.autopilot_summary, it.count, it.count, it.names),
+            )
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "Waiting first",
+                text = stringResource(R.string.sessions_waiting_first_label),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
@@ -213,7 +221,9 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
                                 }
                             } else {
                                 IconButton(onClick = {}, modifier = Modifier.draggableHandle()) {
-                                    Icon(Icons.Filled.Menu, contentDescription = "Drag to reorder")
+                                    val dragDescription =
+                                        stringResource(R.string.sessions_drag_to_reorder_description)
+                                    Icon(Icons.Filled.Menu, contentDescription = dragDescription)
                                 }
                             }
                         },
@@ -269,7 +279,7 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (Str
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Rename workspace") },
+        title = { Text(stringResource(R.string.sessions_rename_dialog_title)) },
         text = {
             OutlinedTextField(
                 value = text,
@@ -279,34 +289,26 @@ private fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (Str
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) { Text("Rename") }
+            TextButton(onClick = { onConfirm(text) }, enabled = text.isNotBlank()) {
+                Text(stringResource(R.string.action_rename))
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }
 
-private data class YoloModeOption(val mode: String, val label: String, val description: String)
+// Resource ids (not resolved strings) since this list is built outside any
+// @Composable context -- resolved via stringResource() in YoloModeDialog below.
+private data class YoloModeOption(val mode: String, @StringRes val labelRes: Int, @StringRes val descriptionRes: Int)
 
 // Picker order/labels for the YOLO mode dialog. Off first (the common,
 // unblocked-from-the-agent-inbox case). Descriptions mirror cmux's own Feed
 // permission-mode semantics (docs/feed.md's decision-semantics table).
 private val YoloModeOptions = listOf(
-    YoloModeOption(YoloMode.OFF, "Off", "You answer each permission prompt from the phone."),
-    YoloModeOption(
-        YoloMode.ALWAYS,
-        "Always",
-        "Auto-approves, applying the agent's suggested rule to future similar requests.",
-    ),
-    YoloModeOption(
-        YoloMode.ALL_TOOLS,
-        "All tools",
-        "Auto-approves any tool the agent asks to use, not just this one.",
-    ),
-    YoloModeOption(
-        YoloMode.BYPASS,
-        "Bypass",
-        "Skips permission checks for the rest of this session (Claude Code's --dangerously-skip-permissions).",
-    ),
+    YoloModeOption(YoloMode.OFF, R.string.yolo_mode_off_label, R.string.yolo_mode_off_description),
+    YoloModeOption(YoloMode.ALWAYS, R.string.yolo_mode_always_label, R.string.yolo_mode_always_description),
+    YoloModeOption(YoloMode.ALL_TOOLS, R.string.yolo_mode_all_tools_label, R.string.yolo_mode_all_tools_description),
+    YoloModeOption(YoloMode.BYPASS, R.string.yolo_mode_bypass_label, R.string.yolo_mode_bypass_description),
 )
 
 @Composable
@@ -321,7 +323,7 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("YOLO mode") },
+        title = { Text(stringResource(R.string.yolo_mode_dialog_title)) },
         text = {
             Column {
                 YoloModeOptions.forEach { option ->
@@ -357,12 +359,12 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
                                     )
                                 }
                                 Text(
-                                    option.label,
+                                    stringResource(option.labelRes),
                                     color = if (isBypass) MaterialTheme.colorScheme.error else Color.Unspecified,
                                 )
                             }
                             Text(
-                                option.description,
+                                stringResource(option.descriptionRes),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (isBypass) {
                                     MaterialTheme.colorScheme.error
@@ -376,20 +378,14 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
             }
         },
         confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) } },
     )
 
     if (pendingBypassConfirm) {
         AlertDialog(
             onDismissRequest = { pendingBypassConfirm = false },
-            title = { Text("Enable Bypass mode?") },
-            text = {
-                Text(
-                    "This skips permission checks for the rest of this session -- " +
-                        "the agent can run any tool without asking. Same as Claude " +
-                        "Code's --dangerously-skip-permissions.",
-                )
-            },
+            title = { Text(stringResource(R.string.yolo_bypass_confirm_title)) },
+            text = { Text(stringResource(R.string.yolo_bypass_confirm_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -397,10 +393,14 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
                         onSelect(YoloMode.BYPASS)
                     },
                 ) {
-                    Text("Enable", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.action_enable), color = MaterialTheme.colorScheme.error)
                 }
             },
-            dismissButton = { TextButton(onClick = { pendingBypassConfirm = false }) { Text("Cancel") } },
+            dismissButton = {
+                TextButton(onClick = { pendingBypassConfirm = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
         )
     }
 }
@@ -434,7 +434,12 @@ private fun WorkspaceCard(
                     // entirely (a sibling in the outer accent Row), so a contentDescription
                     // on it would surface as its own, title-less TalkBack stop instead of
                     // part of this card's summary.
-                    val statusDescription = workspaceStatusDescription(ws)
+                    val statusDescription = workspaceStatusDescription(
+                        ws,
+                        permissionLabel = stringResource(R.string.status_needs_permission),
+                        waitingLabel = stringResource(R.string.status_waiting_input),
+                        unreadLabel = stringResource(R.string.status_unread),
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth()
                             .combinedClickable(
@@ -488,27 +493,30 @@ private fun WorkspaceCard(
                             ) {}
                         }
                         Text(
-                            text = paneCountLabel(ws.terminals.size),
+                            text = pluralStringResource(R.plurals.pane_count, ws.terminals.size, ws.terminals.size),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         // Long-press already opens this same menu (power-user shortcut);
                         // this icon is the discoverable affordance for everyone else.
                         IconButton(onClick = { showActionMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Workspace actions")
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = stringResource(R.string.sessions_workspace_actions_description),
+                            )
                         }
                         dragHandle()
                     }
                     DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
                         DropdownMenuItem(
-                            text = { Text("Rename") },
+                            text = { Text(stringResource(R.string.action_rename)) },
                             onClick = {
                                 showActionMenu = false
                                 onRename()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("YOLO mode…") },
+                            text = { Text(stringResource(R.string.yolo_mode_menu_item)) },
                             onClick = {
                                 showActionMenu = false
                                 onYoloMode()
@@ -597,7 +605,7 @@ private fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
         )
         if (!pane.ready) {
             Text(
-                text = "starting…",
+                text = stringResource(R.string.pane_starting),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -605,7 +613,7 @@ private fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
         KindBadge(pane.kind)
         if (pane.focused) {
             Text(
-                text = "focus",
+                text = stringResource(R.string.pane_focus),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -639,7 +647,7 @@ private fun KindBadge(kind: String) {
         shape = MaterialTheme.shapes.small,
     ) {
         Text(
-            text = kind.ifBlank { "?" },
+            text = kind.ifBlank { stringResource(R.string.kind_badge_unknown) },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSecondaryContainer,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),

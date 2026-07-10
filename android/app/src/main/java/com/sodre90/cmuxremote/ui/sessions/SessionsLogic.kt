@@ -46,10 +46,6 @@ fun pendingItemTarget(item: PendingFeedItem, workspaces: List<Workspace>): Strin
     return notificationTarget(ws) ?: ws.terminals.firstOrNull()?.id
 }
 
-/** Trailing pane-count label, e.g. "0 panes" / "1 pane" / "3 panes". */
-fun paneCountLabel(count: Int): String =
-    if (count == 1) "1 pane" else "$count panes"
-
 /** True when the workspace's agent is waiting on the user: blocked on a
  *  permission prompt or idle for input. Mirrors [attentionAccent]'s cases. */
 fun needsAttention(ws: Workspace): Boolean = ws.attention.isNotEmpty()
@@ -65,31 +61,46 @@ fun sortedByAttention(workspaces: List<Workspace>): List<Workspace> =
  *  not how many items are pending within one. */
 fun unreadWorkspaceCount(workspaces: List<Workspace>): Int = workspaces.count { it.hasUnread }
 
-/** A short phrase describing [ws]'s attention state and unread flag, or null
- *  when there's nothing to call out. Backs the TalkBack announcement for
- *  [WorkspaceCard]'s color-only attention stripe and unread dot, so the same
- *  information those convey visually isn't lost on a screen reader. */
-fun workspaceStatusDescription(ws: Workspace): String? {
+/**
+ * A short phrase describing [ws]'s attention state and unread flag, or null
+ * when there's nothing to call out. Backs the TalkBack announcement for
+ * [WorkspaceCard]'s color-only attention stripe and unread dot, so the same
+ * information those convey visually isn't lost on a screen reader.
+ *
+ * [permissionLabel]/[waitingLabel]/[unreadLabel] are resolved `strings.xml`
+ * text passed in by the caller (see SessionsScreen) rather than resolved
+ * here, so this stays a plain, JVM-testable function -- resolving a string
+ * resource needs a @Composable context this function doesn't have.
+ */
+fun workspaceStatusDescription(
+    ws: Workspace,
+    permissionLabel: String,
+    waitingLabel: String,
+    unreadLabel: String,
+): String? {
     val parts = buildList {
         when (ws.attention) {
-            "permission" -> add("needs permission")
-            "input" -> add("waiting for input")
+            "permission" -> add(permissionLabel)
+            "input" -> add(waitingLabel)
         }
-        if (ws.hasUnread) add("unread")
+        if (ws.hasUnread) add(unreadLabel)
     }
     return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
 }
 
-/** A compact "N workspaces on autopilot: foo, bar" summary of every workspace
- *  in an auto-reply YOLO mode (anything [yoloModeLabel] would badge on its
- *  card: Always/All tools/Bypass), or null when none are. Meant for a banner
- *  the user can scan before stepping away from the phone. */
-fun autopilotSummaryLabel(workspaces: List<Workspace>): String? {
+/** Every workspace in an auto-reply YOLO mode (anything [yoloModeLabel] would
+ *  badge on its card: Always/All tools/Bypass), summarized as a count plus
+ *  the comma-joined workspace names, or null when none are on autopilot.
+ *  Formatted into the "N workspaces on autopilot: foo, bar" banner text by
+ *  the caller (see SessionsScreen), via the `autopilot_summary` plural
+ *  resource -- this function stays plain/JVM-testable. */
+data class AutopilotSummary(val count: Int, val names: String)
+
+fun autopilotSummary(workspaces: List<Workspace>): AutopilotSummary? {
     val autopilot = workspaces.filter { yoloModeLabel(it.yoloMode) != null }
     if (autopilot.isEmpty()) return null
     val names = autopilot.joinToString(", ") { it.title.ifBlank { it.preview.ifBlank { it.cwd } } }
-    val noun = if (autopilot.size == 1) "workspace" else "workspaces"
-    return "${autopilot.size} $noun on autopilot: $names"
+    return AutopilotSummary(autopilot.size, names)
 }
 
 /** Reorders [workspaces] by a phone-local, persisted custom id [order]: ids
