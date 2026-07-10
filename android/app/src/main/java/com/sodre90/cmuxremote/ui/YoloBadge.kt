@@ -13,8 +13,9 @@ import com.sodre90.cmuxremote.model.YoloMode
 // Distinct from the sessions list's red/amber attention stripe: this badge
 // reflects a standing workspace setting, not a transient agent state, so it
 // gets its own color and is shown wherever a workspace's YOLO mode matters
-// (the sessions list row and that workspace's terminal pane header).
-private val YoloAccent = Color(0xFF8E24AA) // purple
+// (the sessions list row, that workspace's terminal pane header, and the
+// sessions screen's autopilot summary banner).
+val YoloAccent = Color(0xFF8E24AA) // purple
 
 /** The badge label for [mode], or null when it's off (the common case, shown as no badge). */
 fun yoloModeLabel(mode: String): String? = when (mode) {

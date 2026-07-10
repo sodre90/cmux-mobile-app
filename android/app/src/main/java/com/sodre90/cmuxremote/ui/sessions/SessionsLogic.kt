@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.ui.sessions
 
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
+import com.sodre90.cmuxremote.ui.yoloModeLabel
 
 /**
  * The surface id to open directly when a workspace card is tapped, or null when
@@ -63,6 +64,18 @@ fun sortedByAttention(workspaces: List<Workspace>): List<Workspace> =
  *  exact unread-item count: the bridge only reports hasUnread per workspace,
  *  not how many items are pending within one. */
 fun unreadWorkspaceCount(workspaces: List<Workspace>): Int = workspaces.count { it.hasUnread }
+
+/** A compact "N workspaces on autopilot: foo, bar" summary of every workspace
+ *  in an auto-reply YOLO mode (anything [yoloModeLabel] would badge on its
+ *  card: Always/All tools/Bypass), or null when none are. Meant for a banner
+ *  the user can scan before stepping away from the phone. */
+fun autopilotSummaryLabel(workspaces: List<Workspace>): String? {
+    val autopilot = workspaces.filter { yoloModeLabel(it.yoloMode) != null }
+    if (autopilot.isEmpty()) return null
+    val names = autopilot.joinToString(", ") { it.title.ifBlank { it.preview.ifBlank { it.cwd } } }
+    val noun = if (autopilot.size == 1) "workspace" else "workspaces"
+    return "${autopilot.size} $noun on autopilot: $names"
+}
 
 /** Reorders [workspaces] by a phone-local, persisted custom id [order]: ids
  *  present in [order] come first in that sequence; any other workspace (new,

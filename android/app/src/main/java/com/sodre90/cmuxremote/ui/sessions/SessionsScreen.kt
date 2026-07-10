@@ -63,6 +63,7 @@ import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.YoloAccent
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import sh.calvin.reorderable.ReorderableItem
@@ -156,7 +157,11 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
     var renamingWorkspace by remember { mutableStateOf<Workspace?>(null) }
     var yoloPickerWorkspace by remember { mutableStateOf<Workspace?>(null) }
 
+    // Computed off the unsorted list so it doesn't flicker as "Waiting first" toggles.
+    val autopilotLabel = remember(workspaces) { autopilotSummaryLabel(workspaces) }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        autopilotLabel?.let { AutopilotBanner(it) }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -232,6 +237,24 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
                 vm.setYoloMode(ws.id, mode)
                 yoloPickerWorkspace = null
             },
+        )
+    }
+}
+
+@Composable
+private fun AutopilotBanner(label: String) {
+    Surface(
+        color = YoloAccent.copy(alpha = 0.15f),
+        contentColor = YoloAccent,
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
 }
