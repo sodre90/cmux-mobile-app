@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,6 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -265,26 +267,64 @@ private val YoloModeOptions = listOf(
 
 @Composable
 private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+    // Bypass removes the safety net entirely for the rest of the session (cmux's
+    // --dangerously-skip-permissions equivalent), so unlike the other three modes
+    // it gets error-colored styling AND a confirm step -- color alone doesn't stop
+    // a mis-tap, and a confirm alone is easy to blow through without registering
+    // what was just enabled. Leaving Bypass (selecting any other mode) is the safe
+    // direction and stays a single tap, same as Off/Always/All tools.
+    var pendingBypassConfirm by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("YOLO mode") },
         text = {
             Column {
                 YoloModeOptions.forEach { option ->
+                    val isBypass = option.mode == YoloMode.BYPASS
+                    val select = { if (isBypass) pendingBypassConfirm = true else onSelect(option.mode) }
                     Row(
                         modifier = Modifier.fillMaxWidth()
-                            .clickable { onSelect(option.mode) }
+                            .clickable(onClick = select)
                             .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        RadioButton(selected = option.mode == current, onClick = { onSelect(option.mode) })
+                        RadioButton(
+                            selected = option.mode == current,
+                            onClick = select,
+                            colors = if (isBypass) {
+                                RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.error)
+                            } else {
+                                RadioButtonDefaults.colors()
+                            },
+                        )
                         Column {
-                            Text(option.label)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                if (isBypass) {
+                                    Icon(
+                                        Icons.Filled.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                                Text(
+                                    option.label,
+                                    color = if (isBypass) MaterialTheme.colorScheme.error else Color.Unspecified,
+                                )
+                            }
                             Text(
                                 option.description,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (isBypass) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
                             )
                         }
                     }
@@ -294,6 +334,31 @@ private fun YoloModeDialog(current: String, onDismiss: () -> Unit, onSelect: (St
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
+
+    if (pendingBypassConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingBypassConfirm = false },
+            title = { Text("Enable Bypass mode?") },
+            text = {
+                Text(
+                    "This skips permission checks for the rest of this session -- " +
+                        "the agent can run any tool without asking. Same as Claude " +
+                        "Code's --dangerously-skip-permissions.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingBypassConfirm = false
+                        onSelect(YoloMode.BYPASS)
+                    },
+                ) {
+                    Text("Enable", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingBypassConfirm = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
