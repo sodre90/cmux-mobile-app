@@ -63,6 +63,12 @@ class SessionsViewModel(
 
     fun saveOrder(order: List<String>) = workspaceOrder.saveOrder(order)
 
+    /** The persisted "Waiting first" sort toggle (see
+     *  [com.sodre90.cmuxremote.data.WorkspaceOrderStore]). */
+    fun loadSortByAttention(): Boolean = workspaceOrder.loadSortByAttention()
+
+    fun saveSortByAttention(sortByAttention: Boolean) = workspaceOrder.saveSortByAttention(sortByAttention)
+
     /** Sets a workspace's display title in cmux, then reloads the list so the
      *  new title (cmux's single source of truth for it) comes back fresh. */
     fun renameWorkspace(id: String, title: String) {

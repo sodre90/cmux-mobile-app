@@ -51,9 +51,14 @@ class ViewModelConstructionTest {
 
     private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {
         private var order: List<String> = emptyList()
+        private var sortByAttention = false
         override fun loadOrder(): List<String> = order
         override fun saveOrder(order: List<String>) {
             this.order = order
+        }
+        override fun loadSortByAttention(): Boolean = sortByAttention
+        override fun saveSortByAttention(sortByAttention: Boolean) {
+            this.sortByAttention = sortByAttention
         }
     }
 

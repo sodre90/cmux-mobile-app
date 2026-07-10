@@ -55,9 +55,14 @@ private class RecordingSession(private val secret: ByteArray) : PairedSession {
 
 private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {
     private var order: List<String> = emptyList()
+    private var sortByAttention = false
     override fun loadOrder(): List<String> = order
     override fun saveOrder(order: List<String>) {
         this.order = order
+    }
+    override fun loadSortByAttention(): Boolean = sortByAttention
+    override fun saveSortByAttention(sortByAttention: Boolean) {
+        this.sortByAttention = sortByAttention
     }
 }
 
@@ -293,5 +298,18 @@ class SessionsViewModelTest {
         socket.send(frameFor("""{"type":"feed","name":"feed.updated"}""", 1L))
         waitUntil(timeoutMs = 3_000) { requestCount.get() == blockedAt + 1 }
         assertTrue(vm.state.value is UiState.Ready)
+    }
+
+    @Test
+    fun sortByAttentionReadsAndWritesThroughTheOrderGateway() {
+        val vm = SessionsViewModel(FakeSessionsBridgeGateway(), orderGateway)
+
+        assertEquals(false, vm.loadSortByAttention()) // unset -> off, matching WorkspaceOrderStore's default
+
+        vm.saveSortByAttention(true)
+
+        assertEquals(true, vm.loadSortByAttention())
+        // Reaches the underlying gateway, not just VM-local state.
+        assertEquals(true, orderGateway.loadSortByAttention())
     }
 }

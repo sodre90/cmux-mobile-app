@@ -134,7 +134,10 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
         return
     }
     val expanded = rememberSaveable(saver = ExpandedMapSaver) { mutableStateMapOf() }
-    var sortByAttention by remember { mutableStateOf(false) }
+
+    // Persisted the same way as customOrder below (see WorkspaceOrderStore) so
+    // it survives an app restart, not just a rotation.
+    var sortByAttention by rememberSaveable { mutableStateOf(vm.loadSortByAttention()) }
 
     // The phone-local drag order (see WorkspaceOrderStore); read once, then
     // kept in sync locally so drags feel instant without waiting on a
@@ -164,7 +167,13 @@ private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, on
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
-            Switch(checked = sortByAttention, onCheckedChange = { sortByAttention = it })
+            Switch(
+                checked = sortByAttention,
+                onCheckedChange = {
+                    sortByAttention = it
+                    vm.saveSortByAttention(it)
+                },
+            )
         }
         LazyColumn(
             state = lazyListState,
