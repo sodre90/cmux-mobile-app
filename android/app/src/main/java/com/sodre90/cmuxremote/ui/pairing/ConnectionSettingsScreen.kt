@@ -21,8 +21,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 
@@ -43,22 +45,23 @@ fun ConnectionSettingsScreen(
     onDone: () -> Unit,
 ) {
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
-    Scaffold(topBar = { TopAppBar(title = { Text("Connections") }) }) { inner ->
+    val relayLabel = stringResource(R.string.connection_slot_relay)
+    val directLabel = stringResource(R.string.connection_slot_direct)
+    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.connections_title)) }) }) { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             ConnectionRow(
-                label = "Relay",
-                description = "Reaches your Mac from anywhere, via the home server.",
+                label = relayLabel,
+                description = stringResource(R.string.connection_relay_description),
                 configured = relayConfigured,
                 onPair = { onPair(ConnectionSlot.RELAY) },
                 onForget = { forgetTarget = ConnectionSlot.RELAY },
             )
             ConnectionRow(
-                label = "Tailscale (direct)",
-                description = "Reaches your Mac directly over your tailnet -- used " +
-                    "automatically if the relay is unreachable.",
+                label = directLabel,
+                description = stringResource(R.string.connection_direct_description),
                 configured = directConfigured,
                 onPair = { onPair(ConnectionSlot.DIRECT) },
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },
@@ -67,13 +70,15 @@ fun ConnectionSettingsScreen(
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
             }
             if (relayConfigured || directConfigured) {
-                Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+                Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.action_done))
+                }
             }
         }
     }
     forgetTarget?.let { slot ->
         ForgetConnectionDialog(
-            slotLabel = if (slot == ConnectionSlot.RELAY) "Relay" else "Tailscale (direct)",
+            slotLabel = if (slot == ConnectionSlot.RELAY) relayLabel else directLabel,
             onDismiss = { forgetTarget = null },
             onConfirm = {
                 onForget(slot)
@@ -95,13 +100,14 @@ private fun ConnectionRow(
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label)
             Text(description)
-            Text(if (configured) "Paired" else "Not paired")
+            val statusRes = if (configured) R.string.connection_status_paired else R.string.connection_status_not_paired
+            Text(stringResource(statusRes))
             Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
-                Text(if (configured) "Re-pair" else "Pair")
+                Text(stringResource(if (configured) R.string.action_repair else R.string.action_pair))
             }
             if (configured) {
                 OutlinedButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) {
-                    Text("Forget")
+                    Text(stringResource(R.string.action_forget))
                 }
             }
         }
@@ -144,22 +150,27 @@ private fun ConnectionRowPairedPreview() {
 private fun TestPushRow(state: TestPushUiState, onSendTestPush: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Push notifications")
-            Text("Send a real test push to this device to confirm push setup works.")
+            Text(stringResource(R.string.test_push_title))
+            Text(stringResource(R.string.test_push_description))
             Button(
                 onClick = onSendTestPush,
                 enabled = state !is TestPushUiState.Sending,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (state is TestPushUiState.Sending) "Sending…" else "Send test notification")
+                val buttonRes = if (state is TestPushUiState.Sending) {
+                    R.string.status_sending
+                } else {
+                    R.string.test_push_send_button
+                }
+                Text(stringResource(buttonRes))
             }
             when (state) {
                 is TestPushUiState.Success -> Text(
-                    "Sent — check your notification shade",
+                    stringResource(R.string.test_push_success),
                     color = MaterialTheme.colorScheme.primary,
                 )
                 is TestPushUiState.Error -> Text(
-                    "Failed: ${state.message}",
+                    stringResource(R.string.test_push_failure_prefix, state.message),
                     color = MaterialTheme.colorScheme.error,
                 )
                 TestPushUiState.Idle, TestPushUiState.Sending -> Unit
@@ -172,9 +183,9 @@ private fun TestPushRow(state: TestPushUiState, onSendTestPush: () -> Unit) {
 private fun ForgetConnectionDialog(slotLabel: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Forget $slotLabel connection?") },
-        text = { Text("You'll need to pair this device again to use $slotLabel.") },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Forget") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        title = { Text(stringResource(R.string.forget_connection_dialog_title, slotLabel)) },
+        text = { Text(stringResource(R.string.forget_connection_dialog_body, slotLabel)) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.action_forget)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
 }

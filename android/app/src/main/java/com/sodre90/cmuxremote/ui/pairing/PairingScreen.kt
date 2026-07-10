@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -43,6 +44,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.sodre90.cmuxremote.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,9 +94,9 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                                         modifier = Modifier.padding(16.dp),
                                         verticalArrangement = Arrangement.spacedBy(12.dp),
                                     ) {
-                                        Text("Camera permission is required to scan the pairing QR code.")
+                                        Text(stringResource(R.string.pairing_camera_permission_required))
                                         Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                                            Text("Grant camera permission")
+                                            Text(stringResource(R.string.pairing_grant_camera_permission))
                                         }
                                     }
                                 }
@@ -102,17 +104,18 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                             TextButton(
                                 onClick = { showManualEntry = true },
                                 modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Enter server URL and code manually") }
+                            ) { Text(stringResource(R.string.pairing_enter_manually)) }
                         }
                     }
                 }
-                is PairingUiState.Pairing -> Text("Pairing...", modifier = Modifier.padding(16.dp))
+                is PairingUiState.Pairing ->
+                    Text(stringResource(R.string.pairing_in_progress), modifier = Modifier.padding(16.dp))
                 is PairingUiState.Error -> Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(s.message)
-                    Button(onClick = vm::retry) { Text("Scan again") }
+                    Button(onClick = vm::retry) { Text(stringResource(R.string.pairing_scan_again)) }
                 }
                 is PairingUiState.Success -> Unit // LaunchedEffect above navigates away
             }
@@ -132,19 +135,19 @@ private fun ManualEntryForm(onSubmit: (serverUrl: String, code: String) -> Unit,
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Enter the server URL and pairing code shown by `cmux-bridge pair-device` on the Mac.")
+        Text(stringResource(R.string.pairing_manual_intro))
         OutlinedTextField(
             value = serverUrl,
             onValueChange = { serverUrl = it },
-            label = { Text("Server URL") },
-            placeholder = { Text("https://cmux.example.com") },
+            label = { Text(stringResource(R.string.pairing_server_url_label)) },
+            placeholder = { Text(stringResource(R.string.pairing_server_url_placeholder)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
             value = code,
             onValueChange = { code = it },
-            label = { Text("Pairing code") },
+            label = { Text(stringResource(R.string.pairing_code_label)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -152,9 +155,9 @@ private fun ManualEntryForm(onSubmit: (serverUrl: String, code: String) -> Unit,
             onClick = { onSubmit(serverUrl, code) },
             enabled = serverUrl.isNotBlank() && code.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Pair") }
+        ) { Text(stringResource(R.string.action_pair)) }
         TextButton(onClick = onScanInstead, modifier = Modifier.fillMaxWidth()) {
-            Text("Scan QR code instead")
+            Text(stringResource(R.string.pairing_scan_qr_instead))
         }
     }
 }
