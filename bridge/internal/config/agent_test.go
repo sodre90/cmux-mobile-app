@@ -77,7 +77,7 @@ func TestLoadAgentDefaultsIdentityAndSessionStorePaths(t *testing.T) {
 	if !strings.HasSuffix(cfg.IdentityKey, "identity.key") {
 		t.Fatalf("IdentityKey = %q", cfg.IdentityKey)
 	}
-	if !strings.HasSuffix(cfg.SessionStore, "sessions.json") {
+	if !strings.HasSuffix(cfg.SessionStore, "sessions.db") {
 		t.Fatalf("SessionStore = %q", cfg.SessionStore)
 	}
 }

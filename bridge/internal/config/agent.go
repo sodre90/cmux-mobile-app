@@ -27,11 +27,17 @@ type AgentConfig struct {
 	// (internal/e2e.Identity), created on first use by `cmux-bridge
 	// pair-device`.
 	IdentityKey string `toml:"identity_key"`
-	// SessionStore is the path to the JSON file holding this agent's paired
-	// devices' e2e shared secrets and replay counters (internal/e2e.Store).
+	// SessionStore is the path to the SQLite database holding this agent's
+	// paired devices' e2e shared secrets and replay counters
+	// (internal/e2e.Store). On first run against a path with no existing
+	// database, a same-named legacy sessions.json sibling (the pre-SQLite
+	// on-disk format) is imported automatically and then renamed to
+	// "<name>.json.migrated" -- an upgrading install keeps its paired
+	// devices with no manual step.
 	SessionStore string `toml:"session_store"`
-	// YoloStore is the path to the JSON file holding each workspace's opt-in
-	// auto-reply mode for permission prompts (internal/yolo.Store).
+	// YoloStore is the path to the SQLite database holding each workspace's
+	// opt-in auto-reply mode for permission prompts (internal/yolo.Store).
+	// Same one-time legacy-JSON import behavior as SessionStore, above.
 	YoloStore string `toml:"yolo_store"`
 	// DirectListen is the address the agent listens on for direct
 	// (Tailscale) connections, e.g. ":8443". Empty (the default) disables
@@ -57,8 +63,8 @@ func agentDefaults() AgentConfig {
 	return AgentConfig{
 		CmuxBin:         "cmux",
 		IdentityKey:     "~/.config/cmux-bridge/identity.key",
-		SessionStore:    "~/.config/cmux-bridge/sessions.json",
-		YoloStore:       "~/.config/cmux-bridge/yolo.json",
+		SessionStore:    "~/.config/cmux-bridge/sessions.db",
+		YoloStore:       "~/.config/cmux-bridge/yolo.db",
 		DirectAuthStore: "~/.config/cmux-bridge/direct-auth.db",
 	}
 }
