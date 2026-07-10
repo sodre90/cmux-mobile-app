@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +93,7 @@ func OpenStore(path string) (*Store, error) {
 		// A broken legacy import must not block startup -- log loudly and
 		// proceed with whatever was imported before the error, same posture
 		// as a corrupt file: the operator needs a signal, not a crashed agent.
-		log.Printf("e2e: legacy session import from %s incomplete: %v", legacyPath(path), err)
+		slog.Error("e2e: legacy session import incomplete", "path", legacyPath(path), "err", err)
 	}
 	return s, nil
 }
@@ -121,7 +121,7 @@ func recoverIfCorrupt(path string, openErr error) (recovered bool, err error) {
 	if err := os.Rename(path, corrupt); err != nil {
 		return false, fmt.Errorf("rename corrupt store aside: %w", err)
 	}
-	log.Printf("e2e: session store %s was corrupt (%v); moved to %s -- every paired device must re-pair", path, openErr, corrupt)
+	slog.Error("e2e: session store was corrupt, moved aside -- every paired device must re-pair", "path", path, "moved_to", corrupt, "err", openErr)
 	return true, nil
 }
 
@@ -160,7 +160,7 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	}
 	var f fileFormat
 	if err := json.Unmarshal(raw, &f); err != nil {
-		log.Printf("e2e: legacy session store %s is unreadable (%v); starting empty instead of blocking startup", legacyPath(dbPath), err)
+		slog.Warn("e2e: legacy session store unreadable, starting empty instead of blocking startup", "path", legacyPath(dbPath), "err", err)
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -183,10 +183,10 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	}
 	migratedTo := legacyPath(dbPath) + ".migrated"
 	if err := os.Rename(legacyPath(dbPath), migratedTo); err != nil {
-		log.Printf("e2e: imported %d device(s) from %s but could not rename it aside (%v) -- remove it manually", len(f.Devices), legacyPath(dbPath), err)
+		slog.Warn("e2e: imported devices but could not rename legacy file aside -- remove it manually", "count", len(f.Devices), "path", legacyPath(dbPath), "err", err)
 		return nil
 	}
-	log.Printf("e2e: migrated %d paired device(s) from %s to %s", len(f.Devices), legacyPath(dbPath), dbPath)
+	slog.Info("e2e: migrated paired devices to sqlite", "count", len(f.Devices), "from", legacyPath(dbPath), "to", dbPath)
 	return nil
 }
 
@@ -236,7 +236,7 @@ func (s *Store) DeviceIDs() []string {
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT device_id FROM devices`)
 	if err != nil {
-		log.Printf("e2e: list device ids: %v", err)
+		slog.Error("e2e: list device ids", "err", err)
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
@@ -244,13 +244,13 @@ func (s *Store) DeviceIDs() []string {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			log.Printf("e2e: scan device id: %v", err)
+			slog.Error("e2e: scan device id", "err", err)
 			continue
 		}
 		out = append(out, id)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("e2e: list device ids: %v", err)
+		slog.Error("e2e: list device ids", "err", err)
 	}
 	return out
 }
@@ -277,7 +277,7 @@ func (s *Store) ActiveDeviceIDs() []string {
 	cutoff := time.Now().Add(-staleDeviceAge).Unix()
 	rows, err := s.db.Query(`SELECT device_id FROM devices WHERE last_active_unix >= ?`, cutoff)
 	if err != nil {
-		log.Printf("e2e: list active device ids: %v", err)
+		slog.Error("e2e: list active device ids", "err", err)
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
@@ -285,13 +285,13 @@ func (s *Store) ActiveDeviceIDs() []string {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			log.Printf("e2e: scan active device id: %v", err)
+			slog.Error("e2e: scan active device id", "err", err)
 			continue
 		}
 		out = append(out, id)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("e2e: list active device ids: %v", err)
+		slog.Error("e2e: list active device ids", "err", err)
 	}
 	return out
 }
@@ -303,16 +303,27 @@ func (s *Store) SharedSecret(deviceID string) (secret []byte, ok bool) {
 	err := s.db.QueryRow(`SELECT shared_secret FROM devices WHERE device_id = ?`, deviceID).Scan(&encoded)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			log.Printf("e2e: query shared secret for %s: %v", deviceID, err)
+			slog.Error("e2e: query shared secret", "device", deviceLogID(deviceID), "err", err)
 		}
 		return nil, false
 	}
 	secret, err = base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		log.Printf("e2e: decode shared secret for %s: %v", deviceID, err)
+		slog.Error("e2e: decode shared secret", "device", deviceLogID(deviceID), "err", err)
 		return nil, false
 	}
 	return secret, true
+}
+
+// deviceLogID returns the last 6 hex characters of a device ID (itself the
+// full SHA-256 hash of a bearer token, see auth.Device.TokenHash) -- enough
+// to correlate log lines for one device without ever logging the full hash,
+// mirroring auth.Device.HashSuffix.
+func deviceLogID(deviceID string) string {
+	if len(deviceID) < 6 {
+		return deviceID
+	}
+	return deviceID[len(deviceID)-6:]
 }
 
 // NextSendCounter atomically increments deviceID's send counter and returns

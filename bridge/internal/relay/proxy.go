@@ -3,7 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -23,7 +23,10 @@ var ErrAgentOffline = errors.New("agent offline")
 // never from "whichever session happens to be registered."
 func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		ErrorLog: log.New(log.Writer(), "relay-proxy: ", log.Flags()),
+		// httputil.ReverseProxy only accepts a *log.Logger; slog.NewLogLogger
+		// routes its Printf calls through the shared slog handler instead of
+		// a second, independent log destination.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
 			req.URL.Host = "agent" // ignored by the stream dialer below
@@ -56,12 +59,16 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			},
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			var tenantID string
+			if dev, ok := auth.DeviceFromContext(req.Context()); ok {
+				tenantID = dev.TenantID
+			}
 			if errors.Is(err, ErrAgentOffline) {
-				log.Printf("relay: %s %s -> agent_offline", req.Method, req.URL.Path)
+				slog.Warn("relay: agent offline", "method", req.Method, "route", req.URL.Path, "tenant_id", tenantID)
 				httpjson.Error(w, http.StatusServiceUnavailable, "agent_offline")
 				return
 			}
-			log.Printf("relay: %s %s -> agent_error: %v", req.Method, req.URL.Path, err)
+			slog.Error("relay: agent proxy error", "method", req.Method, "route", req.URL.Path, "tenant_id", tenantID, "err", err)
 			httpjson.Error(w, http.StatusBadGateway, "agent_error")
 		},
 	}

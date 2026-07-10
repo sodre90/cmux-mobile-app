@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -150,7 +150,7 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		// scanner's 4MB cap. That kills the whole stream (Scan stops, not just
 		// the one line), so RunEvents' caller-side restart-with-backoff is what
 		// actually recovers -- this log exists so that isn't silent.
-		log.Printf("server: events stream ended abnormally: %v", err)
+		slog.Error("server: events stream ended abnormally", "err", err)
 	}
 }
 

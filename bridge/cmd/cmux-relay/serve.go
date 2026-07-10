@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -55,16 +55,16 @@ func runServe(args []string) int {
 	}
 	cfg, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
-		log.Printf("serve: %v", err)
+		slog.Error("serve: load store", "err", err)
 		return 1
 	}
 	if !isLoopbackAddr(cfg.Listen) && cfg.EdgeToken == "" {
-		log.Printf("serve: refusing to start: listen address %q is not loopback-only and edge_token is unset — nginx is trusted to set X-Client-Cert-CN, so binding non-loopback without edge_token lets anyone who can reach this address forge that header and hijack any tenant's tunnel; set edge_token in config.toml or bind to loopback", cfg.Listen)
+		slog.Error("serve: refusing to start: listen address is not loopback-only and edge_token is unset — nginx is trusted to set X-Client-Cert-CN, so binding non-loopback without edge_token lets anyone who can reach this address forge that header and hijack any tenant's tunnel; set edge_token in config.toml or bind to loopback", "listen", cfg.Listen)
 		return 1
 	}
 	signer, err := ca.LoadOrCreate(cfg.CACert, cfg.CAKey)
 	if err != nil {
-		log.Printf("serve: ca: %v", err)
+		slog.Error("serve: ca", "err", err)
 		return 1
 	}
 
@@ -74,10 +74,10 @@ func runServe(args []string) int {
 	var pusher relay.Pusher
 	if cfg.FCMCredentials != "" && cfg.FCMProjectID != "" {
 		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
-			log.Printf("serve: push disabled: %v", err)
+			slog.Warn("serve: push disabled", "err", err)
 		} else {
 			pusher = p
-			log.Printf("serve: FCM push enabled for project %s", cfg.FCMProjectID)
+			slog.Info("serve: FCM push enabled", "fcm_project_id", cfg.FCMProjectID)
 		}
 	}
 	if pusher != nil {
@@ -101,9 +101,9 @@ func runServe(args []string) int {
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
 
-	log.Printf("cmux-relay listening on %s", cfg.Listen)
+	slog.Info("cmux-relay listening", "listen", cfg.Listen)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("serve: %v", err)
+		slog.Error("serve: listen and serve", "err", err)
 		return 1
 	}
 	return 0

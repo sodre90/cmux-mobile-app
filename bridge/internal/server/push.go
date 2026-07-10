@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -92,7 +92,7 @@ func (s *Server) maybeSendPush(ctx context.Context, f wire.EventFrame) {
 			data["e2e"] = blob
 		}
 		if err := s.pusher.Send(sendCtx, dev.FCMToken, "", "", data); err != nil {
-			log.Printf("agent: direct-mode push failed (kind=%s ws=%s): %v", f.Kind, f.WorkspaceID, err)
+			slog.Warn("agent: direct-mode push failed", "tenant_id", s.directTenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "err", err)
 		}
 	}
 }
@@ -125,7 +125,11 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 			httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		log.Printf("agent: set fcm token: %v", err)
+		var tenantID, device string
+		if dev, ok := auth.DeviceFromContext(r.Context()); ok {
+			tenantID, device = dev.TenantID, dev.HashSuffix
+		}
+		slog.Error("agent: set fcm token", "tenant_id", tenantID, "device", device, "err", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}

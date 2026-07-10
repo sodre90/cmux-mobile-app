@@ -7,7 +7,7 @@ package pairing
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -65,7 +65,7 @@ func (h *handlers) newPairingCode(w http.ResponseWriter, req *http.Request) {
 	}
 	code, err := h.store.NewPairingCode(tenantID, rq.AgentPubkey, wire.PairingCodeTTL)
 	if err != nil {
-		log.Printf("pairing: new pairing code: %v", err)
+		slog.Error("pairing: new pairing code", "tenant_id", tenantID, "err", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -148,5 +148,5 @@ func (h *handlers) devicePair(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, wire.DevicePairResp{Token: tok, TenantID: tenantID})
-	log.Printf("pairing: device paired via QR code")
+	slog.Info("pairing: device paired via QR code", "tenant_id", tenantID)
 }

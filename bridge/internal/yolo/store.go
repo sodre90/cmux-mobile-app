@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,7 +89,7 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	if err := s.importLegacyJSON(path); err != nil {
-		log.Printf("yolo: legacy store import from %s incomplete: %v", legacyPath(path), err)
+		slog.Error("yolo: legacy store import incomplete", "path", legacyPath(path), "err", err)
 	}
 	return s, nil
 }
@@ -109,7 +109,7 @@ func recoverIfCorrupt(path string, openErr error) (recovered bool, err error) {
 	if err := os.Rename(path, corrupt); err != nil {
 		return false, fmt.Errorf("rename corrupt store aside: %w", err)
 	}
-	log.Printf("yolo: store %s was corrupt (%v); moved to %s -- every workspace's auto-reply mode was lost", path, openErr, corrupt)
+	slog.Error("yolo: store was corrupt, moved aside -- every workspace's auto-reply mode was lost", "path", path, "moved_to", corrupt, "err", openErr)
 	return true, nil
 }
 
@@ -143,7 +143,7 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	}
 	var f fileFormat
 	if err := json.Unmarshal(raw, &f); err != nil {
-		log.Printf("yolo: legacy store %s is unreadable (%v); starting empty instead of blocking startup", legacyPath(dbPath), err)
+		slog.Warn("yolo: legacy store unreadable, starting empty instead of blocking startup", "path", legacyPath(dbPath), "err", err)
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -164,10 +164,10 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	}
 	migratedTo := legacyPath(dbPath) + ".migrated"
 	if err := os.Rename(legacyPath(dbPath), migratedTo); err != nil {
-		log.Printf("yolo: imported %d mode(s) from %s but could not rename it aside (%v) -- remove it manually", len(f.Modes), legacyPath(dbPath), err)
+		slog.Warn("yolo: imported modes but could not rename legacy file aside -- remove it manually", "count", len(f.Modes), "path", legacyPath(dbPath), "err", err)
 		return nil
 	}
-	log.Printf("yolo: migrated %d workspace mode(s) from %s to %s", len(f.Modes), legacyPath(dbPath), dbPath)
+	slog.Info("yolo: migrated workspace modes to sqlite", "count", len(f.Modes), "from", legacyPath(dbPath), "to", dbPath)
 	return nil
 }
 
@@ -179,7 +179,7 @@ func (s *Store) Mode(workspaceID string) string {
 	err := s.db.QueryRow(`SELECT mode FROM yolo_modes WHERE workspace_id = ?`, workspaceID).Scan(&mode)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			log.Printf("yolo: query mode for %s: %v", workspaceID, err)
+			slog.Error("yolo: query mode", "workspace_id", workspaceID, "err", err)
 		}
 		return ""
 	}

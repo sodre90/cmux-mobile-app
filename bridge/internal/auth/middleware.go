@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -29,7 +29,7 @@ func Require(s *Store, next http.Handler) http.Handler {
 				httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
-			log.Printf("auth: verify: %v", err)
+			slog.Error("auth: verify", "err", err)
 			httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 			return
 		}

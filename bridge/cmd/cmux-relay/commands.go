@@ -4,7 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -20,7 +20,7 @@ func runDevices(args []string) int {
 	}
 	_, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
-		log.Printf("devices: %v", err)
+		slog.Error("devices: load store", "err", err)
 		return 1
 	}
 	rest := fs.Args()
@@ -65,7 +65,7 @@ func runTenants(args []string) int {
 	}
 	_, store, err := cli.LoadStore(*cfgPath)
 	if err != nil {
-		log.Printf("tenants: %v", err)
+		slog.Error("tenants: load store", "err", err)
 		return 1
 	}
 	rest := fs.Args()
@@ -73,7 +73,7 @@ func runTenants(args []string) int {
 	case len(rest) == 0 || rest[0] == "list":
 		tenants, err := store.ListTenants()
 		if err != nil {
-			log.Printf("tenants: %v", err)
+			slog.Error("tenants: list", "err", err)
 			return 1
 		}
 		if len(tenants) == 0 {

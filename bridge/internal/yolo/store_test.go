@@ -2,7 +2,7 @@ package yolo
 
 import (
 	"bytes"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,14 +67,14 @@ func TestValid(t *testing.T) {
 	}
 }
 
-// captureLog redirects the standard logger to a buffer for the duration of
-// the test, restoring it on cleanup.
+// captureLog redirects the default slog logger to a buffer for the duration
+// of the test, restoring it on cleanup.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	return &buf
 }
 

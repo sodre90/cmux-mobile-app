@@ -2,7 +2,7 @@ package relay
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -91,10 +91,10 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) 
 		}
 		if err := push.Send(ctx, dev.FCMToken, "", "", data); err != nil {
 			failed++
-			log.Printf("relay: attention push failed (tenant=%q kind=%s ws=%s): %v", tenantID, f.Kind, f.WorkspaceID, err)
+			slog.Warn("relay: attention push failed", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "err", err)
 			continue
 		}
 		sent++
 	}
-	log.Printf("relay: attention push (tenant=%q kind=%s ws=%s) sent=%d failed=%d encrypted=%d", tenantID, f.Kind, f.WorkspaceID, sent, failed, encrypted)
+	slog.Info("relay: attention push sent", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "sent", sent, "failed", failed, "encrypted", encrypted)
 }

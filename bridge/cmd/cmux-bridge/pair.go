@@ -9,7 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -181,7 +181,7 @@ func runPairDevice(args []string) int {
 	}
 	cfg, err := config.LoadAgent(*cfgPath)
 	if err != nil {
-		log.Printf("pair-device: %v", err)
+		slog.Error("pair-device: load config", "err", err)
 		return 1
 	}
 
@@ -189,16 +189,16 @@ func runPairDevice(args []string) int {
 	var client *http.Client
 	if *direct {
 		if cfg.DirectListen == "" {
-			log.Printf("pair-device: --direct requires direct_listen to be set in %s", *cfgPath)
+			slog.Error("pair-device: --direct requires direct_listen to be set", "config", *cfgPath)
 			return 1
 		}
 		st, err := tailscaleSelfStatus(context.Background())
 		if err != nil {
-			log.Printf("pair-device: tailscale status: %v", err)
+			slog.Error("pair-device: tailscale status", "err", err)
 			return 1
 		}
 		if st.DNSName == "" {
-			log.Printf("pair-device: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
+			slog.Error("pair-device: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
 			return 1
 		}
 		host := strings.TrimSuffix(st.DNSName, ".")
@@ -209,17 +209,17 @@ func runPairDevice(args []string) int {
 		client = &http.Client{Timeout: pairingRequestTimeout}
 	} else {
 		if cfg.RelayURL == "" {
-			log.Printf("pair-device: relay_url is required (or pass --direct)")
+			slog.Error("pair-device: relay_url is required (or pass --direct)")
 			return 1
 		}
 		agentBase, err = httpsBaseFromRelayURL(cfg.RelayURL)
 		if err != nil {
-			log.Printf("pair-device: %v", err)
+			slog.Error("pair-device: relay url", "err", err)
 			return 1
 		}
 		tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
 		if err != nil {
-			log.Printf("pair-device: tls: %v", err)
+			slog.Error("pair-device: tls", "err", err)
 			return 1
 		}
 		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: pairingRequestTimeout}
@@ -230,17 +230,17 @@ func runPairDevice(args []string) int {
 
 	identity, err := e2e.LoadOrCreateIdentity(cfg.IdentityKey)
 	if err != nil {
-		log.Printf("pair-device: e2e identity: %v", err)
+		slog.Error("pair-device: e2e identity", "err", err)
 		return 1
 	}
 	sessions, err := e2e.OpenStore(cfg.SessionStore)
 	if err != nil {
-		log.Printf("pair-device: open session store: %v", err)
+		slog.Error("pair-device: open session store", "err", err)
 		return 1
 	}
 
 	if err := pairDevice(client, agentBase, devicePairURL, identity, sessions, os.Stdout, 2*time.Second, time.Now().Add(*timeout)); err != nil {
-		log.Printf("pair-device: %v", err)
+		slog.Error("pair-device: pair", "err", err)
 		return 1
 	}
 	return 0

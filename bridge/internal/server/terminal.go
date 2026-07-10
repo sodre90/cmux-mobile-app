@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -14,6 +14,17 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
+
+// deviceLogID returns the last 6 hex characters of a device ID (itself the
+// full SHA-256 hash of a bearer token, see auth.Device.TokenHash) -- enough
+// to correlate log lines for one device without ever logging the full hash,
+// mirroring auth.Device.HashSuffix.
+func deviceLogID(deviceID string) string {
+	if len(deviceID) < 6 {
+		return deviceID
+	}
+	return deviceID[len(deviceID)-6:]
+}
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -44,7 +55,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = c.Close() }()
 	start := time.Now()
-	log.Printf("terminal %s: connected", id)
+	slog.Info("terminal: connected", "surface_id", id, "device", deviceLogID(deviceID))
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
@@ -64,13 +75,13 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	fr, err := s.fetchReplay(ctx, id)
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("terminal %s: initial replay failed after %s: %v", id, time.Since(start), err)
+			slog.Warn("terminal: initial replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 		}
 		return
 	}
 	fr.Type = "replay"
 	if err := write(fr); err != nil {
-		log.Printf("terminal %s: initial write failed after %s: %v", id, time.Since(start), err)
+		slog.Warn("terminal: initial write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 		return
 	}
 	// cmux's top-level seq (and render_grid.state_seq) is always 0, so we can't
@@ -86,7 +97,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("terminal %s: closed after %s", id, time.Since(start))
+			slog.Info("terminal: closed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds())
 			return
 		case <-t.C:
 			next, err := s.fetchReplay(ctx, id)
@@ -98,7 +109,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 				// of the disconnect already logged by the read loop, not
 				// a genuine RPC failure worth alarming about.
 				if ctx.Err() == nil {
-					log.Printf("terminal %s: poll replay failed after %s: %v", id, time.Since(start), err)
+					slog.Warn("terminal: poll replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 				}
 				return
 			}
@@ -108,7 +119,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			lastGrid = next.Grid
 			next.Type = "output"
 			if err := write(next); err != nil {
-				log.Printf("terminal %s: output write failed after %s: %v", id, time.Since(start), err)
+				slog.Warn("terminal: output write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 				return
 			}
 		}
@@ -138,22 +149,22 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 		var up wire.TerminalUp
 		if s.sessions == nil {
 			if err := c.ReadJSON(&up); err != nil {
-				log.Printf("terminal %s: read loop ended: %v", id, err)
+				slog.Warn("terminal: read loop ended", "surface_id", id, "err", err)
 				return
 			}
 		} else {
 			_, raw, err := c.ReadMessage()
 			if err != nil {
-				log.Printf("terminal %s: read loop ended: %v", id, err)
+				slog.Warn("terminal: read loop ended", "surface_id", id, "err", err)
 				return
 			}
 			plain, err := s.sessions.DecryptFrame(deviceID, raw)
 			if err != nil {
-				log.Printf("terminal %s: decrypt failed: %v", id, err)
+				slog.Warn("terminal: decrypt failed", "surface_id", id, "device", deviceLogID(deviceID), "err", err)
 				return
 			}
 			if err := json.Unmarshal(plain, &up); err != nil {
-				log.Printf("terminal %s: bad frame json: %v", id, err)
+				slog.Warn("terminal: bad frame json", "surface_id", id, "err", err)
 				return
 			}
 		}
@@ -175,7 +186,7 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 			continue // no seq set (shouldn't happen from the app) -- nothing to ack.
 		}
 		if err := write(wire.TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil}); err != nil {
-			log.Printf("terminal %s: ack write failed: %v", id, err)
+			slog.Warn("terminal: ack write failed", "surface_id", id, "err", err)
 			return
 		}
 	}

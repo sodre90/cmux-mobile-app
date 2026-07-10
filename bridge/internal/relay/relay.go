@@ -5,7 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -261,12 +261,12 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.reg.Set(tenantID, sess, cancel)
-	log.Printf("relay: agent tunnel up (tenant=%q)", tenantID)
+	slog.Info("relay: agent tunnel up", "tenant_id", tenantID)
 	if r.onSession != nil {
 		go r.onSession(ctx, tenantID, sess)
 	}
 	<-sess.CloseChan() // block until the tunnel dies
-	log.Printf("relay: agent tunnel down (tenant=%q)", tenantID)
+	slog.Info("relay: agent tunnel down", "tenant_id", tenantID)
 	r.reg.Clear(tenantID, sess)
 	cancel()
 }
@@ -276,7 +276,8 @@ type registerReq struct {
 }
 
 func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
-	if _, ok := auth.DeviceFromContext(req.Context()); !ok {
+	dev, ok := auth.DeviceFromContext(req.Context())
+	if !ok {
 		httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -291,7 +292,7 @@ func (r *Relay) handleRegister(w http.ResponseWriter, req *http.Request) {
 			httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		log.Printf("relay: set fcm token: %v", err)
+		slog.Error("relay: set fcm token", "tenant_id", dev.TenantID, "device", dev.HashSuffix, "err", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -322,7 +323,7 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if n, err := r.store.TenantCount(); err != nil {
-		log.Printf("relay: tenant count: %v", err)
+		slog.Error("relay: tenant count", "err", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	} else if n >= r.maxTenants {
@@ -337,7 +338,7 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	}
 	tenantID, err := r.store.CreateTenant()
 	if err != nil {
-		log.Printf("relay: create tenant: %v", err)
+		slog.Error("relay: create tenant", "err", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -346,13 +347,13 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 		// The tenant row was already created above; a bad CSR must not leave
 		// it active-but-unusable, so revoke it rather than orphan it.
 		if !r.store.RevokeTenant(tenantID) {
-			log.Printf("relay: failed to revoke orphaned tenant %q after invalid CSR", tenantID)
+			slog.Error("relay: failed to revoke orphaned tenant after invalid CSR", "tenant_id", tenantID)
 		}
 		httpjson.Error(w, http.StatusBadRequest, "invalid_csr")
 		return
 	}
 	if err := r.store.RecordAgentCert(tenantID, serial); err != nil {
-		log.Printf("relay: record agent cert: %v", err)
+		slog.Error("relay: record agent cert", "tenant_id", tenantID, "err", err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -360,5 +361,5 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 		TenantID: tenantID,
 		CertPEM:  string(certPEM),
 	})
-	log.Printf("relay: registered new tenant %q", tenantID)
+	slog.Info("relay: registered new tenant", "tenant_id", tenantID)
 }

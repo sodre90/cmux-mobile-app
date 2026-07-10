@@ -7,7 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -147,12 +147,12 @@ func refreshDirectCert(ctx context.Context, domain, certFile, keyFile string, ce
 		case <-ticker.C:
 		}
 		if err := tailscaleCert(ctx, domain, certFile, keyFile, certMinValidity); err != nil {
-			log.Printf("agent: direct mode: cert refresh failed, keeping current cert: %v", err)
+			slog.Warn("agent: direct mode: cert refresh failed, keeping current cert", "err", err)
 			continue
 		}
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			log.Printf("agent: direct mode: cert refresh: reload failed, keeping current cert: %v", err)
+			slog.Warn("agent: direct mode: cert refresh: reload failed, keeping current cert", "err", err)
 			continue
 		}
 		certVal.Store(&cert)
@@ -225,7 +225,7 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 		NextProtos: []string{"h2", "http/1.1"},
 	})
 
-	log.Printf("agent: direct listener up on %s (tailscale-only)", bindAddr)
+	slog.Info("agent: direct listener up (tailscale-only)", "addr", bindAddr)
 	errCh := make(chan error, 1)
 	go func() { errCh <- http.Serve(tlsLn, mux) }()
 	select {
@@ -245,20 +245,20 @@ func runAgent(args []string) int {
 	}
 	cfg, err := config.LoadAgent(*cfgPath)
 	if err != nil {
-		log.Printf("agent: %v", err)
+		slog.Error("agent: load config", "err", err)
 		return 1
 	}
 	if err := ensureRegistered(cfg); err != nil {
-		log.Printf("agent: %v", err)
+		slog.Error("agent: register", "err", err)
 		return 1
 	}
 	if cfg.RelayURL == "" {
-		log.Printf("agent: relay_url is required")
+		slog.Error("agent: relay_url is required")
 		return 1
 	}
 	tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
 	if err != nil {
-		log.Printf("agent: tls: %v", err)
+		slog.Error("agent: tls", "err", err)
 		return 1
 	}
 
@@ -271,35 +271,35 @@ func runAgent(args []string) int {
 		var err error
 		directStore, err = auth.Open(cfg.DirectAuthStore)
 		if err != nil {
-			log.Printf("agent: direct mode: open auth store: %v", err)
+			slog.Error("agent: direct mode: open auth store", "err", err)
 			return 1
 		}
 		directTenantID, err = ensureDirectTenant(directStore)
 		if err != nil {
-			log.Printf("agent: direct mode: ensure tenant: %v", err)
+			slog.Error("agent: direct mode: ensure tenant", "err", err)
 			return 1
 		}
 	}
 	srv := server.New(&cmux.Client{Bin: cfg.CmuxBin, FastPath: true}, directStore)
 	sessions, err := e2e.OpenStore(cfg.SessionStore)
 	if err != nil {
-		log.Printf("agent: open session store: %v", err)
+		slog.Error("agent: open session store", "err", err)
 		return 1
 	}
 	srv.SetSessions(sessions)
 
 	yoloStore, err := yolo.Open(cfg.YoloStore)
 	if err != nil {
-		log.Printf("agent: open yolo store: %v", err)
+		slog.Error("agent: open yolo store", "err", err)
 		return 1
 	}
 	srv.SetYoloStore(yoloStore)
 	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
 		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
-			log.Printf("agent: direct-mode push disabled: %v", err)
+			slog.Warn("agent: direct-mode push disabled", "err", err)
 		} else {
 			srv.SetPusher(p, directTenantID)
-			log.Printf("agent: direct-mode FCM push enabled for project %s", cfg.FCMProjectID)
+			slog.Info("agent: direct-mode FCM push enabled", "fcm_project_id", cfg.FCMProjectID)
 		}
 	}
 	go srv.RunEvents(ctx)
@@ -309,16 +309,16 @@ func runAgent(args []string) int {
 		certDir := filepath.Join(filepath.Dir(cfg.DirectAuthStore), "direct-certs")
 		go func() {
 			if err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler()); err != nil && ctx.Err() == nil {
-				log.Printf("agent: direct listener ended: %v", err)
+				slog.Error("agent: direct listener ended", "err", err)
 			}
 		}()
 	}
 
 	retry := backoff.New(time.Second, 30*time.Second)
 	for ctx.Err() == nil {
-		log.Printf("agent: dialing relay %s", cfg.RelayURL)
+		slog.Info("agent: dialing relay", "relay_url", cfg.RelayURL)
 		if err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler); err != nil {
-			log.Printf("agent: tunnel ended: %v", err)
+			slog.Warn("agent: tunnel ended", "err", err)
 		}
 		if ctx.Err() != nil {
 			break
