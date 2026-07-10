@@ -46,7 +46,11 @@ func newTestServer(t *testing.T, script string) (*Server, string) {
 	tenant, _ := store.CreateTenant()
 	tok, _ := store.Issue(tenant, "phone", "test-device-pubkey-b64")
 	s := New(&cmux.Client{Bin: bin}, store)
-	s.SetYoloStore(yolo.OpenStore(t.TempDir() + "/yolo.json"))
+	yoloStore, err := yolo.Open(t.TempDir() + "/yolo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetYoloStore(yoloStore)
 	return s, tok
 }
 
