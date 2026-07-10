@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.terminal
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sodre90.cmuxremote.BuildConfig
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.data.TerminalSocket
@@ -60,10 +61,14 @@ class TerminalViewModel(
     val yoloMode: StateFlow<String> = _yoloMode.asStateFlow()
 
     // The seq/ack bookkeeping behind the never-double-send guarantee for
-    // non-idempotent terminal input -- see DeliveryTracker.
+    // non-idempotent terminal input -- see DeliveryTracker. Its log lines
+    // carry only dispatch metadata (seq/type/sent-flag) plus a redacted text
+    // placeholder (see describeForLog) -- never raw keystrokes -- but
+    // per-keystroke logcat output is still noise worth keeping out of
+    // release builds.
     private val tracker = DeliveryTracker(
         send = { activeSocket?.send(it) ?: false },
-        log = { Log.d(TAG, it) },
+        log = { if (BuildConfig.DEBUG) Log.d(TAG, it) },
     )
 
     val deliveryStatus: StateFlow<DeliveryStatus> = tracker.deliveryStatus
