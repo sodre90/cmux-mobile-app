@@ -17,7 +17,7 @@ if (File(projectDir, "google-services.json").exists()) {
 
 android {
     namespace = "com.sodre90.cmuxremote"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.sodre90.cmuxremote"
