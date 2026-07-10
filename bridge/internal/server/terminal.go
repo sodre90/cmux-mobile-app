@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -161,6 +162,7 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 			plain, err := s.sessions.DecryptFrame(deviceID, raw)
 			if err != nil {
 				slog.Warn("terminal: decrypt failed", "surface_id", id, "device", deviceLogID(deviceID), "err", err)
+				metrics.E2EDecryptFailuresTotal.Add("terminal_frame", 1)
 				return
 			}
 			if err := json.Unmarshal(plain, &up); err != nil {

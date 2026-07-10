@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 )
 
 // SetSessions enables the opt-in e2e content-encryption layer. Called only by
@@ -61,6 +63,8 @@ func (s *Server) encryptionMiddleware(next http.Handler) http.Handler {
 			if len(envelope) > 0 {
 				plaintext, err := s.sessions.DecryptBody(deviceID, envelope)
 				if err != nil {
+					slog.Warn("server: decrypt body failed", "route", r.URL.Path, "device", deviceLogID(deviceID), "err", err)
+					metrics.E2EDecryptFailuresTotal.Add("body", 1)
 					httpjson.Error(w, http.StatusBadRequest, "decrypt_failed")
 					return
 				}

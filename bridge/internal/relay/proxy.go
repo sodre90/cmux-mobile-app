@@ -10,6 +10,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 )
 
 // ErrAgentOffline is returned by the proxy transport when the target
@@ -33,6 +34,7 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			req.Header.Set("X-Relay-Token", relayToken)
 			if dev, ok := auth.DeviceFromContext(req.Context()); ok {
 				req.Header.Set("X-Device-ID", dev.TokenHash)
+				metrics.ProxyRequestsTotal.Add(dev.TenantID, 1)
 			}
 		},
 		Transport: &http.Transport{
@@ -65,6 +67,9 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 			}
 			if errors.Is(err, ErrAgentOffline) {
 				slog.Warn("relay: agent offline", "method", req.Method, "route", req.URL.Path, "tenant_id", tenantID)
+				if tenantID != "" {
+					metrics.ProxyAgentOfflineTotal.Add(tenantID, 1)
+				}
 				httpjson.Error(w, http.StatusServiceUnavailable, "agent_offline")
 				return
 			}

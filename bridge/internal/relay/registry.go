@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"github.com/hashicorp/yamux"
+
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 )
 
 // Registry holds one active agent tunnel session per tenant. A new session
@@ -38,6 +40,7 @@ func (r *Registry) Set(tenantID string, sess *yamux.Session, stop func()) {
 	} else {
 		delete(r.stops, tenantID)
 	}
+	metrics.TunnelsActive.Set(int64(len(r.sess)))
 	r.mu.Unlock()
 
 	if oldStop != nil {
@@ -68,6 +71,7 @@ func (r *Registry) Clear(tenantID string, sess *yamux.Session) {
 		stop = r.stops[tenantID]
 		delete(r.sess, tenantID)
 		delete(r.stops, tenantID)
+		metrics.TunnelsActive.Set(int64(len(r.sess)))
 	}
 	r.mu.Unlock()
 	if stop != nil {

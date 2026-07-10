@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"expvar"
 	"log/slog"
 	"net"
 	"net/http"
@@ -197,6 +198,12 @@ func (r *Relay) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	// expvar registers its own vars process-globally (internal/metrics'
+	// counters and gauges included) regardless of which package incremented
+	// them; mounting its handler here is the only wiring needed to serve
+	// them, since this mux is custom rather than http.DefaultServeMux (the
+	// only target expvar's own init() registers against).
+	mux.Handle("GET /debug/vars", expvar.Handler())
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
 	// Self-service pairing routes (internal/pairing). The issue/status
 	// routes are agent-CN-gated via agentOnly; /devices/pair and

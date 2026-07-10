@@ -13,6 +13,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -69,6 +70,7 @@ func (h *handlers) newPairingCode(w http.ResponseWriter, req *http.Request) {
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	metrics.PairingCodesIssuedTotal.Add(1)
 	httpjson.Write(w, http.StatusOK, wire.PairingCodeResp{
 		Code:      code,
 		ExpiresAt: time.Now().Add(wire.PairingCodeTTL).UTC().Format(time.RFC3339),
@@ -147,6 +149,7 @@ func (h *handlers) devicePair(w http.ResponseWriter, req *http.Request) {
 		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
 		return
 	}
+	metrics.PairingCodesRedeemedTotal.Add(1)
 	httpjson.Write(w, http.StatusOK, wire.DevicePairResp{Token: tok, TenantID: tenantID})
 	slog.Info("pairing: device paired via QR code", "tenant_id", tenantID)
 }

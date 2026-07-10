@@ -18,6 +18,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 )
 
 // ErrNotFound is returned by Verify, Revoke, and SetFCMToken when no
@@ -476,7 +478,11 @@ func (s *Store) RedeemPairingCode(code, name, devicePubkey string) (token, tenan
 		return "", "", false
 	}
 	exp, err := time.Parse(time.RFC3339, expiresAt)
-	if err != nil || time.Now().After(exp) {
+	if err != nil {
+		return "", "", false
+	}
+	if time.Now().After(exp) {
+		metrics.PairingCodesExpiredTotal.Add(1)
 		return "", "", false
 	}
 
@@ -542,7 +548,11 @@ func (s *Store) PairingCodeInfo(code string) (agentPubkey, tenantID, expiresAt s
 		return "", "", "", false
 	}
 	exp, err := time.Parse(time.RFC3339, expiresAt)
-	if err != nil || time.Now().After(exp) {
+	if err != nil {
+		return "", "", "", false
+	}
+	if time.Now().After(exp) {
+		metrics.PairingCodesExpiredTotal.Add(1)
 		return "", "", "", false
 	}
 	return pubkey.String, tenantID, expiresAt, true

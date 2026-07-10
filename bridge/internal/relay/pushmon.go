@@ -12,6 +12,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/backoff"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -96,5 +97,7 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) 
 		}
 		sent++
 	}
+	metrics.PushSentTotal.Add(int64(sent))
+	metrics.PushFailedTotal.Add(int64(failed))
 	slog.Info("relay: attention push sent", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "sent", sent, "failed", failed, "encrypted", encrypted)
 }
