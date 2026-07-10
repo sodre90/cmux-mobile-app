@@ -22,11 +22,20 @@ private const val CR = "\r"
  */
 sealed interface TerminalKey {
     val label: String
+
+    /** What TalkBack announces for this key's button -- describes the action
+     *  (e.g. "Send Ctrl+C (interrupt)"), not [label]'s terminal-glyph shorthand
+     *  (e.g. "^C"), which reads as meaningless punctuation to a screen reader. */
+    val contentDescription: String
     fun sequence(applicationCursorKeys: Boolean): String
 }
 
 /** A key whose byte sequence never changes. */
-data class StaticKey(override val label: String, private val bytes: String) : TerminalKey {
+data class StaticKey(
+    override val label: String,
+    private val bytes: String,
+    override val contentDescription: String,
+) : TerminalKey {
     override fun sequence(applicationCursorKeys: Boolean): String = bytes
 }
 
@@ -35,7 +44,11 @@ data class StaticKey(override val label: String, private val bytes: String) : Te
  * reset it expects CSI (`ESC [ x`). [finalChar] is the trailing letter (A/B/C/D
  * for the arrows, H/F for Home/End) shared by both forms.
  */
-data class CursorKey(override val label: String, private val finalChar: Char) : TerminalKey {
+data class CursorKey(
+    override val label: String,
+    private val finalChar: Char,
+    override val contentDescription: String,
+) : TerminalKey {
     override fun sequence(applicationCursorKeys: Boolean): String =
         ESC + (if (applicationCursorKeys) "O" else "[") + finalChar
 }
@@ -43,24 +56,24 @@ data class CursorKey(override val label: String, private val finalChar: Char) : 
 // The directional arrows, surfaced as an always-visible D-pad (see ArrowPad in
 // TerminalScreen) rather than buried in the scrollable bar. DECCKM-aware like any
 // CursorKey. The final chars D/C (not C/D) match the ANSI codes for left/right.
-val ArrowUp = CursorKey("↑", 'A')
-val ArrowDown = CursorKey("↓", 'B')
-val ArrowLeft = CursorKey("←", 'D')
-val ArrowRight = CursorKey("→", 'C')
+val ArrowUp = CursorKey("↑", 'A', contentDescription = "Up")
+val ArrowDown = CursorKey("↓", 'B', contentDescription = "Down")
+val ArrowLeft = CursorKey("←", 'D', contentDescription = "Left")
+val ArrowRight = CursorKey("→", 'C', contentDescription = "Right")
 
 /** The horizontally-scrolling key bar. The arrows live in the D-pad instead. */
 val TerminalKeys: List<TerminalKey> = listOf(
-    StaticKey("Esc", ESC),
-    StaticKey("Tab", "\t"),
-    StaticKey("⏎", CR),
-    StaticKey("^C", CTRL_C),
-    StaticKey("^D", CTRL_D),
-    StaticKey("^Z", CTRL_Z),
-    CursorKey("Home", 'H'),
-    CursorKey("End", 'F'),
+    StaticKey("Esc", ESC, contentDescription = "Escape"),
+    StaticKey("Tab", "\t", contentDescription = "Tab"),
+    StaticKey("⏎", CR, contentDescription = "Enter"),
+    StaticKey("^C", CTRL_C, contentDescription = "Send Ctrl+C (interrupt)"),
+    StaticKey("^D", CTRL_D, contentDescription = "Send Ctrl+D (end of input)"),
+    StaticKey("^Z", CTRL_Z, contentDescription = "Send Ctrl+Z (suspend)"),
+    CursorKey("Home", 'H', contentDescription = "Home"),
+    CursorKey("End", 'F', contentDescription = "End"),
     // Page keys use the `~` (keypad) form and are unaffected by DECCKM.
-    StaticKey("PgUp", ESC + "[5~"),
-    StaticKey("PgDn", ESC + "[6~"),
+    StaticKey("PgUp", ESC + "[5~", contentDescription = "Page up"),
+    StaticKey("PgDn", ESC + "[6~", contentDescription = "Page down"),
 )
 
 /**

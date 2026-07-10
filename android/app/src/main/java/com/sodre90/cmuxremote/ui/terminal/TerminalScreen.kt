@@ -64,6 +64,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -398,6 +401,7 @@ private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (
     OutlinedButton(
         onClick = { onKey(key.sequence(applicationCursorKeys)) },
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+        modifier = Modifier.semantics { contentDescription = key.contentDescription },
     ) { Text(key.label) }
 }
 
@@ -425,7 +429,10 @@ private fun KeyBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TerminalKeys.forEach { key ->
-                OutlinedButton(onClick = { onKey(key.sequence(applicationCursorKeys)) }) {
+                OutlinedButton(
+                    onClick = { onKey(key.sequence(applicationCursorKeys)) },
+                    modifier = Modifier.semantics { contentDescription = key.contentDescription },
+                ) {
                     Text(key.label)
                 }
             }
@@ -453,5 +460,16 @@ private fun CtrlChip(armed: Boolean, onClick: () -> Unit) {
     } else {
         ButtonDefaults.outlinedButtonColors()
     }
-    OutlinedButton(onClick = onClick, colors = colors) { Text("Ctrl") }
+    OutlinedButton(
+        onClick = onClick,
+        colors = colors,
+        // The armed/unarmed distinction is otherwise color-only (filled vs
+        // outlined) -- stateDescription carries it to TalkBack without
+        // changing the button's role away from the plain "double tap to
+        // activate" hint that matches its actual one-shot-per-tap behavior.
+        modifier = Modifier.semantics {
+            contentDescription = "Ctrl modifier key"
+            stateDescription = if (armed) "Armed, next key sends as Ctrl combination" else "Not armed"
+        },
+    ) { Text("Ctrl") }
 }
