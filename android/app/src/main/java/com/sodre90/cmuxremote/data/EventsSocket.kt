@@ -39,6 +39,7 @@ class EventsSocket(
                                 it.toString(Charsets.UTF_8)
                             )
                         }
+                        .onFailure { android.util.Log.w("EventsSocket", "dropped frame: ${it.message}") }
                         .getOrNull()
                         ?.let { trySend(it) }
                 }
