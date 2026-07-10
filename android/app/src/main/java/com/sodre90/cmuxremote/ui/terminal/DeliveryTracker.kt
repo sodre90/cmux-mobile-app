@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import com.sodre90.cmuxremote.model.TerminalUp
+import com.sodre90.cmuxremote.model.TerminalUpType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,11 +87,11 @@ class DeliveryTracker(
         if (inFlightInputSeq != null || pendingOutbound.isEmpty()) return
         val text = pendingOutbound.toString()
         pendingOutbound.clear()
-        inFlightInputSeq = dispatch(TerminalUp(type = "input", text = text))
+        inFlightInputSeq = dispatch(TerminalUp(type = TerminalUpType.INPUT, text = text))
     }
 
     fun resize(columns: Int, rows: Int) {
-        dispatch(TerminalUp(type = "resize", columns = columns, rows = rows))
+        dispatch(TerminalUp(type = TerminalUpType.RESIZE, columns = columns, rows = rows))
     }
 
     private fun dispatch(up: TerminalUp): Long {

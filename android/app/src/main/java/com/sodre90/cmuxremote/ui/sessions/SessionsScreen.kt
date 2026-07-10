@@ -66,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.R
+import com.sodre90.cmuxremote.model.Attention
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.YoloMode
@@ -563,7 +564,7 @@ private fun WorkspaceCardAttentionPreview() {
                 cwd = "/Users/dev/projects/other-repo",
                 title = "other-repo",
                 hasUnread = true,
-                attention = "permission",
+                attention = Attention.PERMISSION,
                 yoloMode = YoloMode.ALWAYS,
                 terminals = listOf(
                     TerminalPane(id = "t-2", title = "main", ready = true, focused = true, kind = "claude"),
@@ -582,8 +583,8 @@ private fun WorkspaceCardAttentionPreview() {
 
 // Null = no stripe (normal workspace); the color values live in AppColors (theme-level).
 private fun attentionAccent(attention: String): Color? = when (attention) {
-    "permission" -> AppColors.PermissionAccent
-    "input" -> AppColors.WaitingAccent
+    Attention.PERMISSION -> AppColors.PermissionAccent
+    Attention.INPUT -> AppColors.WaitingAccent
     else -> null
 }
 

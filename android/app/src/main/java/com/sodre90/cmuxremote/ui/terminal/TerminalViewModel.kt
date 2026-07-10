@@ -11,6 +11,7 @@ import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
 import com.sodre90.cmuxremote.model.TerminalDown
+import com.sodre90.cmuxremote.model.TerminalDownType
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -125,7 +126,7 @@ class TerminalViewModel(
                 onConnected = tracker::onConnected,
                 onDisconnected = tracker::onDisconnected,
                 onFrame = onFrame@{ frame ->
-                    if (frame.type == "ack") {
+                    if (frame.type == TerminalDownType.ACK) {
                         tracker.onAck(frame.seq, frame.ok)
                         return@onFrame false
                     }

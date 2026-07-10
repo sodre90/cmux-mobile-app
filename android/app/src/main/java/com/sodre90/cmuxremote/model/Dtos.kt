@@ -26,12 +26,23 @@ data class Workspace(
     val title: String = "",
     val preview: String = "",
     @SerialName("has_unread") val hasUnread: Boolean = false,
-    /** Agent attention state derived by the bridge: "permission", "input", or "". */
+    /** Agent attention state derived by the bridge (see [Attention]); "" means none. */
     val attention: String = "",
     /** This workspace's YOLO auto-reply mode (see [YoloMode]); "" means off. */
     @SerialName("yolo_mode") val yoloMode: String = "",
     val terminals: List<TerminalPane> = emptyList(),
 )
+
+/**
+ * [Workspace.attention]'s possible values -- the agent-attention state the
+ * bridge derives per workspace: blocked on a permission prompt, idle waiting
+ * for input, or [NONE].
+ */
+object Attention {
+    const val NONE = ""
+    const val PERMISSION = "permission"
+    const val INPUT = "input"
+}
 
 /**
  * YOLO mode's auto-reply levels for permission prompts. The bridge persists
@@ -87,9 +98,10 @@ data class EventFrame(
 )
 
 /**
- * A terminal frame pushed down to the client: a "replay"/"output" render-grid
- * snapshot, or an "ack" echoing a [TerminalUp.seq] back with [ok] reflecting
- * whether the bridge's cmux RPC for that message actually succeeded.
+ * A terminal frame pushed down to the client: a [TerminalDownType.REPLAY]/
+ * [TerminalDownType.OUTPUT] render-grid snapshot, or an [TerminalDownType.ACK]
+ * echoing a [TerminalUp.seq] back with [ok] reflecting whether the bridge's
+ * cmux RPC for that message actually succeeded.
  */
 @Serializable
 data class TerminalDown(
@@ -102,9 +114,23 @@ data class TerminalDown(
 )
 
 /**
- * A terminal message sent up from the client: input, paste, or resize. [seq]
- * is a client-assigned monotonic id (starting at 1; 0 means unset) echoed back
- * in the matching "ack" [TerminalDown].
+ * [TerminalDown.type]'s possible values. Plain `String` (not an enum) on the
+ * DTO: an unrecognized future frame type must still decode instead of
+ * failing the whole socket, matching TerminalViewModel's existing
+ * fallthrough (anything that isn't [ACK] is treated as a render-grid frame
+ * if it carries one, ignored otherwise).
+ */
+object TerminalDownType {
+    const val ACK = "ack"
+    const val REPLAY = "replay"
+    const val OUTPUT = "output"
+}
+
+/**
+ * A terminal message sent up from the client: [TerminalUpType.INPUT] or
+ * [TerminalUpType.RESIZE]. [seq] is a client-assigned monotonic id (starting
+ * at 1; 0 means unset) echoed back in the matching [TerminalDownType.ACK]
+ * [TerminalDown].
  */
 @Serializable
 data class TerminalUp(
@@ -114,6 +140,12 @@ data class TerminalUp(
     val rows: Int? = null,
     val seq: Long = 0L,
 )
+
+/** [TerminalUp.type]'s possible values -- what this client ever sends. */
+object TerminalUpType {
+    const val INPUT = "input"
+    const val RESIZE = "resize"
+}
 
 /** A reply to a pending feed item (permission / question / exit-plan). */
 @Serializable

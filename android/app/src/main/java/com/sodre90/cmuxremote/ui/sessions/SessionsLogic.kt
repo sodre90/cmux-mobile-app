@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.sessions
 
+import com.sodre90.cmuxremote.model.Attention
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.yoloModeLabel
@@ -80,8 +81,8 @@ fun workspaceStatusDescription(
 ): String? {
     val parts = buildList {
         when (ws.attention) {
-            "permission" -> add(permissionLabel)
-            "input" -> add(waitingLabel)
+            Attention.PERMISSION -> add(permissionLabel)
+            Attention.INPUT -> add(waitingLabel)
         }
         if (ws.hasUnread) add(unreadLabel)
     }
