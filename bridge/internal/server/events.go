@@ -129,6 +129,7 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 			continue
 		}
 		if f, ok := classify(m); ok {
+			s.lastEventAt.Store(time.Now().UnixNano())
 			if f.NeedsAttention {
 				s.enrichTitle(ctx, &f)
 				// Give YOLO a chance to silently resolve this before anyone is

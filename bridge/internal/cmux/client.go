@@ -31,6 +31,13 @@ type Client struct {
 	// subprocess-only behavior as before.
 	FastPath bool
 
+	// OnReached, if set, is called after Rpc completes successfully (either
+	// fast-path socket or subprocess). Used only to drive the
+	// "last successfully reached cmux" status surface (cmux-bridge status,
+	// see internal/status); nil is a safe no-op default, so every existing
+	// caller and test is unaffected.
+	OnReached func()
+
 	poolOnce sync.Once
 	pool     *socketPool
 }
@@ -56,6 +63,9 @@ func (c *Client) bin() string {
 func (c *Client) Rpc(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if c.FastPath {
 		if raw, committed, err := c.fastPathPool().rpc(ctx, method, params); committed {
+			if err == nil {
+				c.markReached()
+			}
 			return raw, err
 		}
 	}
@@ -75,7 +85,15 @@ func (c *Client) Rpc(ctx context.Context, method string, params any) (json.RawMe
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("cmux rpc %s: %w: %s", method, err, stderr.String())
 	}
+	c.markReached()
 	return json.RawMessage(stdout.Bytes()), nil
+}
+
+// markReached calls OnReached if set.
+func (c *Client) markReached() {
+	if c.OnReached != nil {
+		c.OnReached()
+	}
 }
 
 // Events starts `cmux events <args...>` and returns the running command plus a

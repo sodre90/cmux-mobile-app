@@ -189,6 +189,36 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 	}
 }
 
+func TestIngestEventsUpdatesLastEventAt(t *testing.T) {
+	s, _ := newTestServer(t, "#!/bin/sh\necho '{}'\n")
+
+	if got := s.LastEventAt(); !got.IsZero() {
+		t.Fatalf("LastEventAt before any event = %v, want zero", got)
+	}
+
+	notification := `{"type":"event","name":"notification.shown","category":"notification","payload":{"title":"hi"}}`
+	s.ingestEvents(context.Background(), strings.NewReader(notification+"\n"))
+
+	got := s.LastEventAt()
+	if got.IsZero() {
+		t.Fatal("LastEventAt after a classified event should be non-zero")
+	}
+	if time.Since(got) > 5*time.Second {
+		t.Fatalf("LastEventAt = %v, too far in the past", got)
+	}
+}
+
+func TestIngestEventsSkipsLastEventAtForUnclassifiedNoise(t *testing.T) {
+	s, _ := newTestServer(t, "#!/bin/sh\necho '{}'\n")
+
+	noise := `{"type":"event","name":"pane.focused","category":"pane","payload":{}}`
+	s.ingestEvents(context.Background(), strings.NewReader(noise+"\n"))
+
+	if got := s.LastEventAt(); !got.IsZero() {
+		t.Fatalf("LastEventAt after only unclassified noise = %v, want zero", got)
+	}
+}
+
 func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
 	// Reuses sessions_test.go's fakeWorkspaceList: workspace "882CA6F0" has
 	// title "✳ Build options" (cleaned to "Build options") and preview "Build

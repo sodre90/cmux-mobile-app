@@ -5,6 +5,7 @@ package server
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
@@ -37,6 +38,20 @@ type Server struct {
 	// implicit tenant. Only meaningful together with pusher, so both are set
 	// by the same call.
 	directTenantID string
+	// lastEventAt is UnixNano of the last frame ingestEvents processed off
+	// the `cmux events --reconnect` stream (0 means "none yet"), read by
+	// LastEventAt for the cmux-bridge status subcommand.
+	lastEventAt atomic.Int64
+}
+
+// LastEventAt returns when this agent last processed a frame from its cmux
+// events stream, or the zero time if none has arrived yet.
+func (s *Server) LastEventAt() time.Time {
+	ns := s.lastEventAt.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 // SetYoloStore enables per-workspace YOLO auto-reply. Called only by

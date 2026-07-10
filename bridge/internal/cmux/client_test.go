@@ -53,6 +53,38 @@ exit 3
 	}
 }
 
+func TestRpcCallsOnReachedOnSuccess(t *testing.T) {
+	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\nprintf '{}'\n")
+	var reached int
+	c := &Client{Bin: bin, OnReached: func() { reached++ }}
+	if _, err := c.Rpc(context.Background(), "mobile.host.status", nil); err != nil {
+		t.Fatal(err)
+	}
+	if reached != 1 {
+		t.Fatalf("OnReached called %d times, want 1", reached)
+	}
+}
+
+func TestRpcDoesNotCallOnReachedOnError(t *testing.T) {
+	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\nexit 1\n")
+	var reached int
+	c := &Client{Bin: bin, OnReached: func() { reached++ }}
+	if _, err := c.Rpc(context.Background(), "x", nil); err == nil {
+		t.Fatal("want error from a failing subprocess")
+	}
+	if reached != 0 {
+		t.Fatalf("OnReached called %d times on a failed call, want 0", reached)
+	}
+}
+
+func TestRpcNilOnReachedIsSafe(t *testing.T) {
+	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\nprintf '{}'\n")
+	c := &Client{Bin: bin}
+	if _, err := c.Rpc(context.Background(), "mobile.host.status", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEventsStreamsLines(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, `#!/bin/sh
 printf '{"seq":1}\n{"seq":2}\n'

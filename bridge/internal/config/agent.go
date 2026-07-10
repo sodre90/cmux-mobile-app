@@ -57,6 +57,10 @@ type AgentConfig struct {
 	// FCMCredentials is the path to a Google service-account JSON key for
 	// direct-mode push. Empty disables it.
 	FCMCredentials string `toml:"fcm_credentials"`
+	// StatusFile is the path to the small JSON health snapshot this agent
+	// writes periodically (see internal/status), read by `cmux-bridge
+	// status`.
+	StatusFile string `toml:"status_file"`
 }
 
 func agentDefaults() AgentConfig {
@@ -66,6 +70,7 @@ func agentDefaults() AgentConfig {
 		SessionStore:    "~/.config/cmux-bridge/sessions.db",
 		YoloStore:       "~/.config/cmux-bridge/yolo.db",
 		DirectAuthStore: "~/.config/cmux-bridge/direct-auth.db",
+		StatusFile:      "~/.config/cmux-bridge/status.json",
 	}
 }
 
@@ -94,5 +99,6 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.YoloStore = expandHome(cfg.YoloStore)
 	cfg.DirectAuthStore = expandHome(cfg.DirectAuthStore)
 	cfg.FCMCredentials = expandHome(cfg.FCMCredentials)
+	cfg.StatusFile = expandHome(cfg.StatusFile)
 	return cfg, nil
 }

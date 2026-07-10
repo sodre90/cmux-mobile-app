@@ -191,3 +191,31 @@ func TestLoadAgentExpandsFCMCredentialsHome(t *testing.T) {
 		t.Fatalf("FCMCredentials = %q", cfg.FCMCredentials)
 	}
 }
+
+func TestLoadAgentDefaultsStatusFilePath(t *testing.T) {
+	cfg, err := LoadAgent(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StatusFile == "" || strings.Contains(cfg.StatusFile, "~") {
+		t.Fatalf("StatusFile default not expanded: %q", cfg.StatusFile)
+	}
+	if !strings.HasSuffix(cfg.StatusFile, "status.json") {
+		t.Fatalf("StatusFile = %q", cfg.StatusFile)
+	}
+}
+
+func TestLoadAgentParsesStatusFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.toml")
+	if err := os.WriteFile(path, []byte(`status_file = "/c/status.json"`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StatusFile != "/c/status.json" {
+		t.Fatalf("StatusFile = %q", cfg.StatusFile)
+	}
+}

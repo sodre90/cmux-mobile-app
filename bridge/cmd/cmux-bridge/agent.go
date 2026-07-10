@@ -27,9 +27,16 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/server"
+	"github.com/sodre90/cmux-bridge/internal/status"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
+
+// statusWriteInterval is how often runAgent persists its status.Snapshot to
+// disk for `cmux-bridge status` to read. Short enough that an operator never
+// waits long for a state change to show up, long enough that it's a
+// negligible amount of disk I/O.
+const statusWriteInterval = 5 * time.Second
 
 // certRefreshInterval is how often serveDirect re-checks the direct-mode
 // TLS certificate's remaining validity via `tailscale cert`.
@@ -73,12 +80,18 @@ func loadTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
 
 // dialAndServe runs one tunnel lifecycle: dial the relay, then serve the handler
 // over the yamux session until it dies. Returns when the session ends.
-func dialAndServe(ctx context.Context, relayURL string, tlsCfg *tls.Config, handler http.Handler) error {
+// onConnected, if not nil, is called once the dial succeeds, before serving
+// -- runAgent uses it to drive the relay-tunnel-up status for `cmux-bridge
+// status`.
+func dialAndServe(ctx context.Context, relayURL string, tlsCfg *tls.Config, handler http.Handler, onConnected func()) error {
 	sess, err := tunnel.Dial(ctx, relayURL, tlsCfg, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = sess.Close() }()
+	if onConnected != nil {
+		onConnected()
+	}
 	return http.Serve(sess, handler)
 }
 
@@ -172,7 +185,10 @@ func refreshDirectCert(ctx context.Context, domain, certFile, keyFile string, ce
 // ACLs are the access-control boundary for these routes (some of which,
 // like the pairing endpoints, are otherwise unauthenticated), so listening
 // on 0.0.0.0/[::] here would let any LAN-adjacent device reach them too.
-func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler) error {
+// onListening, if not nil, is called once the TLS listener is up, just
+// before it starts serving -- runAgent uses it to drive the direct-listener
+// status for `cmux-bridge status`.
+func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler, onListening func()) error {
 	mux := http.NewServeMux()
 	server.MountDirectPairing(mux, store, tenantID)
 	mux.Handle("/", handler)
@@ -226,6 +242,9 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 	})
 
 	slog.Info("agent: direct listener up (tailscale-only)", "addr", bindAddr)
+	if onListening != nil {
+		onListening()
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- http.Serve(tlsLn, mux) }()
 	select {
@@ -280,7 +299,15 @@ func runAgent(args []string) int {
 			return 1
 		}
 	}
-	srv := server.New(&cmux.Client{Bin: cfg.CmuxBin, FastPath: true}, directStore)
+	var lastCmuxReached atomic.Value // time.Time
+	cmuxClient := &cmux.Client{
+		Bin:      cfg.CmuxBin,
+		FastPath: true,
+		OnReached: func() {
+			lastCmuxReached.Store(time.Now())
+		},
+	}
+	srv := server.New(cmuxClient, directStore)
 	sessions, err := e2e.OpenStore(cfg.SessionStore)
 	if err != nil {
 		slog.Error("agent: open session store", "err", err)
@@ -305,10 +332,29 @@ func runAgent(args []string) int {
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
+	var relayTunnelUp, directListenerUp atomic.Bool
+	go status.RunWriter(ctx, cfg.StatusFile, statusWriteInterval, func() status.Snapshot {
+		var lastReached time.Time
+		if t, ok := lastCmuxReached.Load().(time.Time); ok {
+			lastReached = t
+		}
+		return status.Snapshot{
+			WrittenAt:         time.Now(),
+			RelayTunnelUp:     relayTunnelUp.Load(),
+			DirectModeEnabled: cfg.DirectListen != "",
+			DirectListenerUp:  directListenerUp.Load(),
+			LastCmuxReachedAt: lastReached,
+			LastEventAt:       srv.LastEventAt(),
+		}
+	})
+
 	if cfg.DirectListen != "" {
 		certDir := filepath.Join(filepath.Dir(cfg.DirectAuthStore), "direct-certs")
 		go func() {
-			if err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler()); err != nil && ctx.Err() == nil {
+			err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler(),
+				func() { directListenerUp.Store(true) })
+			directListenerUp.Store(false)
+			if err != nil && ctx.Err() == nil {
 				slog.Error("agent: direct listener ended", "err", err)
 			}
 		}()
@@ -317,7 +363,9 @@ func runAgent(args []string) int {
 	retry := backoff.New(time.Second, 30*time.Second)
 	for ctx.Err() == nil {
 		slog.Info("agent: dialing relay", "relay_url", cfg.RelayURL)
-		if err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler); err != nil {
+		err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler, func() { relayTunnelUp.Store(true) })
+		relayTunnelUp.Store(false)
+		if err != nil {
 			slog.Warn("agent: tunnel ended", "err", err)
 		}
 		if ctx.Err() != nil {
