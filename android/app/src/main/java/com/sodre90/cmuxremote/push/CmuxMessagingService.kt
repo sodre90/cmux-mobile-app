@@ -20,10 +20,12 @@ import kotlinx.coroutines.launch
 /**
  * Receives FCM pushes. On a data message with `type=attention` it posts a
  * notification that deep-links to the workspace that needs attention (resolved
- * to its exact terminal by CmuxNavHost, since cmux never tells us the pane); on
- * a new token it registers the device with the bridge. Firebase only
- * initialises when `app/google-services.json` is present — without it these
- * callbacks never fire, so the app still builds and runs with push inactive.
+ * to its exact terminal by CmuxNavHost, since cmux never tells us the pane).
+ * `type=test` (see ConnectionSettingsScreen's "Send test notification") posts
+ * the same way but with no workspace to deep-link to. On a new token it
+ * registers the device with the bridge. Firebase only initialises when
+ * `app/google-services.json` is present — without it these callbacks never
+ * fire, so the app still builds and runs with push inactive.
  */
 class CmuxMessagingService : FirebaseMessagingService() {
 
@@ -46,7 +48,8 @@ class CmuxMessagingService : FirebaseMessagingService() {
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
-        if (message.data["type"] != "attention") return
+        val type = message.data["type"]
+        if (type != "attention" && type != "test") return
         val container = (application as? CmuxApp)?.container
         val (title, body) = decryptContent(container, message.data) ?: (GENERIC_TITLE to GENERIC_BODY)
         showNotification(
