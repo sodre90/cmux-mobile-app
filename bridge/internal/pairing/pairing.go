@@ -1,0 +1,152 @@
+// Package pairing implements the four self-service pairing-code HTTP routes
+// served, byte-identically, by both the relay (internal/relay) and direct
+// mode (internal/server). The handlers used to exist near-verbatim in both
+// packages; their only real difference -- how a request resolves to a
+// tenant -- is the TenantResolver parameter.
+package pairing
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
+)
+
+// TenantResolver reports the tenant the agent-facing pairing-code routes
+// (issue + status poll) act for, or ok=false to reject the request with a
+// 403. The relay passes its mTLS-CN-based agent resolver; direct mode
+// passes ConstantTenant.
+type TenantResolver func(*http.Request) (tenantID string, ok bool)
+
+// ConstantTenant returns a TenantResolver that resolves every request to
+// tenantID -- direct mode's one implicit tenant. It never rejects: direct
+// mode deliberately has no per-request identity check on these routes.
+func ConstantTenant(tenantID string) TenantResolver {
+	return func(*http.Request) (string, bool) { return tenantID, true }
+}
+
+// Mount registers the four pairing routes onto mux, backed by store, with
+// tenant deciding which tenant the agent-facing routes act for.
+func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver) {
+	h := &handlers{store: store, tenant: tenant}
+	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(h.newPairingCode))
+	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(h.pairingCodeStatus))
+	mux.Handle("GET /devices/pair-info/{code}", http.HandlerFunc(h.pairingCodeInfo))
+	mux.Handle("POST /devices/pair", http.HandlerFunc(h.devicePair))
+}
+
+type handlers struct {
+	store  *auth.Store
+	tenant TenantResolver
+}
+
+// newPairingCode lets an agent request a fresh single-use pairing code to
+// embed in a QR code (see cmd/cmux-bridge/pair.go). TenantID is echoed
+// back so the QR payload can carry it for display, even though
+// /devices/pair itself never needs it in the request (see the Global
+// Constraint on that endpoint's simplified request/response shapes) — the
+// pairing code alone is resolved to a tenant server-side. The agent's e2e
+// public key is stored alongside the code (not just embedded in the QR) so
+// a phone pairing via manual entry can resolve it too, via pairingCodeInfo.
+func (h *handlers) newPairingCode(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := h.tenant(req)
+	if !ok {
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	var rq wire.NewPairingCodeReq
+	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
+		httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
+		return
+	}
+	code, err := h.store.NewPairingCode(tenantID, rq.AgentPubkey, wire.PairingCodeTTL)
+	if err != nil {
+		log.Printf("pairing: new pairing code: %v", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, wire.PairingCodeResp{
+		Code:      code,
+		ExpiresAt: time.Now().Add(wire.PairingCodeTTL).UTC().Format(time.RFC3339),
+		TenantID:  tenantID,
+	})
+}
+
+// pairingCodeStatus lets the agent that requested a pairing code poll for
+// its redemption. Scoped to the resolver's own tenant, so one tenant's
+// agent can never observe another tenant's pairing codes.
+func (h *handlers) pairingCodeStatus(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := h.tenant(req)
+	if !ok {
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	code := req.PathValue("code")
+	pubkey, hash, redeemed, ok := h.store.PairingCodeStatus(tenantID, code)
+	if !ok {
+		httpjson.Error(w, http.StatusNotFound, "not_found")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, wire.PairingCodeStatusResp{
+		Redeemed:     redeemed,
+		DevicePubkey: pubkey,
+		TokenHash:    hash,
+	})
+}
+
+// pairingCodeInfo lets a phone that can't scan the QR (no camera, or
+// pairing remotely) resolve a manually-entered pairing code to the same
+// {agent_pubkey, expires_at, tenant_id} the QR itself carries, so it can
+// complete /devices/pair exactly like the QR path does. Public, no auth --
+// mirrors /devices/pair's own reachability (a brand-new phone has no
+// credential to present yet). Not tenant-scoped, unlike pairingCodeStatus:
+// the caller doesn't know its tenant, that's what it's asking for.
+// Collapses not-found/expired/already-redeemed into the same 410, matching
+// /devices/pair's own error handling.
+func (h *handlers) pairingCodeInfo(w http.ResponseWriter, req *http.Request) {
+	code := req.PathValue("code")
+	agentPubkey, tenantID, expiresAt, ok := h.store.PairingCodeInfo(code)
+	if !ok {
+		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, wire.PairingCodeInfoResp{
+		AgentPubkey: agentPubkey,
+		ExpiresAt:   expiresAt,
+		TenantID:    tenantID,
+	})
+}
+
+// devicePair is the public, no-auth endpoint a phone hits directly after
+// scanning the agent's pairing QR code (or resolving a manually entered
+// code via pairingCodeInfo). The response omits the agent's e2e public key
+// (the phone already has it from the QR code payload itself,
+// cmd/cmux-bridge/pair.go, or from pair-info -- the relay never needs to
+// hold or forward e2e key material) but keeps tenant_id, informationally,
+// so the app knows which workspace it just joined.
+func (h *handlers) devicePair(w http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
+	var rq wire.DevicePairReq
+	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
+		httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
+		return
+	}
+	name := rq.Name
+	if name == "" {
+		name = "phone"
+	}
+	tok, tenantID, ok := h.store.RedeemPairingCode(rq.Code, name, rq.DevicePubkey)
+	if !ok {
+		// RedeemPairingCode's bool return doesn't distinguish not-found,
+		// expired, and already-redeemed -- per the spec's error-handling
+		// section, all three map to the same response.
+		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, wire.DevicePairResp{Token: tok, TenantID: tenantID})
+	log.Printf("pairing: device paired via QR code")
+}

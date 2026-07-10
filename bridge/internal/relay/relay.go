@@ -18,8 +18,8 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/pairing"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
-	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // agentCNPrefix marks a client cert as belonging to a Mac agent, followed by
@@ -198,12 +198,15 @@ func (r *Relay) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/agent/tunnel", r.handleTunnel)
-	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(r.handleNewPairingCode))
-	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(r.handlePairingCodeStatus))
+	// Self-service pairing routes (internal/pairing). The issue/status
+	// routes are agent-CN-gated via agentOnly; /devices/pair and
+	// /devices/pair-info are public by design -- a brand-new phone has no
+	// cert to present yet (see deploy/nginx-cmux-relay.conf's optional
+	// ssl_verify_client), mirroring handleRegisterTenant's bootstrap story
+	// for agents.
+	pairing.Mount(mux, r.store, r.agentOnly)
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
-	mux.Handle("POST /devices/pair", http.HandlerFunc(r.handleDevicePair))
-	mux.Handle("GET /devices/pair-info/{code}", http.HandlerFunc(r.handlePairingCodeInfo))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))
 	if r.edgeToken == "" {
 		return mux
@@ -266,92 +269,6 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	log.Printf("relay: agent tunnel down (tenant=%q)", tenantID)
 	r.reg.Clear(tenantID, sess)
 	cancel()
-}
-
-// handleNewPairingCode lets an already-registered agent request a fresh
-// single-use pairing code to embed in a QR code (see
-// cmd/cmux-bridge/pair.go). Agent-CN-gated: only a request presenting a
-// valid, active agent's mTLS certificate may call this. TenantID is echoed
-// back so the QR payload can carry it for display, even though /devices/pair
-// itself never needs it in the request (see the Global Constraint on that
-// endpoint's simplified request/response shapes) — the pairing code alone is
-// resolved to a tenant server-side. The agent's e2e public key is stored
-// alongside the code (not just embedded in the QR) so a phone pairing via
-// manual entry can resolve it too, via handlePairingCodeInfo.
-func (r *Relay) handleNewPairingCode(w http.ResponseWriter, req *http.Request) {
-	tenantID, ok := r.agentOnly(req)
-	if !ok {
-		httpjson.Error(w, http.StatusForbidden, "forbidden")
-		return
-	}
-	var rq wire.NewPairingCodeReq
-	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
-		httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
-		return
-	}
-	code, err := r.store.NewPairingCode(tenantID, rq.AgentPubkey, wire.PairingCodeTTL)
-	if err != nil {
-		log.Printf("relay: new pairing code: %v", err)
-		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(wire.PairingCodeResp{
-		Code:      code,
-		ExpiresAt: time.Now().Add(wire.PairingCodeTTL).UTC().Format(time.RFC3339),
-		TenantID:  tenantID,
-	})
-}
-
-// handlePairingCodeInfo lets a phone that can't scan the QR (no camera, or
-// pairing remotely) resolve a manually-entered pairing code to the same
-// {agent_pubkey, expires_at, tenant_id} the QR itself carries, so it can
-// complete /devices/pair exactly like the QR path does. Public, no auth --
-// mirrors /devices/pair's own reachability (see deploy/nginx-cmux-relay.conf's
-// ssl_verify_client optional change: a brand-new phone has no cert to
-// present yet). Not tenant-scoped, unlike PairingCodeStatus: the caller
-// doesn't know its tenant, that's what it's asking for. Collapses
-// not-found/expired/already-redeemed into the same 410, matching
-// /devices/pair's own error handling.
-func (r *Relay) handlePairingCodeInfo(w http.ResponseWriter, req *http.Request) {
-	code := req.PathValue("code")
-	agentPubkey, tenantID, expiresAt, ok := r.store.PairingCodeInfo(code)
-	if !ok {
-		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(wire.PairingCodeInfoResp{
-		AgentPubkey: agentPubkey,
-		ExpiresAt:   expiresAt,
-		TenantID:    tenantID,
-	})
-}
-
-// handlePairingCodeStatus lets the agent that requested a pairing code poll
-// for its redemption. Scoped to the caller's own tenant (via agentOnly), so
-// one tenant's agent can never observe another tenant's pairing codes.
-func (r *Relay) handlePairingCodeStatus(w http.ResponseWriter, req *http.Request) {
-	tenantID, ok := r.agentOnly(req)
-	if !ok {
-		httpjson.Error(w, http.StatusForbidden, "forbidden")
-		return
-	}
-	code := req.PathValue("code")
-	pubkey, hash, redeemed, ok := r.store.PairingCodeStatus(tenantID, code)
-	if !ok {
-		httpjson.Error(w, http.StatusNotFound, "not_found")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(wire.PairingCodeStatusResp{
-		Redeemed:     redeemed,
-		DevicePubkey: pubkey,
-		TokenHash:    hash,
-	})
 }
 
 type registerReq struct {
@@ -444,38 +361,4 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 		CertPEM:  string(certPEM),
 	})
 	log.Printf("relay: registered new tenant %q", tenantID)
-}
-
-// handleDevicePair is the public, no-auth endpoint a phone hits directly
-// after scanning the agent's pairing QR code. Reachable without a client
-// cert (see deploy/nginx-cmux-relay.conf's ssl_verify_client optional
-// change below) — a brand-new phone has no cert to present yet, mirroring
-// handleRegisterTenant's bootstrap story for agents. The response omits the
-// agent's e2e public key (the phone already has it from the QR code payload
-// itself, cmd/cmux-bridge/pair.go — the relay never needs to hold or
-// forward e2e key material) but keeps tenant_id, informationally, so the
-// app knows which workspace it just joined.
-func (r *Relay) handleDevicePair(w http.ResponseWriter, req *http.Request) {
-	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
-	var rq wire.DevicePairReq
-	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
-		httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
-		return
-	}
-	name := rq.Name
-	if name == "" {
-		name = "phone"
-	}
-	tok, tenantID, ok := r.store.RedeemPairingCode(rq.Code, name, rq.DevicePubkey)
-	if !ok {
-		// RedeemPairingCode's bool return doesn't distinguish not-found,
-		// expired, and already-redeemed -- per the spec's error-handling
-		// section, all three map to the same response.
-		httpjson.Error(w, http.StatusGone, "pairing_code_invalid")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(wire.DevicePairResp{Token: tok, TenantID: tenantID})
-	log.Printf("relay: device paired via QR code")
 }
