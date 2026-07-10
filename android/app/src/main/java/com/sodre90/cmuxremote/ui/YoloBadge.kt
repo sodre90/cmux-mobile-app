@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -7,9 +8,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.model.YoloMode
 
 // Distinct from the sessions list's red/amber attention stripe: this badge
@@ -19,16 +22,19 @@ import com.sodre90.cmuxremote.model.YoloMode
 // sessions screen's autopilot summary banner).
 val YoloAccent = Color(0xFF8E24AA) // purple
 
-/** The badge label for [mode], or null when it's off (the common case, shown as no badge). */
-fun yoloModeLabel(mode: String): String? = when (mode) {
-    YoloMode.ALWAYS -> "ALWAYS"
-    YoloMode.ALL_TOOLS -> "ALL TOOLS"
-    YoloMode.BYPASS -> "BYPASS"
+/** The badge label resource for [mode], or null when it's off (the common case, shown as no badge). */
+@StringRes
+fun yoloModeLabel(mode: String): Int? = when (mode) {
+    YoloMode.ALWAYS -> R.string.yolo_label_always
+    YoloMode.ALL_TOOLS -> R.string.yolo_label_all_tools
+    YoloMode.BYPASS -> R.string.yolo_label_bypass
     else -> null
 }
 
 @Composable
-fun YoloBadge(label: String) {
+fun YoloBadge(@StringRes labelRes: Int) {
+    val label = stringResource(labelRes)
+    val badgeContentDescription = stringResource(R.string.yolo_badge_content_description, label)
     Surface(
         color = YoloAccent,
         shape = MaterialTheme.shapes.small,
@@ -36,7 +42,7 @@ fun YoloBadge(label: String) {
         // own semantics -- otherwise TalkBack would read the bare label
         // ("ALWAYS") with nothing indicating it's this workspace's auto-reply
         // mode, which is the whole point of the badge.
-        modifier = Modifier.clearAndSetSemantics { contentDescription = "Auto-reply mode: $label" },
+        modifier = Modifier.clearAndSetSemantics { contentDescription = badgeContentDescription },
     ) {
         Text(
             text = label,

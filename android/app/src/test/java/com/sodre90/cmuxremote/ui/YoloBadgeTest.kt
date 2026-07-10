@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui
 
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.model.YoloMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -9,9 +10,9 @@ class YoloBadgeTest {
 
     @Test
     fun labelsKnownModes() {
-        assertEquals("ALWAYS", yoloModeLabel(YoloMode.ALWAYS))
-        assertEquals("ALL TOOLS", yoloModeLabel(YoloMode.ALL_TOOLS))
-        assertEquals("BYPASS", yoloModeLabel(YoloMode.BYPASS))
+        assertEquals(R.string.yolo_label_always, yoloModeLabel(YoloMode.ALWAYS))
+        assertEquals(R.string.yolo_label_all_tools, yoloModeLabel(YoloMode.ALL_TOOLS))
+        assertEquals(R.string.yolo_label_bypass, yoloModeLabel(YoloMode.BYPASS))
     }
 
     @Test
