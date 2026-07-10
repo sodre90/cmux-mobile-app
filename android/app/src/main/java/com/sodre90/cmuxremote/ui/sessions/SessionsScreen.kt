@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -75,13 +77,18 @@ fun SessionsScreen(
     onSettings: () -> Unit,
 ) {
     val state by vm.state.collectAsState()
+    val unreadCount = (state as? UiState.Ready)?.data?.let { unreadWorkspaceCount(it) } ?: 0
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("cmux sessions") },
                 actions = {
-                    TextButton(onClick = onOpenInbox) { Text("Inbox") }
+                    BadgedBox(
+                        badge = { if (unreadCount > 0) Badge { Text(unreadCount.toString()) } },
+                    ) {
+                        TextButton(onClick = onOpenInbox) { Text("Inbox") }
+                    }
                     TextButton(onClick = { vm.userRefresh() }) { Text("Refresh") }
                     TextButton(onClick = onSettings) { Text("Re-pair device") }
                 },

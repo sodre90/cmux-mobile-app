@@ -143,4 +143,20 @@ class SessionsLogicTest {
         val reordered = applyCustomOrder(listOf(a, b, c, d), listOf("c", "a"))
         assertEquals(listOf("c", "a", "b", "d"), reordered.map { it.id })
     }
+
+    @Test
+    fun unreadWorkspaceCountCountsOnlyHasUnreadWorkspaces() {
+        val workspaces = listOf(
+            Workspace(id = "a", hasUnread = true),
+            Workspace(id = "b", hasUnread = false),
+            Workspace(id = "c", hasUnread = true),
+        )
+        assertEquals(2, unreadWorkspaceCount(workspaces))
+    }
+
+    @Test
+    fun unreadWorkspaceCountIsZeroWhenNoneAreUnread() {
+        val workspaces = listOf(Workspace(id = "a"), Workspace(id = "b"))
+        assertEquals(0, unreadWorkspaceCount(workspaces))
+    }
 }
