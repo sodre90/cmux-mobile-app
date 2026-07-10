@@ -5,6 +5,7 @@ import com.sodre90.cmuxremote.model.Cell
 import com.sodre90.cmuxremote.model.DecodedLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -102,5 +103,23 @@ class RenderGridViewTest {
         val capped = cappedScrollback(lines, max = 3)
         assertEquals(3, capped.size)
         assertEquals(lines.takeLast(3), capped)
+    }
+
+    // RenderGridView's per-row `remember(rendered, styleMap, colors, cur)` key relies on
+    // this: wrapModeLine/trimTrailingBlanks allocate a new DecodedLine (via subList/
+    // filterNot) on every recomposition, even when a row's content hasn't changed since
+    // the last frame. That's only safe to skip rebuilding the AnnotatedString for if two
+    // independently-built, content-identical DecodedLines still compare equal -- proven
+    // here directly, rather than assumed, since it's the crux of whether the guide's
+    // "fresh allocation defeats memoization" claim holds.
+    @Test fun wrapModeProducesStructurallyEqualButFreshLines() {
+        val frameOne = DecodedLine(listOf(Cell('a', 0), Cell('b', 0), Cell(' ', 0), Cell(' ', 0)))
+        val frameTwo = DecodedLine(listOf(Cell('a', 0), Cell('b', 0), Cell(' ', 0), Cell(' ', 0)))
+
+        val renderedOne = wrapModeLine(frameOne, cursorColumn = null)
+        val renderedTwo = wrapModeLine(frameTwo, cursorColumn = null)
+
+        assertEquals(renderedOne, renderedTwo) // same content -> remember() sees "unchanged"
+        assertNotSame(renderedOne, renderedTwo) // yet genuinely different, freshly-allocated instances
     }
 }

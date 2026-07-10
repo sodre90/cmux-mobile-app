@@ -137,6 +137,14 @@ fun RenderGridView(
                         } else {
                             line
                         }
+                        // wrapModeLine/trimTrailingBlanks allocate a fresh DecodedLine (and
+                        // sometimes a fresh Cell list) on every recomposition, even for a row
+                        // whose content hasn't changed since the last frame. That's fine:
+                        // DecodedLine/Cell/Style/TerminalColors are all Kotlin data classes
+                        // (structural equals/hashCode), and remember's key comparison is
+                        // equals()-based, not reference identity -- so a same-content-but-
+                        // fresh-instance row still hits the cache and skips buildLine. See
+                        // RenderGridViewTest.wrapModeProducesStructurallyEqualButFreshLines.
                         val annotated = remember(rendered, styleMap, colors, cur) {
                             buildLine(rendered, styleMap, colors, cur)
                         }
