@@ -61,10 +61,23 @@ fun CmuxNavHost(
     // (attention-striped) sessions list. That fallback must navigate there
     // explicitly: the tap can arrive while a different, unrelated terminal is
     // already open, so doing nothing would strand the user on it.
+    //
+    // Every jump here collapses the back stack down to SESSIONS first. Without
+    // that, a notification tap while a terminal is already open would push the
+    // new terminal on top instead of replacing it, leaving the old
+    // TerminalViewModel (and its websocket) alive underneath -- two concurrent
+    // terminal connections then share one device's e2e replay-counter window
+    // (CryptoSession is scoped per connection-slot, not per terminal; see
+    // AppContainer), so the backgrounded terminal's poll traffic can advance
+    // that shared window past the newly-opened terminal's frames and get them
+    // dropped as replays.
     LaunchedEffect(pendingWorkspaceId, pendingSurfaceId, configured) {
         if (!configured) return@LaunchedEffect
         if (pendingSurfaceId != null) {
-            navController.navigate(Routes.terminal(pendingSurfaceId))
+            navController.navigate(Routes.terminal(pendingSurfaceId)) {
+                popUpTo(Routes.SESSIONS) { inclusive = false }
+                launchSingleTop = true
+            }
             return@LaunchedEffect
         }
         if (pendingWorkspaceId != null) {
@@ -73,7 +86,10 @@ fun CmuxNavHost(
                 ?.firstOrNull { it.id == pendingWorkspaceId }
                 ?.let { notificationTarget(it) }
             if (target != null) {
-                navController.navigate(Routes.terminal(target))
+                navController.navigate(Routes.terminal(target)) {
+                    popUpTo(Routes.SESSIONS) { inclusive = false }
+                    launchSingleTop = true
+                }
             } else {
                 navController.navigate(Routes.SESSIONS) {
                     popUpTo(Routes.SESSIONS) { inclusive = true }
