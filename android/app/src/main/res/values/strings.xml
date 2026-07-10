@@ -1,3 +1,150 @@
 <resources>
     <string name="app_name">cmux remote</string>
+
+    <!-- Shared actions, reused verbatim across multiple screens. -->
+    <string name="action_back">Back</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_pair">Pair</string>
+    <string name="action_done">Done</string>
+    <string name="action_enable">Enable</string>
+    <string name="status_sending">Sending…</string>
+
+    <!-- Sessions screen -->
+    <string name="sessions_title">cmux sessions</string>
+    <string name="sessions_inbox_button">Inbox</string>
+    <string name="sessions_settings_button">Re-pair device</string>
+    <string name="sessions_empty">No sessions</string>
+    <string name="sessions_waiting_first_label">Waiting first</string>
+    <string name="sessions_workspace_actions_description">Workspace actions</string>
+    <string name="sessions_drag_to_reorder_description">Drag to reorder</string>
+    <string name="sessions_rename_dialog_title">Rename workspace</string>
+    <string name="pane_starting">starting…</string>
+    <string name="pane_focus">focus</string>
+    <string name="kind_badge_unknown">?</string>
+    <plurals name="pane_count">
+        <item quantity="one">%1$d pane</item>
+        <item quantity="other">%1$d panes</item>
+    </plurals>
+
+    <!-- Workspace status content description (TalkBack), fragments joined with ", ". -->
+    <string name="status_needs_permission">needs permission</string>
+    <string name="status_waiting_input">waiting for input</string>
+    <string name="status_unread">unread</string>
+
+    <!-- Autopilot summary banner. -->
+    <plurals name="autopilot_summary">
+        <item quantity="one">%1$d workspace on autopilot: %2$s</item>
+        <item quantity="other">%1$d workspaces on autopilot: %2$s</item>
+    </plurals>
+
+    <!-- YOLO mode picker -->
+    <string name="yolo_mode_dialog_title">YOLO mode</string>
+    <string name="yolo_mode_menu_item">YOLO mode…</string>
+    <string name="action_close">Close</string>
+    <string name="yolo_mode_off_label">Off</string>
+    <string name="yolo_mode_off_description">You answer each permission prompt from the phone.</string>
+    <string name="yolo_mode_always_label">Always</string>
+    <string name="yolo_mode_always_description">Auto-approves, applying the agent\'s suggested rule to future similar requests.</string>
+    <string name="yolo_mode_all_tools_label">All tools</string>
+    <string name="yolo_mode_all_tools_description">Auto-approves any tool the agent asks to use, not just this one.</string>
+    <string name="yolo_mode_bypass_label">Bypass</string>
+    <string name="yolo_mode_bypass_description">Skips permission checks for the rest of this session (Claude Code\'s --dangerously-skip-permissions).</string>
+    <string name="yolo_bypass_confirm_title">Enable Bypass mode?</string>
+    <string name="yolo_bypass_confirm_body">This skips permission checks for the rest of this session -- the agent can run any tool without asking. Same as Claude Code\'s --dangerously-skip-permissions.</string>
+
+    <!-- YOLO badge (sessions list / terminal header). -->
+    <string name="yolo_badge_content_description">Auto-reply mode: %1$s</string>
+    <string name="yolo_label_always">ALWAYS</string>
+    <string name="yolo_label_all_tools">ALL TOOLS</string>
+    <string name="yolo_label_bypass">BYPASS</string>
+
+    <!-- Inbox screen -->
+    <string name="inbox_title">Agent inbox</string>
+    <string name="inbox_empty">No pending prompts</string>
+    <string name="inbox_open_terminal">Open terminal</string>
+    <string name="inbox_send_reply">Send reply</string>
+
+    <!-- Pairing screen -->
+    <string name="pairing_title_relay">Pair via relay</string>
+    <string name="pairing_title_direct">Pair via Tailscale (direct)</string>
+    <string name="pairing_camera_permission_required">Camera permission is required to scan the pairing QR code.</string>
+    <string name="pairing_grant_camera_permission">Grant camera permission</string>
+    <string name="pairing_enter_manually">Enter server URL and code manually</string>
+    <string name="pairing_in_progress">Pairing...</string>
+    <string name="pairing_scan_again">Scan again</string>
+    <string name="pairing_manual_intro">Enter the server URL and pairing code shown by `cmux-bridge pair-device` on the Mac.</string>
+    <string name="pairing_server_url_label">Server URL</string>
+    <string name="pairing_server_url_placeholder">https://cmux.example.com</string>
+    <string name="pairing_code_label">Pairing code</string>
+    <string name="pairing_scan_qr_instead">Scan QR code instead</string>
+
+    <!-- Connection settings screen -->
+    <string name="connections_title">Connections</string>
+    <string name="connection_slot_relay">Relay</string>
+    <string name="connection_slot_direct">Tailscale (direct)</string>
+    <string name="connection_relay_description">Reaches your Mac from anywhere, via the home server.</string>
+    <string name="connection_direct_description">Reaches your Mac directly over your tailnet -- used automatically if the relay is unreachable.</string>
+    <string name="connection_status_paired">Paired</string>
+    <string name="connection_status_not_paired">Not paired</string>
+    <string name="action_repair">Re-pair</string>
+    <string name="action_forget">Forget</string>
+    <string name="forget_connection_dialog_title">Forget %1$s connection?</string>
+    <string name="forget_connection_dialog_body">You\'ll need to pair this device again to use %1$s.</string>
+
+    <!-- Test push -->
+    <string name="test_push_title">Push notifications</string>
+    <string name="test_push_description">Send a real test push to this device to confirm push setup works.</string>
+    <string name="test_push_send_button">Send test notification</string>
+    <string name="test_push_success">Sent — check your notification shade</string>
+    <string name="test_push_failure_prefix">Failed: %1$s</string>
+
+    <!-- Terminal screen -->
+    <string name="terminal_title">Terminal</string>
+    <string name="terminal_wrap_on">Wrap: on</string>
+    <string name="terminal_wrap_off">Wrap: off</string>
+    <string name="action_reconnect">Reconnect</string>
+    <string name="terminal_paste">Paste</string>
+    <string name="terminal_ctrl_chip">Ctrl</string>
+    <string name="terminal_ctrl_content_description">Ctrl modifier key</string>
+    <string name="terminal_ctrl_state_armed">Armed, next key sends as Ctrl combination</string>
+    <string name="terminal_ctrl_state_not_armed">Not armed</string>
+    <string name="terminal_delivery_reconnected">Reconnected — check your last few keystrokes went through</string>
+    <string name="terminal_delivery_delayed">Input not confirmed — check connection</string>
+    <string name="terminal_scroll_to_bottom">▼</string>
+
+    <!-- Terminal key bar content descriptions (TalkBack): key.label itself stays a
+         plain Kotlin string (short glyph/abbreviation, e.g. "^C", "PgUp", not prose). -->
+    <string name="key_desc_up">Up</string>
+    <string name="key_desc_down">Down</string>
+    <string name="key_desc_left">Left</string>
+    <string name="key_desc_right">Right</string>
+    <string name="key_desc_home">Home</string>
+    <string name="key_desc_end">End</string>
+    <string name="key_desc_escape">Escape</string>
+    <string name="key_desc_tab">Tab</string>
+    <string name="key_desc_enter">Enter</string>
+    <string name="key_desc_ctrl_c">Send Ctrl+C (interrupt)</string>
+    <string name="key_desc_ctrl_d">Send Ctrl+D (end of input)</string>
+    <string name="key_desc_ctrl_z">Send Ctrl+Z (suspend)</string>
+    <string name="key_desc_page_up">Page up</string>
+    <string name="key_desc_page_down">Page down</string>
+
+    <!-- ViewModel-owned error/status fallback strings: injected into each ViewModel's
+         constructor pre-resolved (see e.g. SessionsViewModel), since a ViewModel has no
+         @Composable context to call stringResource() itself. Wired up in CmuxNavHost. -->
+    <string name="error_bridge_not_configured">Bridge not configured</string>
+    <string name="error_rename_failed">Rename failed</string>
+    <string name="error_set_yolo_mode_failed">Setting YOLO mode failed</string>
+    <string name="error_load_sessions_failed">Failed to load sessions</string>
+    <string name="error_refresh_sessions_failed">Failed to refresh sessions</string>
+    <string name="error_load_inbox_failed">Failed to load inbox</string>
+    <string name="error_reply_failed">Reply failed</string>
+    <string name="error_terminal_not_found">Couldn\'t find that item\'s terminal</string>
+    <string name="error_test_push_failed">Test push failed</string>
+    <string name="error_pairing_code_expired">This code has expired -- ask the Mac to generate a new one.</string>
+    <string name="error_pairing_code_invalid_scan_again">This code has expired or was already used -- scan a fresh one.</string>
+    <string name="error_pairing_code_invalid_ask_fresh">This code has expired or was already used -- ask for a fresh one.</string>
+    <string name="error_pairing_failed">Pairing failed</string>
 </resources>

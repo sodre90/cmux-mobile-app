@@ -1,6 +1,8 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import androidx.annotation.StringRes
 import androidx.compose.ui.input.key.Key
+import com.sodre90.cmuxremote.R
 
 // Control sequences built from code points so no raw control bytes live in source.
 // ESC is internal (not private) so TerminalScreen's physical-keyboard handling
@@ -25,8 +27,12 @@ sealed interface TerminalKey {
 
     /** What TalkBack announces for this key's button -- describes the action
      *  (e.g. "Send Ctrl+C (interrupt)"), not [label]'s terminal-glyph shorthand
-     *  (e.g. "^C"), which reads as meaningless punctuation to a screen reader. */
-    val contentDescription: String
+     *  (e.g. "^C"), which reads as meaningless punctuation to a screen reader.
+     *  A resource id (not a resolved String) since this list is built outside
+     *  any @Composable context -- resolved via stringResource() at the button's
+     *  call site instead (see ArrowButton/KeyBar in TerminalScreen). */
+    @get:StringRes
+    val contentDescriptionRes: Int
     fun sequence(applicationCursorKeys: Boolean): String
 }
 
@@ -34,7 +40,7 @@ sealed interface TerminalKey {
 data class StaticKey(
     override val label: String,
     private val bytes: String,
-    override val contentDescription: String,
+    @StringRes override val contentDescriptionRes: Int,
 ) : TerminalKey {
     override fun sequence(applicationCursorKeys: Boolean): String = bytes
 }
@@ -47,7 +53,7 @@ data class StaticKey(
 data class CursorKey(
     override val label: String,
     private val finalChar: Char,
-    override val contentDescription: String,
+    @StringRes override val contentDescriptionRes: Int,
 ) : TerminalKey {
     override fun sequence(applicationCursorKeys: Boolean): String =
         ESC + (if (applicationCursorKeys) "O" else "[") + finalChar
@@ -56,24 +62,24 @@ data class CursorKey(
 // The directional arrows, surfaced as an always-visible D-pad (see ArrowPad in
 // TerminalScreen) rather than buried in the scrollable bar. DECCKM-aware like any
 // CursorKey. The final chars D/C (not C/D) match the ANSI codes for left/right.
-val ArrowUp = CursorKey("↑", 'A', contentDescription = "Up")
-val ArrowDown = CursorKey("↓", 'B', contentDescription = "Down")
-val ArrowLeft = CursorKey("←", 'D', contentDescription = "Left")
-val ArrowRight = CursorKey("→", 'C', contentDescription = "Right")
+val ArrowUp = CursorKey("↑", 'A', contentDescriptionRes = R.string.key_desc_up)
+val ArrowDown = CursorKey("↓", 'B', contentDescriptionRes = R.string.key_desc_down)
+val ArrowLeft = CursorKey("←", 'D', contentDescriptionRes = R.string.key_desc_left)
+val ArrowRight = CursorKey("→", 'C', contentDescriptionRes = R.string.key_desc_right)
 
 /** The horizontally-scrolling key bar. The arrows live in the D-pad instead. */
 val TerminalKeys: List<TerminalKey> = listOf(
-    StaticKey("Esc", ESC, contentDescription = "Escape"),
-    StaticKey("Tab", "\t", contentDescription = "Tab"),
-    StaticKey("⏎", CR, contentDescription = "Enter"),
-    StaticKey("^C", CTRL_C, contentDescription = "Send Ctrl+C (interrupt)"),
-    StaticKey("^D", CTRL_D, contentDescription = "Send Ctrl+D (end of input)"),
-    StaticKey("^Z", CTRL_Z, contentDescription = "Send Ctrl+Z (suspend)"),
-    CursorKey("Home", 'H', contentDescription = "Home"),
-    CursorKey("End", 'F', contentDescription = "End"),
+    StaticKey("Esc", ESC, contentDescriptionRes = R.string.key_desc_escape),
+    StaticKey("Tab", "\t", contentDescriptionRes = R.string.key_desc_tab),
+    StaticKey("⏎", CR, contentDescriptionRes = R.string.key_desc_enter),
+    StaticKey("^C", CTRL_C, contentDescriptionRes = R.string.key_desc_ctrl_c),
+    StaticKey("^D", CTRL_D, contentDescriptionRes = R.string.key_desc_ctrl_d),
+    StaticKey("^Z", CTRL_Z, contentDescriptionRes = R.string.key_desc_ctrl_z),
+    CursorKey("Home", 'H', contentDescriptionRes = R.string.key_desc_home),
+    CursorKey("End", 'F', contentDescriptionRes = R.string.key_desc_end),
     // Page keys use the `~` (keypad) form and are unaffected by DECCKM.
-    StaticKey("PgUp", ESC + "[5~", contentDescription = "Page up"),
-    StaticKey("PgDn", ESC + "[6~", contentDescription = "Page down"),
+    StaticKey("PgUp", ESC + "[5~", contentDescriptionRes = R.string.key_desc_page_up),
+    StaticKey("PgDn", ESC + "[6~", contentDescriptionRes = R.string.key_desc_page_down),
 )
 
 /**

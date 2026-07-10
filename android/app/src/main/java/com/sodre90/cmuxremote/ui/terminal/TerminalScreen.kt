@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -74,6 +75,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
@@ -163,15 +165,17 @@ fun TerminalScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("Terminal")
+                        Text(stringResource(R.string.terminal_title))
                         yoloModeLabel(yoloMode)?.let { YoloBadge(it) }
                     }
                 },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
+                },
                 actions = {
-                    TextButton(onClick = { vm.reconnect() }) { Text("Refresh") }
+                    TextButton(onClick = { vm.reconnect() }) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(onClick = { wrap = !wrap }) {
-                        Text(if (wrap) "Wrap: on" else "Wrap: off")
+                        Text(stringResource(if (wrap) R.string.terminal_wrap_on else R.string.terminal_wrap_off))
                     }
                 },
             )
@@ -210,7 +214,7 @@ fun TerminalScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(s.message)
-                    Button(onClick = { vm.reconnect() }) { Text("Reconnect") }
+                    Button(onClick = { vm.reconnect() }) { Text(stringResource(R.string.action_reconnect)) }
                 }
 
                 is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -361,12 +365,13 @@ fun TerminalScreen(
  */
 @Composable
 private fun DeliveryStatusLabel(status: DeliveryStatus, lostInputNotice: Boolean) {
-    val text = when {
-        lostInputNotice -> "Reconnected — check your last few keystrokes went through"
-        status == DeliveryStatus.DELAYED -> "Input not confirmed — check connection"
-        status == DeliveryStatus.SENDING -> "Sending…"
+    val textRes = when {
+        lostInputNotice -> R.string.terminal_delivery_reconnected
+        status == DeliveryStatus.DELAYED -> R.string.terminal_delivery_delayed
+        status == DeliveryStatus.SENDING -> R.string.status_sending
         else -> null
     }
+    val text = textRes?.let { stringResource(it) }
     if (text != null) {
         Text(
             text,
@@ -418,16 +423,17 @@ private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit, on
             ArrowButton(ArrowDown, applicationCursorKeys, onKey)
             ArrowButton(ArrowRight, applicationCursorKeys, onKey)
         }
-        OutlinedButton(onClick = onPaste) { Text("Paste") }
+        OutlinedButton(onClick = onPaste) { Text(stringResource(R.string.terminal_paste)) }
     }
 }
 
 @Composable
 private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
+    val description = stringResource(key.contentDescriptionRes)
     OutlinedButton(
         onClick = { onKey(key.sequence(applicationCursorKeys)) },
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
-        modifier = Modifier.semantics { contentDescription = key.contentDescription },
+        modifier = Modifier.semantics { contentDescription = description },
     ) { Text(key.label) }
 }
 
@@ -455,9 +461,10 @@ private fun KeyBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TerminalKeys.forEach { key ->
+                val description = stringResource(key.contentDescriptionRes)
                 OutlinedButton(
                     onClick = { onKey(key.sequence(applicationCursorKeys)) },
-                    modifier = Modifier.semantics { contentDescription = key.contentDescription },
+                    modifier = Modifier.semantics { contentDescription = description },
                 ) {
                     Text(key.label)
                 }
@@ -486,6 +493,10 @@ private fun CtrlChip(armed: Boolean, onClick: () -> Unit) {
     } else {
         ButtonDefaults.outlinedButtonColors()
     }
+    val ctrlContentDescription = stringResource(R.string.terminal_ctrl_content_description)
+    val armedStateDescription = stringResource(
+        if (armed) R.string.terminal_ctrl_state_armed else R.string.terminal_ctrl_state_not_armed,
+    )
     OutlinedButton(
         onClick = onClick,
         colors = colors,
@@ -494,8 +505,8 @@ private fun CtrlChip(armed: Boolean, onClick: () -> Unit) {
         // changing the button's role away from the plain "double tap to
         // activate" hint that matches its actual one-shot-per-tap behavior.
         modifier = Modifier.semantics {
-            contentDescription = "Ctrl modifier key"
-            stateDescription = if (armed) "Armed, next key sends as Ctrl combination" else "Not armed"
+            contentDescription = ctrlContentDescription
+            stateDescription = armedStateDescription
         },
-    ) { Text("Ctrl") }
+    ) { Text(stringResource(R.string.terminal_ctrl_chip)) }
 }
