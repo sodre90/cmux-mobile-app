@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * Exercises the one-shot legacy-pairing migration ([Settings.migrateLegacyIfNeeded]
- * + [com.sodre90.cmuxremote.data.e2e.Session.absorbLegacyIfTarget]) against
+ * + [com.sodre90.cmuxremote.data.e2e.CryptoSession.absorbLegacyIfTarget]) against
  * plain in-memory maps instead of real EncryptedSharedPreferences -- see
  * [migrateLegacyIfNeededInternal]/[absorbLegacyIfTargetInternal]'s doc
  * comments for why this seam exists. This is the safety-critical path: a bug
@@ -93,7 +93,7 @@ class SettingsLegacyMigrationTest {
     }
 }
 
-class SessionLegacyMigrationTest {
+class CryptoSessionLegacyMigrationTest {
 
     private fun record(sendCounter: Long = 3L) = LegacySessionRecord(
         peerPublicKeyB64 = "cGVlcg==",
@@ -143,7 +143,7 @@ class SessionLegacyMigrationTest {
         assertEquals(listOf(want), applied)
     }
 
-    /** Mirrors the real Session.absorbLegacyIfTarget contract: applyMigration
+    /** Mirrors the real CryptoSession.absorbLegacyIfTarget contract: applyMigration
      *  is expected to clear the legacy record it just moved, so a second
      *  call against the same (now-cleared) backing store is a no-op. */
     @Test
@@ -172,8 +172,8 @@ class SessionLegacyMigrationTest {
 /**
  * End-to-end (still real-object-free) proof of the coordination
  * AppContainer.init performs: Settings decides which slot the legacy record
- * belongs to, then only that slot's Session may absorb it -- the other
- * slot's Session must stay untouched even though both are asked in the same
+ * belongs to, then only that slot's CryptoSession may absorb it -- the other
+ * slot's CryptoSession must stay untouched even though both are asked in the same
  * pass (see AppContainer.kt's `sessions.forEach { (slot, session) -> ... }`).
  */
 class LegacyMigrationCoordinationTest {

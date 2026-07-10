@@ -17,7 +17,7 @@ enum class ConnectionSlot {
 
 /** Classifies a pre-dual-pairing single stored base URL into the slot it
  *  most likely belongs to, for one-time migration off the old unprefixed
- *  Settings/Session keys (see Settings.migrateLegacyIfNeeded). Tailscale's
+ *  Settings/CryptoSession keys (see Settings.migrateLegacyIfNeeded). Tailscale's
  *  MagicDNS names always end in ".ts.net"; anything else is assumed to be a
  *  relay URL -- the only other shape this app has ever stored. */
 fun inferLegacySlot(baseUrl: String): ConnectionSlot {

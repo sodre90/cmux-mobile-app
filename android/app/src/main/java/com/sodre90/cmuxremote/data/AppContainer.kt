@@ -4,9 +4,9 @@ import android.content.Context
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import com.sodre90.cmuxremote.data.e2e.Cipher
+import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.E2eInterceptor
 import com.sodre90.cmuxremote.data.e2e.Identity
-import com.sodre90.cmuxremote.data.e2e.Session
 import com.sodre90.cmuxremote.data.pairing.PairingClient
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -29,13 +29,13 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
     val workspaceOrderStore = WorkspaceOrderStore(appContext)
 
-    private val sessions: Map<ConnectionSlot, Session> =
-        ConnectionSlot.entries.associateWith { Session(appContext, it) }
+    private val sessions: Map<ConnectionSlot, CryptoSession> =
+        ConnectionSlot.entries.associateWith { CryptoSession(appContext, it) }
 
     init {
         // One-time migration off the pre-dual-pairing single-slot format:
         // Settings decides which slot the legacy {base_url, device_token}
-        // belongs to (it can see the URL); that same slot's Session then
+        // belongs to (it can see the URL); that same slot's CryptoSession then
         // absorbs the matching legacy e2e record (it can't see the URL, so
         // it can't decide this on its own).
         val migratedSlot = settings.migrateLegacyIfNeeded()
@@ -137,5 +137,5 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     /** The paired session for [slot] -- used by CmuxMessagingService to decrypt an
      *  incoming push, which arrives tagged with the slot that sent it rather than
      *  going through the usual bridgeClient()/eventsSocket() request path. */
-    fun session(slot: ConnectionSlot): Session = sessions.getValue(slot)
+    fun session(slot: ConnectionSlot): CryptoSession = sessions.getValue(slot)
 }

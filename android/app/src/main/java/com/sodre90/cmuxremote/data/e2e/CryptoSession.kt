@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-/** The subset of [Session] that [encryptBody]/[decryptBody]/[encryptFrame]/
+/** The subset of [CryptoSession] that [encryptBody]/[decryptBody]/[encryptFrame]/
  *  [decryptFrame] need -- lets tests substitute an in-memory fake. */
 interface PairedSession {
     fun sharedSecret(): ByteArray?
@@ -27,7 +27,7 @@ interface PairedSession {
  * overwrites its own record, but the other slot's session is untouched
  * (both slots' keys share one prefs file, distinguished only by prefix).
  */
-class Session(context: Context, private val slot: ConnectionSlot) : PairedSession {
+class CryptoSession(context: Context, private val slot: ConnectionSlot) : PairedSession {
 
     private val prefs: SharedPreferences = run {
         val masterKey = MasterKey.Builder(context)
@@ -78,7 +78,7 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
      * Migrates the pre-dual-pairing single e2e session record into this
      * instance's slot, if [isMigrationTarget] is true. AppContainer decides
      * this once (from [com.sodre90.cmuxremote.data.Settings.migrateLegacyIfNeeded]'s
-     * result), since a Session has no way to see the base URL its legacy
+     * result), since a CryptoSession has no way to see the base URL its legacy
      * pairing belonged to and infer the right slot on its own. No-op if
      * there's no legacy record. Self-terminating: always clears the legacy
      * keys the first time it finds data. The migrate-or-not decision and the
@@ -204,7 +204,7 @@ class Session(context: Context, private val slot: ConnectionSlot) : PairedSessio
 }
 
 /** The legacy pre-dual-pairing e2e session fields [absorbLegacyIfTargetInternal]
- *  moves into whichever slot's [Session] is the migration target. */
+ *  moves into whichever slot's [CryptoSession] is the migration target. */
 internal data class LegacySessionRecord(
     val peerPublicKeyB64: String?,
     val sharedSecretB64: String,
@@ -213,7 +213,7 @@ internal data class LegacySessionRecord(
     val recvWindowBits: Long,
 )
 
-/** Free function form of [Session.absorbLegacyIfTarget], parameterized over
+/** Free function form of [CryptoSession.absorbLegacyIfTarget], parameterized over
  *  plain read/write callbacks so a JVM test can exercise it against
  *  in-memory maps instead of real EncryptedSharedPreferences -- mirrors
  *  [com.sodre90.cmuxremote.data.pairing.pairInternal]'s injectable-I/O

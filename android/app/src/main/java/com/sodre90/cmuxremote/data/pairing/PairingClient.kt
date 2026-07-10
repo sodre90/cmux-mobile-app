@@ -2,8 +2,8 @@ package com.sodre90.cmuxremote.data.pairing
 
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
+import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.Identity
-import com.sodre90.cmuxremote.data.e2e.Session
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.coroutines.Dispatchers
@@ -48,13 +48,13 @@ private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
  * Completes self-service pairing against POST /devices/pair: submits the
  * phone's e2e public key alongside the scanned code, and on success derives
  * the shared secret via ECDH and persists everything -- bearer token + base
- * URL into Settings, e2e session into Session. Mirrors
+ * URL into Settings, e2e session into CryptoSession. Mirrors
  * bridge/cmd/cmux-bridge/pair.go's agent-side half of the same handshake.
  */
 class PairingClient(
     private val http: OkHttpClient,
     private val identity: Identity,
-    private val session: Session,
+    private val session: CryptoSession,
     private val settings: Settings,
     private val slot: ConnectionSlot,
 ) {
@@ -102,9 +102,9 @@ internal suspend fun resolvePairingCode(http: OkHttpClient, serverUrl: String, c
         }
     }
 
-/** Free function (not a Session/Settings method) so PairingClientTest can
+/** Free function (not a CryptoSession/Settings method) so PairingClientTest can
  *  exercise the real handshake logic via plain callbacks -- see Task 11's
- *  Step 1 note on why Identity/Session/Settings can't be constructed in a
+ *  Step 1 note on why Identity/CryptoSession/Settings can't be constructed in a
  *  local JVM unit test. */
 internal suspend fun pairInternal(
     http: OkHttpClient,

@@ -67,9 +67,9 @@ class Settings(context: Context) {
      * One-time migration from the pre-dual-pairing single {base_url,
      * device_token} pair into whichever slot it most likely belongs to (see
      * [inferLegacySlot]). Must be called explicitly by AppContainer (not
-     * from init): its result tells AppContainer which Session instance
-     * should absorb the matching legacy e2e session data, since Session has
-     * no way to see the base URL and infer this on its own.
+     * from init): its result tells AppContainer which CryptoSession instance
+     * should absorb the matching legacy e2e session data, since CryptoSession
+     * has no way to see the base URL and infer this on its own.
      *
      * Returns the slot migrated into, or null if there was nothing to
      * migrate (already migrated on a prior run, or a genuinely fresh

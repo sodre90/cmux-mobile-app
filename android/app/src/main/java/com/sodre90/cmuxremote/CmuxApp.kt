@@ -9,7 +9,7 @@ import kotlinx.coroutines.launch
 
 class CmuxApp : Application() {
 
-    // AppContainer's construction (Settings/Identity/Session) does
+    // AppContainer's construction (Settings/Identity/CryptoSession) does
     // EncryptedSharedPreferences + Android Keystore I/O, which can block for
     // a while (key generation on first launch, TEE round-trips thereafter).
     // `by lazy`'s default synchronization means whichever caller -- this
