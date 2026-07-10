@@ -61,16 +61,25 @@ class ConnectionSettingsViewModelTest {
         fallback = { null },
     )
 
+    // Matches the exact strings.xml text each error path falls back to (see
+    // CmuxNavHost's SETTINGS route) so assertions below can keep checking the
+    // literal message.
+    private fun testPushViewModel(bridge: BridgeGateway) = ConnectionSettingsViewModel(
+        bridge = bridge,
+        bridgeNotConfiguredMessage = "Bridge not configured",
+        testPushFailedMessage = "Test push failed",
+    )
+
     @Test
     fun initialStateIsIdle() {
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(null))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(null))
 
         assertEquals(TestPushUiState.Idle, vm.testPushState.value)
     }
 
     @Test
     fun noBridgeConfiguredSetsErrorImmediatelyWithNoNetworkCall() {
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(null))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(null))
 
         vm.sendTestPush()
 
@@ -81,7 +90,7 @@ class ConnectionSettingsViewModelTest {
     @Test
     fun successfulSendTransitionsToSuccess() {
         server.enqueue(MockResponse())
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
 
         vm.sendTestPush()
 
@@ -94,7 +103,7 @@ class ConnectionSettingsViewModelTest {
     @Test
     fun failureSurfacesTheActualErrorMessageNotAGenericOne() {
         server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"agent_offline"}"""))
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
 
         vm.sendTestPush()
 
@@ -110,7 +119,7 @@ class ConnectionSettingsViewModelTest {
     @Test
     fun stateIsSendingWhileTheCallIsInFlight() {
         server.enqueue(MockResponse().setBodyDelay(200, TimeUnit.MILLISECONDS))
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
 
         vm.sendTestPush()
 
@@ -121,7 +130,7 @@ class ConnectionSettingsViewModelTest {
     @Test
     fun aSecondCallWhileSendingIsIgnored() {
         server.enqueue(MockResponse().setBodyDelay(300, TimeUnit.MILLISECONDS))
-        val vm = ConnectionSettingsViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
 
         vm.sendTestPush()
         vm.sendTestPush() // ignored -- already sending

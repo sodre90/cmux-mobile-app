@@ -18,10 +18,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
+// The error-message parameters are pre-resolved `strings.xml` text passed in by
+// the caller (see CmuxNavHost) rather than resolved here: a ViewModel has no
+// @Composable context to call `stringResource()` itself.
 @OptIn(FlowPreview::class)
 class SessionsViewModel(
     private val bridge: BridgeGateway,
     private val workspaceOrder: WorkspaceOrderGateway,
+    private val bridgeNotConfiguredMessage: String,
+    private val renameFailedMessage: String,
+    private val setYoloModeFailedMessage: String,
+    private val loadSessionsFailedMessage: String,
+    private val refreshSessionsFailedMessage: String,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
@@ -73,7 +81,7 @@ class SessionsViewModel(
      *  new title (cmux's single source of truth for it) comes back fresh. */
     fun renameWorkspace(id: String, title: String) {
         val client = bridge.activeBridge() ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return
         }
         viewModelScope.launch {
@@ -82,7 +90,7 @@ class SessionsViewModel(
                 _actionError.value = null
                 refresh()
             } catch (e: Exception) {
-                _actionError.value = e.message ?: "Rename failed"
+                _actionError.value = e.message ?: renameFailedMessage
             }
         }
     }
@@ -94,7 +102,7 @@ class SessionsViewModel(
      *  the whole screen. */
     fun setYoloMode(id: String, mode: String) {
         val client = bridge.activeBridge() ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return
         }
         viewModelScope.launch {
@@ -108,7 +116,7 @@ class SessionsViewModel(
                     )
                 }
             } catch (e: Exception) {
-                _actionError.value = e.message ?: "Setting YOLO mode failed"
+                _actionError.value = e.message ?: setYoloModeFailedMessage
             }
         }
     }
@@ -116,7 +124,7 @@ class SessionsViewModel(
     fun refresh() {
         val client = bridge.activeBridge()
         if (client == null) {
-            _state.value = UiState.Error("Bridge not configured")
+            _state.value = UiState.Error(bridgeNotConfiguredMessage)
             return
         }
         _state.value = UiState.Loading
@@ -124,7 +132,7 @@ class SessionsViewModel(
             _state.value = try {
                 UiState.Ready(client.sessions())
             } catch (e: Exception) {
-                UiState.Error(e.message ?: "Failed to load sessions")
+                UiState.Error(e.message ?: loadSessionsFailedMessage)
             }
         }
     }
@@ -135,7 +143,7 @@ class SessionsViewModel(
      *  fetch is already in flight. */
     fun userRefresh() {
         val client = bridge.activeBridge() ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return
         }
         if (fetchInFlight) return
@@ -173,7 +181,7 @@ class SessionsViewModel(
             _state.value = UiState.Ready(client.sessions())
             _actionError.value = null
         } catch (e: Exception) {
-            _actionError.value = e.message ?: "Failed to refresh sessions"
+            _actionError.value = e.message ?: refreshSessionsFailedMessage
         }
     }
 

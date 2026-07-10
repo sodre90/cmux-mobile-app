@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -17,6 +18,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
@@ -103,8 +105,12 @@ fun CmuxNavHost(
             val directConfigured = remember(
                 forgetGeneration
             ) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
+            val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
+            val testPushFailed = stringResource(R.string.error_test_push_failed)
             val testPushVm: ConnectionSettingsViewModel = viewModel(
-                factory = viewModelFactory { initializer { ConnectionSettingsViewModel(container) } },
+                factory = viewModelFactory {
+                    initializer { ConnectionSettingsViewModel(container, bridgeNotConfigured, testPushFailed) }
+                },
             )
             val testPushState by testPushVm.testPushState.collectAsState()
             ConnectionSettingsScreen(
@@ -130,12 +136,29 @@ fun CmuxNavHost(
             arguments = listOf(navArgument("slot") { type = NavType.StringType }),
         ) { entry ->
             val slot = ConnectionSlot.valueOf(entry.arguments?.getString("slot").orEmpty().uppercase())
+            val codeExpired = stringResource(R.string.error_pairing_code_expired)
+            val codeInvalidScanAgain = stringResource(R.string.error_pairing_code_invalid_scan_again)
+            val codeInvalidAskFresh = stringResource(R.string.error_pairing_code_invalid_ask_fresh)
+            val pairingFailed = stringResource(R.string.error_pairing_failed)
             val vm: PairingViewModel = viewModel(
-                factory = viewModelFactory { initializer { PairingViewModel(container, slot) } },
+                factory = viewModelFactory {
+                    initializer {
+                        PairingViewModel(
+                            container,
+                            slot,
+                            codeExpired,
+                            codeInvalidScanAgain,
+                            codeInvalidAskFresh,
+                            pairingFailed,
+                        )
+                    }
+                },
             )
             PairingScreen(
                 vm = vm,
-                title = if (slot == ConnectionSlot.RELAY) "Pair via relay" else "Pair via Tailscale (direct)",
+                title = stringResource(
+                    if (slot == ConnectionSlot.RELAY) R.string.pairing_title_relay else R.string.pairing_title_direct,
+                ),
                 onPaired = {
                     forgetGeneration++ // ConnectionSettingsScreen must re-read to show this slot as paired
                     navController.popBackStack()
@@ -144,8 +167,25 @@ fun CmuxNavHost(
         }
 
         composable(Routes.SESSIONS) {
+            val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
+            val renameFailed = stringResource(R.string.error_rename_failed)
+            val setYoloModeFailed = stringResource(R.string.error_set_yolo_mode_failed)
+            val loadSessionsFailed = stringResource(R.string.error_load_sessions_failed)
+            val refreshSessionsFailed = stringResource(R.string.error_refresh_sessions_failed)
             val vm: SessionsViewModel = viewModel(
-                factory = viewModelFactory { initializer { SessionsViewModel(container, container) } },
+                factory = viewModelFactory {
+                    initializer {
+                        SessionsViewModel(
+                            container,
+                            container,
+                            bridgeNotConfigured,
+                            renameFailed,
+                            setYoloModeFailed,
+                            loadSessionsFailed,
+                            refreshSessionsFailed,
+                        )
+                    }
+                },
             )
             SessionsScreen(
                 vm = vm,
@@ -170,15 +210,24 @@ fun CmuxNavHost(
             arguments = listOf(navArgument("id") { type = NavType.StringType }),
         ) { entry ->
             val id = entry.arguments?.getString("id").orEmpty()
+            val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
             val vm: TerminalViewModel = viewModel(
-                factory = viewModelFactory { initializer { TerminalViewModel(container, id) } },
+                factory = viewModelFactory { initializer { TerminalViewModel(container, id, bridgeNotConfigured) } },
             )
             TerminalScreen(vm = vm, onBack = { navController.popBackStack() })
         }
 
         composable(Routes.INBOX) {
+            val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
+            val loadInboxFailed = stringResource(R.string.error_load_inbox_failed)
+            val replyFailed = stringResource(R.string.error_reply_failed)
+            val terminalNotFound = stringResource(R.string.error_terminal_not_found)
             val vm: InboxViewModel = viewModel(
-                factory = viewModelFactory { initializer { InboxViewModel(container) } },
+                factory = viewModelFactory {
+                    initializer {
+                        InboxViewModel(container, bridgeNotConfigured, loadInboxFailed, replyFailed, terminalNotFound)
+                    }
+                },
             )
             InboxScreen(
                 vm = vm,

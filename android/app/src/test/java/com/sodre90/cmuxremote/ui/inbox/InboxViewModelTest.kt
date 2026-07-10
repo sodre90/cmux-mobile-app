@@ -74,9 +74,20 @@ class InboxViewModelTest {
         fallback = { null },
     )
 
+    // Matches the exact strings.xml text each error path falls back to
+    // (see CmuxNavHost's INBOX route) so assertions below can keep checking
+    // the literal message.
+    private fun inboxViewModel(bridge: BridgeGateway) = InboxViewModel(
+        bridge = bridge,
+        bridgeNotConfiguredMessage = "Bridge not configured",
+        loadInboxFailedMessage = "Failed to load inbox",
+        replyFailedMessage = "Reply failed",
+        terminalNotFoundMessage = "Couldn't find that item's terminal",
+    )
+
     @Test
     fun bridgeNotConfiguredSetsActionErrorAndLeavesStateAtLoading() {
-        val vm = InboxViewModel(FakeInboxBridgeGateway(null))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(null))
         assertEquals("Bridge not configured", vm.actionError.value)
         assertTrue(vm.state.value is UiState.Loading)
     }
@@ -84,7 +95,7 @@ class InboxViewModelTest {
     @Test
     fun firstLoadFailureSetsActionErrorAndLeavesStateAtLoading() {
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
 
         waitUntil { vm.actionError.value != null }
 
@@ -94,7 +105,7 @@ class InboxViewModelTest {
     @Test
     fun successfulLoadPopulatesReadyState() {
         server.enqueue(MockResponse().setBody("""{"items":[{"id":"i1","kind":"question"}]}"""))
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
 
         waitUntil { vm.state.value is UiState.Ready }
 
@@ -109,7 +120,7 @@ class InboxViewModelTest {
                 """{"items":[{"id":"i1","kind":"question"},{"id":"i2","kind":"permissionRequest"}]}""",
             ),
         )
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
 
         waitUntil { vm.state.value is UiState.Ready }
 
@@ -120,7 +131,7 @@ class InboxViewModelTest {
     fun aRefreshFailureAfterASuccessfulLoadKeepsTheStaleListAndSetsActionError() {
         server.enqueue(MockResponse().setBody("""{"items":[{"id":"i1","kind":"question"}]}"""))
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
         waitUntil { vm.state.value is UiState.Ready }
 
         vm.refresh()
@@ -142,7 +153,7 @@ class InboxViewModelTest {
             ),
         )
         server.enqueue(MockResponse()) // POST /feed/i1/reply
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
         waitUntil { vm.state.value is UiState.Ready }
         val item = (vm.state.value as UiState.Ready).data.first { it.id == "i1" }
 
@@ -155,7 +166,7 @@ class InboxViewModelTest {
     fun replyFailureSetsActionErrorAndLeavesTheListUntouched() {
         server.enqueue(MockResponse().setBody("""{"items":[{"id":"i1","kind":"question","request_id":"r1"}]}"""))
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")) // POST /feed/i1/reply
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
         waitUntil { vm.state.value is UiState.Ready }
         val item = (vm.state.value as UiState.Ready).data.first()
 
@@ -172,7 +183,7 @@ class InboxViewModelTest {
                 """{"items":[{"id":"i1","kind":"question","cwd":"/home/dev/proj"}]}""",
             ),
         )
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
         waitUntil { vm.state.value is UiState.Ready }
         val item = (vm.state.value as UiState.Ready).data.first()
 
@@ -193,7 +204,7 @@ class InboxViewModelTest {
                 """{"items":[{"id":"i1","kind":"question","cwd":"/home/dev/proj"}]}""",
             ),
         )
-        val vm = InboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
         waitUntil { vm.state.value is UiState.Ready }
         val item = (vm.state.value as UiState.Ready).data.first()
 
@@ -210,7 +221,7 @@ class InboxViewModelTest {
 
     @Test
     fun terminalTargetWithNoBridgeConfiguredReturnsNullAndSetsActionError() {
-        val vm = InboxViewModel(FakeInboxBridgeGateway(null))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(null))
 
         val target = runBlocking { vm.terminalTarget(PendingFeedItem(id = "i1", cwd = "/home/dev/proj")) }
 

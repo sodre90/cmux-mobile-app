@@ -24,8 +24,18 @@ import kotlinx.serialization.json.putJsonArray
  * options the user must pick from — the event stream has neither. The live
  * `/events` socket is used only as a trigger to re-fetch when a new prompt
  * appears; the prompt content always comes from a fresh pending-feed fetch.
+ *
+ * The error-message parameters are pre-resolved `strings.xml` text passed in
+ * by the caller (see CmuxNavHost) rather than resolved here: a ViewModel has
+ * no @Composable context to call `stringResource()` itself.
  */
-class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
+class InboxViewModel(
+    bridge: BridgeGateway,
+    private val bridgeNotConfiguredMessage: String,
+    private val loadInboxFailedMessage: String,
+    private val replyFailedMessage: String,
+    private val terminalNotFoundMessage: String,
+) : ViewModel() {
 
     private val client = bridge.activeBridge()
 
@@ -68,7 +78,7 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
 
     fun refresh() {
         val c = client ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return
         }
         viewModelScope.launch {
@@ -81,7 +91,7 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
             } catch (ex: Exception) {
                 // Never demotes [state] to Error, whether or not a list was
                 // already showing -- see [_state]'s doc comment for why.
-                _actionError.value = ex.message ?: "Failed to load inbox"
+                _actionError.value = ex.message ?: loadInboxFailedMessage
             }
         }
     }
@@ -89,7 +99,7 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
     /** Answer a question item with the labels of the chosen options. */
     fun reply(item: PendingFeedItem, selections: List<String>) {
         val c = client ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return
         }
         val params = buildJsonObject {
@@ -102,7 +112,7 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
                     if (cur is UiState.Ready) UiState.Ready(cur.data.filterNot { it.id == item.id }) else cur
                 }
             } catch (ex: Exception) {
-                _actionError.value = ex.message ?: "Reply failed"
+                _actionError.value = ex.message ?: replyFailedMessage
             }
         }
     }
@@ -116,11 +126,11 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
      */
     suspend fun terminalTarget(item: PendingFeedItem): String? {
         val c = client ?: run {
-            _actionError.value = "Bridge not configured"
+            _actionError.value = bridgeNotConfiguredMessage
             return null
         }
         val target = runCatching { c.sessions() }.getOrNull()?.let { pendingItemTarget(item, it) }
-        if (target == null) _actionError.value = "Couldn't find that item's terminal"
+        if (target == null) _actionError.value = terminalNotFoundMessage
         return target
     }
 }

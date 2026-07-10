@@ -125,6 +125,19 @@ class SessionsViewModelTest {
         fallback = { null },
     )
 
+    // None of these tests assert on VM-owned error text, so the injected
+    // messages are arbitrary fixed strings, not the real strings.xml values
+    // (see CmuxNavHost's SESSIONS route for those).
+    private fun sessionsViewModel(bridge: BridgeGateway, workspaceOrder: WorkspaceOrderGateway) = SessionsViewModel(
+        bridge = bridge,
+        workspaceOrder = workspaceOrder,
+        bridgeNotConfiguredMessage = "Bridge not configured",
+        renameFailedMessage = "Rename failed",
+        setYoloModeFailedMessage = "Setting YOLO mode failed",
+        loadSessionsFailedMessage = "Failed to load sessions",
+        refreshSessionsFailedMessage = "Failed to refresh sessions",
+    )
+
     private fun frameFor(json: String, counter: Long): okio.ByteString {
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, counter), json.toByteArray(Charsets.UTF_8))
         val frame = ByteArray(8 + ct.size)
@@ -149,7 +162,7 @@ class SessionsViewModelTest {
         // fetchInFlight at all) never touches the server -- this test is
         // only about userRefresh deduping against itself.
         val gw = FakeSessionsBridgeGateway()
-        val vm = SessionsViewModel(gw, orderGateway)
+        val vm = sessionsViewModel(gw, orderGateway)
         gw.bridge = bridgeFor(server)
 
         vm.userRefresh()
@@ -179,7 +192,7 @@ class SessionsViewModelTest {
         }
 
         val gw = FakeSessionsBridgeGateway()
-        val vm = SessionsViewModel(gw, orderGateway)
+        val vm = sessionsViewModel(gw, orderGateway)
         gw.bridge = bridgeFor(server)
 
         vm.userRefresh()
@@ -222,7 +235,7 @@ class SessionsViewModelTest {
             bridge = bridgeFor(server)
             events = EventsSocket(OkHttpClient(), server.url("/").toString(), RecordingSession(secret), cipher)
         }
-        SessionsViewModel(gw, orderGateway) // init's refresh() + subscribeToEvents()
+        sessionsViewModel(gw, orderGateway) // init's refresh() + subscribeToEvents()
 
         assertTrue(socketOpened.await(5, TimeUnit.SECONDS))
         waitUntil { requestCount.get() >= 1 } // init's own refresh()
@@ -269,7 +282,7 @@ class SessionsViewModelTest {
             bridge = bridgeFor(server)
             events = EventsSocket(OkHttpClient(), server.url("/").toString(), RecordingSession(secret), cipher)
         }
-        val vm = SessionsViewModel(gw, orderGateway)
+        val vm = sessionsViewModel(gw, orderGateway)
 
         assertTrue(socketOpened.await(5, TimeUnit.SECONDS))
         waitUntil { requestCount.get() >= 1 } // init's own refresh(), ungated
@@ -302,7 +315,7 @@ class SessionsViewModelTest {
 
     @Test
     fun sortByAttentionReadsAndWritesThroughTheOrderGateway() {
-        val vm = SessionsViewModel(FakeSessionsBridgeGateway(), orderGateway)
+        val vm = sessionsViewModel(FakeSessionsBridgeGateway(), orderGateway)
 
         assertEquals(false, vm.loadSortByAttention()) // unset -> off, matching WorkspaceOrderStore's default
 

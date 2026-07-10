@@ -31,9 +31,13 @@ data class TerminalContent(
     val styles: List<Style> = emptyList(),
 )
 
+// [bridgeNotConfiguredMessage] is pre-resolved `strings.xml` text passed in by
+// the caller (see CmuxNavHost) rather than resolved here: a ViewModel has no
+// @Composable context to call `stringResource()` itself.
 class TerminalViewModel(
     private val bridge: BridgeGateway,
     private val surfaceId: String,
+    private val bridgeNotConfiguredMessage: String,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<TerminalContent>>(UiState.Loading)
@@ -106,7 +110,7 @@ class TerminalViewModel(
 
     private fun connect() {
         if (!bridge.anyBridgeConfigured()) {
-            _state.value = UiState.Error("Bridge not configured")
+            _state.value = UiState.Error(bridgeNotConfiguredMessage)
             return
         }
         job?.cancel()

@@ -21,8 +21,16 @@ sealed interface TestPushUiState {
 
 /** Backs [ConnectionSettingsScreen]'s "Send test notification" button --
  *  see bridge/internal/server/test_push.go and
- *  bridge/internal/relay/testpush.go's `POST /devices/test-push`. */
-class ConnectionSettingsViewModel(private val bridge: BridgeGateway) : ViewModel() {
+ *  bridge/internal/relay/testpush.go's `POST /devices/test-push`.
+ *
+ *  The error-message parameters are pre-resolved `strings.xml` text passed in
+ *  by the caller (see CmuxNavHost) rather than resolved here: a ViewModel has
+ *  no @Composable context to call `stringResource()` itself. */
+class ConnectionSettingsViewModel(
+    private val bridge: BridgeGateway,
+    private val bridgeNotConfiguredMessage: String,
+    private val testPushFailedMessage: String,
+) : ViewModel() {
 
     private val _testPushState = MutableStateFlow<TestPushUiState>(TestPushUiState.Idle)
     val testPushState: StateFlow<TestPushUiState> = _testPushState.asStateFlow()
@@ -31,7 +39,7 @@ class ConnectionSettingsViewModel(private val bridge: BridgeGateway) : ViewModel
         if (_testPushState.value is TestPushUiState.Sending) return
         val client = bridge.activeBridge()
         if (client == null) {
-            _testPushState.value = TestPushUiState.Error("Bridge not configured")
+            _testPushState.value = TestPushUiState.Error(bridgeNotConfiguredMessage)
             return
         }
         _testPushState.value = TestPushUiState.Sending
@@ -40,7 +48,7 @@ class ConnectionSettingsViewModel(private val bridge: BridgeGateway) : ViewModel
                 client.sendTestPush()
                 _testPushState.value = TestPushUiState.Success
             } catch (e: Exception) {
-                _testPushState.value = TestPushUiState.Error(e.message ?: "Test push failed")
+                _testPushState.value = TestPushUiState.Error(e.message ?: testPushFailedMessage)
             }
         }
     }

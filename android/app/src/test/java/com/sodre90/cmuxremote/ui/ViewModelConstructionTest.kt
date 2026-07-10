@@ -69,21 +69,42 @@ class ViewModelConstructionTest {
 
     @Test
     fun terminalViewModelIsConstructibleWithAFakeGateway() {
-        TerminalViewModel(FakeBridgeGateway(), surfaceId = "surface-1")
+        TerminalViewModel(FakeBridgeGateway(), surfaceId = "surface-1", bridgeNotConfiguredMessage = "unused")
     }
 
     @Test
     fun sessionsViewModelIsConstructibleWithFakeGateways() {
-        SessionsViewModel(FakeBridgeGateway(), FakeWorkspaceOrderGateway())
+        SessionsViewModel(
+            FakeBridgeGateway(),
+            FakeWorkspaceOrderGateway(),
+            bridgeNotConfiguredMessage = "unused",
+            renameFailedMessage = "unused",
+            setYoloModeFailedMessage = "unused",
+            loadSessionsFailedMessage = "unused",
+            refreshSessionsFailedMessage = "unused",
+        )
     }
 
     @Test
     fun inboxViewModelIsConstructibleWithAFakeGateway() {
-        InboxViewModel(FakeBridgeGateway())
+        InboxViewModel(
+            FakeBridgeGateway(),
+            bridgeNotConfiguredMessage = "unused",
+            loadInboxFailedMessage = "unused",
+            replyFailedMessage = "unused",
+            terminalNotFoundMessage = "unused",
+        )
     }
 
     @Test
     fun pairingViewModelIsConstructibleWithAFakeGateway() {
-        PairingViewModel(FakePairingGateway(), ConnectionSlot.RELAY)
+        PairingViewModel(
+            FakePairingGateway(),
+            ConnectionSlot.RELAY,
+            codeExpiredMessage = "unused",
+            codeInvalidScanAgainMessage = "unused",
+            codeInvalidAskFreshMessage = "unused",
+            pairingFailedMessage = "unused",
+        )
     }
 }
