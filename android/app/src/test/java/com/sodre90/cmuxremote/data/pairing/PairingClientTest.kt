@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.data.pairing
 
+import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
 import kotlinx.coroutines.runBlocking
@@ -100,9 +101,11 @@ class PairingClientTest {
         val (phonePriv, phonePub) = generateX25519KeyPair()
         val client = TestablePairingClient(http, phonePriv, phonePub, { _, _ -> }, {}, {})
         val qr = PairingQr(
-            pairUrl = server.url("/devices/pair").toString(), code = "X",
+            pairUrl = server.url("/devices/pair").toString(),
+            code = "X",
             agentPubkey = Base64.getEncoder().encodeToString(ByteArray(32)),
-            expiresAt = "2099-01-01T00:00:00Z", tenantId = "t",
+            expiresAt = "2099-01-01T00:00:00Z",
+            tenantId = "t",
         )
         try {
             runBlocking { client.pair(qr) }
@@ -120,7 +123,8 @@ class PairingClientTest {
             pairUrl = server.url("/devices/pair").toString().replaceFirst("https://", "http://"),
             code = "X",
             agentPubkey = Base64.getEncoder().encodeToString(ByteArray(32)),
-            expiresAt = "2099-01-01T00:00:00Z", tenantId = "t",
+            expiresAt = "2099-01-01T00:00:00Z",
+            tenantId = "t",
         )
         try {
             runBlocking { client.pair(qr) }
@@ -177,12 +181,12 @@ class PairingClientTest {
         val (phonePriv, phonePub) = generateX25519KeyPair()
         server.enqueue(MockResponse().setBody("""{"token":"tok-direct","tenant_id":"t1"}"""))
 
-        var recordedBaseUrlSlot: com.sodre90.cmuxremote.data.ConnectionSlot? = null
-        var recordedTokenSlot: com.sodre90.cmuxremote.data.ConnectionSlot? = null
-        val fakeSettingsSetBaseUrl = { slot: com.sodre90.cmuxremote.data.ConnectionSlot, _: String -> recordedBaseUrlSlot = slot }
-        val fakeSettingsSetToken = { slot: com.sodre90.cmuxremote.data.ConnectionSlot, _: String -> recordedTokenSlot = slot }
+        var recordedBaseUrlSlot: ConnectionSlot? = null
+        var recordedTokenSlot: ConnectionSlot? = null
+        val fakeSettingsSetBaseUrl = { slot: ConnectionSlot, _: String -> recordedBaseUrlSlot = slot }
+        val fakeSettingsSetToken = { slot: ConnectionSlot, _: String -> recordedTokenSlot = slot }
 
-        val slot = com.sodre90.cmuxremote.data.ConnectionSlot.DIRECT
+        val slot = ConnectionSlot.DIRECT
         val client = TestablePairingClient(
             http = http,
             phonePrivateKey = phonePriv,
@@ -233,6 +237,12 @@ private class TestablePairingClient(
     private val onSetToken: (String) -> Unit,
 ) {
     suspend fun pair(qr: PairingQr) = pairInternal(
-        http, qr, phonePrivateKey, phonePublicKey, onSetPairing, onSetBaseUrl, onSetToken,
+        http,
+        qr,
+        phonePrivateKey,
+        phonePublicKey,
+        onSetPairing,
+        onSetBaseUrl,
+        onSetToken,
     )
 }

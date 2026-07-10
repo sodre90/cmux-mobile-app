@@ -20,12 +20,12 @@ import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
-import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
-import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
-import com.sodre90.cmuxremote.ui.sessions.notificationTarget
 import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
+import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
+import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
+import com.sodre90.cmuxremote.ui.sessions.notificationTarget
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
@@ -95,8 +95,12 @@ fun CmuxNavHost(
         popExitTransition = { ExitTransition.None },
     ) {
         composable(Routes.SETTINGS) {
-            val relayConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.RELAY) != null }
-            val directConfigured = remember(forgetGeneration) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
+            val relayConfigured = remember(
+                forgetGeneration
+            ) { container.settings.bridgeConfig(ConnectionSlot.RELAY) != null }
+            val directConfigured = remember(
+                forgetGeneration
+            ) { container.settings.bridgeConfig(ConnectionSlot.DIRECT) != null }
             ConnectionSettingsScreen(
                 relayConfigured = relayConfigured,
                 directConfigured = directConfigured,

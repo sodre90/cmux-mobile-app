@@ -372,11 +372,17 @@ private fun WorkspaceCard(
                     DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
                         DropdownMenuItem(
                             text = { Text("Rename") },
-                            onClick = { showActionMenu = false; onRename() },
+                            onClick = {
+                                showActionMenu = false
+                                onRename()
+                            },
                         )
                         DropdownMenuItem(
                             text = { Text("YOLO mode…") },
-                            onClick = { showActionMenu = false; onYoloMode() },
+                            onClick = {
+                                showActionMenu = false
+                                onYoloMode()
+                            },
                         )
                     }
                 }
@@ -390,7 +396,7 @@ private fun WorkspaceCard(
 
 // Accent colors for the attention stripe. Null = no stripe (normal workspace).
 private val PermissionAccent = Color(0xFFE53935) // red — agent blocked on a prompt
-private val WaitingAccent = Color(0xFFFFB300)    // amber — agent idle, waiting for input
+private val WaitingAccent = Color(0xFFFFB300) // amber — agent idle, waiting for input
 
 private fun attentionAccent(attention: String): Color? = when (attention) {
     "permission" -> PermissionAccent

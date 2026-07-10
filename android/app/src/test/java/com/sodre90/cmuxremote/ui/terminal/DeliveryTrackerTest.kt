@@ -19,7 +19,14 @@ class DeliveryTrackerTest {
     private val sent = mutableListOf<TerminalUp>()
 
     private fun newTracker() = DeliveryTracker(
-        send = { up -> if (socketUp) { sent.add(up); true } else false },
+        send = { up ->
+            if (socketUp) {
+                sent.add(up)
+                true
+            } else {
+                false
+            }
+        },
         now = { clock },
     )
 

@@ -121,11 +121,18 @@ object RenderGridDecoder {
 
         val sbRows = grid.scrollbackRows.coerceAtLeast(0)
         val scrollback =
-            if (sbRows == 0 || grid.scrollbackSpans.isEmpty()) emptyList()
-            else layout(grid.scrollbackSpans, sbRows, cols)
+            if (sbRows == 0 || grid.scrollbackSpans.isEmpty()) {
+                emptyList()
+            } else {
+                layout(grid.scrollbackSpans, sbRows, cols)
+            }
 
         return DecodedGrid(
-            cols, rowCount, lines, grid.cursor, scrollback,
+            cols,
+            rowCount,
+            lines,
+            grid.cursor,
+            scrollback,
             applicationCursorKeys = applicationCursorKeysEnabled(grid.modes),
         )
     }

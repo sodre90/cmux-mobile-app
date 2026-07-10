@@ -101,7 +101,10 @@ class FallbackBridgeClientTest {
     @Test
     fun onlyPrimaryConfiguredPropagatesFailureWhenNoFallback() {
         primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
-        val fb = FallbackBridgeClient(primary = { clientFor(primaryServer, connectTimeoutMs = 300) }, fallback = { null })
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { null }
+        )
 
         try {
             runBlocking { fb.sessions() }

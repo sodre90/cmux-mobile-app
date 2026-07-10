@@ -28,7 +28,9 @@ fun resolveSpan(style: Style?, colors: TerminalColors): ResolvedSpan {
     var fg = parseColor(style?.foregroundString) ?: colors.foreground
     var bg = parseColor(style?.backgroundString) ?: colors.background
     if (style?.inverse == true) {
-        val swap = fg; fg = bg; bg = swap
+        val swap = fg
+        fg = bg
+        bg = swap
     }
     if (style?.faint == true) {
         fg = fg.copy(alpha = fg.alpha * colors.faintAlpha)

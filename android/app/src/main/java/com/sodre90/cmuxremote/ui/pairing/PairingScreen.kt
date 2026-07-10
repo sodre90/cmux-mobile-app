@@ -193,7 +193,10 @@ private fun CameraPreview(onQrDetected: (String) -> Unit) {
                     }
                     cameraProvider.unbindAll()
                     cameraProvider.bindToLifecycle(
-                        lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis,
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analysis,
                     )
                     boundCameraProvider = cameraProvider
                 },

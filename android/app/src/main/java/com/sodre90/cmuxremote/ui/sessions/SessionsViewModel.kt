@@ -68,7 +68,10 @@ class SessionsViewModel(
     /** Sets a workspace's display title in cmux, then reloads the list so the
      *  new title (cmux's single source of truth for it) comes back fresh. */
     fun renameWorkspace(id: String, title: String) {
-        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run {
+            _actionError.value = "Bridge not configured"
+            return
+        }
         viewModelScope.launch {
             try {
                 client.renameWorkspace(id, title)
@@ -86,7 +89,10 @@ class SessionsViewModel(
      *  in place rather than dropping into [UiState.Loading] and reloading
      *  the whole screen. */
     fun setYoloMode(id: String, mode: String) {
-        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run {
+            _actionError.value = "Bridge not configured"
+            return
+        }
         viewModelScope.launch {
             try {
                 client.setYoloMode(id, mode)
@@ -124,7 +130,10 @@ class SessionsViewModel(
      *  shows [isRefreshing] so PullToRefreshBox's spinner appears. Skips if a
      *  fetch is already in flight. */
     fun silentRefresh() {
-        val client = bridge.activeBridge() ?: run { _actionError.value = "Bridge not configured"; return }
+        val client = bridge.activeBridge() ?: run {
+            _actionError.value = "Bridge not configured"
+            return
+        }
         if (fetchInFlight) return
         viewModelScope.launch {
             fetchInFlight = true

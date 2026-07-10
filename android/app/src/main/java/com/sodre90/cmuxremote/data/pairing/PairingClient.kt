@@ -4,7 +4,6 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.e2e.Identity
 import com.sodre90.cmuxremote.data.e2e.Session
-import java.util.Base64
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +15,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.Base64
 
 /** The pairing code was not found, already redeemed, or expired -- the relay's
  *  RedeemPairingCode doesn't distinguish these (see the Go spec's error

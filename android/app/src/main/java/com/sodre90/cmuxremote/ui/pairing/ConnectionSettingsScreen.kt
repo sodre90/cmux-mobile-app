@@ -52,7 +52,8 @@ fun ConnectionSettingsScreen(
             )
             ConnectionRow(
                 label = "Tailscale (direct)",
-                description = "Reaches your Mac directly over your tailnet -- used automatically if the relay is unreachable.",
+                description = "Reaches your Mac directly over your tailnet -- used " +
+                    "automatically if the relay is unreachable.",
                 configured = directConfigured,
                 onPair = { onPair(ConnectionSlot.DIRECT) },
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },

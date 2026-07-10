@@ -25,7 +25,9 @@ class PairingQrTest {
     @Test
     fun returnsNullForMalformedOrForeignQrContent() {
         assertNull(parsePairingQr("not json at all"))
-        assertNull(parsePairingQr("""{"totally":"unrelated"}""")) // missing required fields still decodes with defaults...
+        assertNull(
+            parsePairingQr("""{"totally":"unrelated"}""")
+        ) // missing required fields still decodes with defaults...
     }
 
     @Test
@@ -67,7 +69,13 @@ class PairingQrTest {
 
     @Test
     fun isExpiredTrueForPastTimestamp() {
-        val qr = PairingQr(pairUrl = "u", code = "c", agentPubkey = "p", expiresAt = "2000-01-01T00:00:00Z", tenantId = "t")
+        val qr = PairingQr(
+            pairUrl = "u",
+            code = "c",
+            agentPubkey = "p",
+            expiresAt = "2000-01-01T00:00:00Z",
+            tenantId = "t"
+        )
         assertTrue(qr.isExpired())
     }
 

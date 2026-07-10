@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.detekt)
 }
 
 // Apply the Firebase google-services plugin only when the config file exists, so
@@ -53,7 +54,18 @@ android {
     }
 }
 
+// Formatting-only detekt run (see config/detekt/detekt.yml for why the rest
+// of the default ruleset is switched off) plus the formatting rule set
+// (detekt-formatting dependency below).
+detekt {
+    buildUponDefaultConfig = true
+    autoCorrect = false
+    config.setFrom(files("$rootDir/config/detekt/detekt.yml"))
+}
+
 dependencies {
+    detektPlugins(libs.detekt.formatting)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

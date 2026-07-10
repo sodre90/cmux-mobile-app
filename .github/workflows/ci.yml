@@ -49,3 +49,5 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: assembleDebug + testDebugUnitTest
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest
+      - name: detekt
+        run: ./gradlew :app:detekt

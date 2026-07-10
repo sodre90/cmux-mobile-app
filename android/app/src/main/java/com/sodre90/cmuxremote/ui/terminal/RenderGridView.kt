@@ -70,7 +70,9 @@ internal const val MaxScrollbackLines = 2000
 fun RenderGridView(
     grid: DecodedGrid,
     styles: List<Style>,
-    fontSizeSp: Float = 13f, // caller (TerminalScreen, Task 8) always passes the live zoom size; default only keeps the pre-Task-8 call site compiling
+    // caller (TerminalScreen, Task 8) always passes the live zoom size; default
+    // only keeps the pre-Task-8 call site compiling
+    fontSizeSp: Float = 13f,
     colors: TerminalColors = DefaultTerminalColors,
     wrap: Boolean = false,
     modifier: Modifier = Modifier,

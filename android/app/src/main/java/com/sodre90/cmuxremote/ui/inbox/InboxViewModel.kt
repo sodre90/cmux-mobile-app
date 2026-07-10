@@ -56,7 +56,10 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
     }
 
     fun refresh() {
-        val c = client ?: run { _error.value = "Bridge not configured"; return }
+        val c = client ?: run {
+            _error.value = "Bridge not configured"
+            return
+        }
         viewModelScope.launch {
             try {
                 // "question" (AskUserQuestion) is the only replyable kind cmux
@@ -71,7 +74,10 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
 
     /** Answer a question item with the labels of the chosen options. */
     fun reply(item: PendingFeedItem, selections: List<String>) {
-        val c = client ?: run { _error.value = "Bridge not configured"; return }
+        val c = client ?: run {
+            _error.value = "Bridge not configured"
+            return
+        }
         val params = buildJsonObject {
             putJsonArray("selections") { selections.forEach { add(it) } }
         }

@@ -65,7 +65,8 @@ class EventsSocketTest {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send(
                         frameFor(
-                            """{"type":"feed","name":"feed.updated","needs_attention":true,"feed_id":"f1","kind":"permissionRequest"}""",
+                            """{"type":"feed","name":"feed.updated","needs_attention":true,""" +
+                                """"feed_id":"f1","kind":"permissionRequest"}""",
                             0L,
                         ),
                     )

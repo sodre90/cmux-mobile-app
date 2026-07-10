@@ -74,7 +74,15 @@ class SocketReconnectorTest {
         val job = launch {
             reconnector.run(openSocket = { slot ->
                 attempts.add(Attempt(slot, currentTime))
-                if (attempts.size == 1) flow { throw IOException("relay unreachable") } else flow { awaitCancellation() }
+                if (attempts.size == 1) {
+                    flow {
+                        throw IOException(
+                            "relay unreachable"
+                        )
+                    }
+                } else {
+                    flow { awaitCancellation() }
+                }
             }) { true }
         }
 

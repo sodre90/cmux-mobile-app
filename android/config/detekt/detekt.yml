@@ -1,0 +1,29 @@
+build:
+  maxIssues: 0
+
+# Scoped down to formatting-only (cmux-app improvement guide 3.2): this repo's
+# style/complexity/exception-handling defaults surface real design smells
+# (e.g. AppContainer's function count -- guide item 4.1, long Compose
+# functions) that are separately tracked refactor work, not mechanical lint
+# fixes. Only the formatting rule set (detekt-formatting, ktlint-based
+# whitespace/wrapping/import-order checks) runs here.
+comments:
+  active: false
+complexity:
+  active: false
+coroutines:
+  active: false
+empty-blocks:
+  active: false
+exceptions:
+  active: false
+naming:
+  active: false
+performance:
+  active: false
+potential-bugs:
+  active: false
+style:
+  active: false
+formatting:
+  active: true

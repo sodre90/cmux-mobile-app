@@ -7,10 +7,10 @@ import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
 import com.sodre90.cmuxremote.data.e2e.DIR_DEVICE_TO_AGENT
 import com.sodre90.cmuxremote.data.e2e.FakeSession
 import com.sodre90.cmuxremote.data.e2e.nonce
-import java.nio.ByteBuffer
-import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.util.Base64
 
 class PushPayloadTest {
 

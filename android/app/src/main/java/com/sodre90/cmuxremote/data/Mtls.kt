@@ -1,9 +1,9 @@
 package com.sodre90.cmuxremote.data
 
-import java.util.concurrent.TimeUnit
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import java.util.concurrent.TimeUnit
 
 /**
  * Everything needed to reach the bridge: its base URL and the per-device

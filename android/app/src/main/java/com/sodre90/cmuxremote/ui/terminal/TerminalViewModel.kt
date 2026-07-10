@@ -10,11 +10,11 @@ import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
 import com.sodre90.cmuxremote.model.TerminalDown
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 

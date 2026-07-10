@@ -87,10 +87,14 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         settings.bridgeConfig(slot)?.let { BridgeClient(httpClient(slot, it), it.baseUrl) }
 
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? =
-        settings.bridgeConfig(slot)?.let { EventsSocket(httpClient(slot, it), it.baseUrl, sessions.getValue(slot), cipher) }
+        settings.bridgeConfig(
+            slot
+        )?.let { EventsSocket(httpClient(slot, it), it.baseUrl, sessions.getValue(slot), cipher) }
 
     override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? =
-        settings.bridgeConfig(slot)?.let { TerminalSocket(httpClient(slot, it), it.baseUrl, surfaceId, sessions.getValue(slot), cipher) }
+        settings.bridgeConfig(
+            slot
+        )?.let { TerminalSocket(httpClient(slot, it), it.baseUrl, surfaceId, sessions.getValue(slot), cipher) }
 
     /** Unauthenticated -- POST /devices/pair takes no bearer token (see
      *  bridge/internal/relay/relay.go's handleDevicePair). */

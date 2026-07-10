@@ -37,7 +37,10 @@ class PairingViewModel(private val pairing: PairingGateway, private val slot: Co
         }
         state = PairingUiState.Pairing
         viewModelScope.launch {
-            pairAndUpdateState(qr, invalidCodeMessage = "This code has expired or was already used -- scan a fresh one.")
+            pairAndUpdateState(
+                qr,
+                invalidCodeMessage = "This code has expired or was already used -- scan a fresh one."
+            )
         }
     }
 
@@ -51,7 +54,10 @@ class PairingViewModel(private val pairing: PairingGateway, private val slot: Co
         viewModelScope.launch {
             try {
                 val qr = pairing.pairingClient(slot).resolveManualCode(serverUrl.trim(), code.trim())
-                pairAndUpdateState(qr, invalidCodeMessage = "This code has expired or was already used -- ask for a fresh one.")
+                pairAndUpdateState(
+                    qr,
+                    invalidCodeMessage = "This code has expired or was already used -- ask for a fresh one."
+                )
             } catch (e: PairingCodeInvalidException) {
                 state = PairingUiState.Error("This code has expired or was already used -- ask for a fresh one.")
             } catch (e: Exception) {

@@ -38,24 +38,32 @@ class TerminalSocket(
 
     fun connect(): Flow<TerminalDown> = callbackFlow {
         val request = Request.Builder().url(url).build()
-        val ws = http.newWebSocket(request, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
-                    .mapCatching { BridgeJson.decodeFromString(TerminalDown.serializer(), it.toString(Charsets.UTF_8)) }
-                    .onFailure { android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}") }
-                    .getOrNull()
-                    ?.let { trySend(it) }
-            }
+        val ws = http.newWebSocket(
+            request,
+            object : WebSocketListener() {
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
+                        .mapCatching {
+                            BridgeJson.decodeFromString(
+                                TerminalDown.serializer(),
+                                it.toString(Charsets.UTF_8)
+                            )
+                        }
+                        .onFailure { android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}") }
+                        .getOrNull()
+                        ?.let { trySend(it) }
+                }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(code, reason)
-                close()
-            }
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(code, reason)
+                    close()
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                close(t)
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    close(t)
+                }
             }
-        })
+        )
         socket = ws
         awaitClose {
             ws.cancel()

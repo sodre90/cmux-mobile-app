@@ -29,7 +29,12 @@ class TerminalStyleTest {
     }
 
     @Test fun inverseSwapsForegroundAndBackground() {
-        val s = Style(id = 1, foreground = JsonPrimitive("#00ff00"), background = JsonPrimitive("#112233"), inverse = true)
+        val s = Style(
+            id = 1,
+            foreground = JsonPrimitive("#00ff00"),
+            background = JsonPrimitive("#112233"),
+            inverse = true
+        )
         val r = resolveSpan(s, colors)
         assertEquals(Color(0xFF112233), r.fg)
         assertEquals(Color(0xFF00FF00), r.bg)
@@ -44,7 +49,10 @@ class TerminalStyleTest {
     @Test fun carriesDecorationFlags() {
         val s = Style(id = 1, bold = true, italic = true, underline = true, strikethrough = true)
         val r = resolveSpan(s, colors)
-        assertTrue(r.bold); assertTrue(r.italic); assertTrue(r.underline); assertTrue(r.strikethrough)
+        assertTrue(r.bold)
+        assertTrue(r.italic)
+        assertTrue(r.underline)
+        assertTrue(r.strikethrough)
     }
 
     @Test fun parsesHexColors() {

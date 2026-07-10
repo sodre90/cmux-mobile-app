@@ -28,23 +28,31 @@ class EventsSocket(
     /** Cold flow; opening the socket on collect and closing it on cancel. */
     fun connect(): Flow<EventFrame> = callbackFlow {
         val request = Request.Builder().url(url).build()
-        val socket = http.newWebSocket(request, object : WebSocketListener() {
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
-                    .mapCatching { BridgeJson.decodeFromString(EventFrame.serializer(), it.toString(Charsets.UTF_8)) }
-                    .getOrNull()
-                    ?.let { trySend(it) }
-            }
+        val socket = http.newWebSocket(
+            request,
+            object : WebSocketListener() {
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
+                        .mapCatching {
+                            BridgeJson.decodeFromString(
+                                EventFrame.serializer(),
+                                it.toString(Charsets.UTF_8)
+                            )
+                        }
+                        .getOrNull()
+                        ?.let { trySend(it) }
+                }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(code, reason)
-                close()
-            }
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(code, reason)
+                    close()
+                }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                close(t)
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    close(t)
+                }
             }
-        })
+        )
         awaitClose { socket.cancel() }
     }
 }
