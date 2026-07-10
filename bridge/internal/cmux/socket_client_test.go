@@ -204,10 +204,11 @@ exit 1
 	if _, err := c.Rpc(context.Background(), "mobile.workspace.list", nil); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	// Forcibly break the persistent connection (simulates cmux restarting)
-	// and confirm the very next call transparently reconnects rather than
-	// staying stuck on the broken one.
-	c.fastPathConn().close()
+	// Forcibly break every pooled connection (simulates cmux restarting,
+	// which drops every open connection at once, not just the one this
+	// particular call happened to use) and confirm the very next call
+	// transparently reconnects rather than staying stuck on a broken one.
+	c.fastPathPool().closeAll()
 	time.Sleep(20 * time.Millisecond)
 
 	out, err := c.Rpc(context.Background(), "mobile.workspace.list", nil)
@@ -219,5 +220,49 @@ exit 1
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("want 2 socket-side calls, got %d", calls.Load())
+	}
+}
+
+// TestFastPathPoolSlowCallDoesNotBlockConcurrentFastCall is the accept
+// criterion for the pool: before this pool existed, every fast-path call
+// funneled through one shared socketConn whose mutex was held for the whole
+// round trip, so a slow call (e.g. a big replay poll) head-of-line-blocked
+// any unrelated fast call (e.g. an input ack) issued concurrently. Confirmed
+// against the pre-pool code: a fast call issued 20ms after a 200ms-sleeping
+// slow call still took ~180ms to complete. With a multi-connection pool the
+// fast call should land on a different, idle connection and complete close
+// to its own server-side latency instead of waiting out the slow one.
+func TestFastPathPoolSlowCallDoesNotBlockConcurrentFastCall(t *testing.T) {
+	release := make(chan struct{})
+	startFakeCmuxSocket(t, fakeSocketPassword, func(method string, params json.RawMessage) (json.RawMessage, string, string) {
+		if method == "slow" {
+			<-release
+		}
+		return json.RawMessage(`{}`), "", ""
+	})
+	c := &Client{FastPath: true}
+
+	slowDone := make(chan struct{})
+	go func() {
+		defer close(slowDone)
+		if _, err := c.Rpc(context.Background(), "slow", nil); err != nil {
+			t.Error(err)
+		}
+	}()
+	// Give the slow call time to be checked out and blocked server-side
+	// before starting the fast one, so this deterministically exercises "an
+	// unrelated call started while a slow one is in flight," not a race.
+	time.Sleep(20 * time.Millisecond)
+
+	fastStart := time.Now()
+	if _, err := c.Rpc(context.Background(), "fast", nil); err != nil {
+		t.Fatal(err)
+	}
+	fastElapsed := time.Since(fastStart)
+	close(release)
+	<-slowDone
+
+	if fastElapsed > 50*time.Millisecond {
+		t.Fatalf("fast call took %v while a slow call was in flight on another pooled connection; want it to complete promptly, not queue behind the slow one", fastElapsed)
 	}
 }

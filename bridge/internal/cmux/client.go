@@ -20,23 +20,24 @@ type Client struct {
 	// Bin is the path to the cmux binary. When empty, "cmux" is used.
 	Bin string
 
-	// FastPath, when true, has Rpc try a persistent, authenticated direct
-	// connection to cmux's control socket first (see socket_client.go),
-	// falling back to the `cmux` CLI subprocess only when that connection
-	// itself can't be established -- never after a request has actually been
-	// sent over it, since retrying an ambiguous send through a different
-	// transport risks double-executing non-idempotent input. Off by default
-	// so tests built around a fake Bin script (no real cmux socket to reach)
-	// get the exact same subprocess-only behavior as before.
+	// FastPath, when true, has Rpc try a pool of persistent, authenticated
+	// direct connections to cmux's control socket first (see
+	// socket_client.go and socket_pool.go), falling back to the `cmux` CLI
+	// subprocess only when a connection itself can't be established -- never
+	// after a request has actually been sent over one, since retrying an
+	// ambiguous send through a different transport risks double-executing
+	// non-idempotent input. Off by default so tests built around a fake Bin
+	// script (no real cmux socket to reach) get the exact same
+	// subprocess-only behavior as before.
 	FastPath bool
 
-	sockOnce sync.Once
-	sock     *socketConn
+	poolOnce sync.Once
+	pool     *socketPool
 }
 
-func (c *Client) fastPathConn() *socketConn {
-	c.sockOnce.Do(func() { c.sock = &socketConn{} })
-	return c.sock
+func (c *Client) fastPathPool() *socketPool {
+	c.poolOnce.Do(func() { c.pool = newSocketPool(fastPathPoolSize) })
+	return c.pool
 }
 
 func (c *Client) bin() string {
@@ -47,13 +48,14 @@ func (c *Client) bin() string {
 }
 
 // Rpc calls a cmux v2 socket method and returns its raw JSON result. When
-// FastPath is set, it first tries the persistent socket connection; only a
-// connect/auth failure there (nothing sent yet, so no idempotency risk)
-// falls back to the `cmux rpc <method> [json(params)]` subprocess below. On a
-// subprocess non-zero exit, the returned error includes the captured stderr.
+// FastPath is set, it first tries a pooled persistent socket connection;
+// only a connect/auth failure there (nothing sent yet, so no idempotency
+// risk) falls back to the `cmux rpc <method> [json(params)]` subprocess
+// below. On a subprocess non-zero exit, the returned error includes the
+// captured stderr.
 func (c *Client) Rpc(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if c.FastPath {
-		if raw, committed, err := c.fastPathConn().rpc(ctx, method, params); committed {
+		if raw, committed, err := c.fastPathPool().rpc(ctx, method, params); committed {
 			return raw, err
 		}
 	}
