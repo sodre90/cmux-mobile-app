@@ -233,7 +233,11 @@ func runPairDevice(args []string) int {
 		log.Printf("pair-device: e2e identity: %v", err)
 		return 1
 	}
-	sessions := e2e.OpenStore(cfg.SessionStore)
+	sessions, err := e2e.OpenStore(cfg.SessionStore)
+	if err != nil {
+		log.Printf("pair-device: open session store: %v", err)
+		return 1
+	}
 
 	if err := pairDevice(client, agentBase, devicePairURL, identity, sessions, os.Stdout, 2*time.Second, time.Now().Add(*timeout)); err != nil {
 		log.Printf("pair-device: %v", err)

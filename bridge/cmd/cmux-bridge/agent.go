@@ -281,8 +281,19 @@ func runAgent(args []string) int {
 		}
 	}
 	srv := server.New(&cmux.Client{Bin: cfg.CmuxBin, FastPath: true}, directStore)
-	srv.SetSessions(e2e.OpenStore(cfg.SessionStore))
-	srv.SetYoloStore(yolo.OpenStore(cfg.YoloStore))
+	sessions, err := e2e.OpenStore(cfg.SessionStore)
+	if err != nil {
+		log.Printf("agent: open session store: %v", err)
+		return 1
+	}
+	srv.SetSessions(sessions)
+
+	yoloStore, err := yolo.Open(cfg.YoloStore)
+	if err != nil {
+		log.Printf("agent: open yolo store: %v", err)
+		return 1
+	}
+	srv.SetYoloStore(yoloStore)
 	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
 		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
 			log.Printf("agent: direct-mode push disabled: %v", err)

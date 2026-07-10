@@ -67,7 +67,10 @@ func TestPairDeviceStopsOnRedemption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity: %v", err)
 	}
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
 
 	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(2*time.Second))
 	if err != nil {
@@ -91,7 +94,10 @@ func TestPairDeviceRetriesOnTransientError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity: %v", err)
 	}
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
 
 	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(2*time.Second))
 	if err != nil {
@@ -112,7 +118,10 @@ func TestPairDeviceTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrCreateIdentity: %v", err)
 	}
-	sessions := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
 
 	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(50*time.Millisecond))
 	if err == nil {
