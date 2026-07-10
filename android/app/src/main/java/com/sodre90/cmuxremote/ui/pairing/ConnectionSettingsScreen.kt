@@ -21,8 +21,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 
 /** Replaces the old single-pairing Settings screen: shows both
  *  [ConnectionSlot]s' paired/unpaired status side by side, each with its
@@ -103,6 +105,34 @@ private fun ConnectionRow(
                 }
             }
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun ConnectionRowPreview() {
+    CmuxTheme {
+        ConnectionRow(
+            label = "Relay",
+            description = "Reaches your Mac from anywhere, via the home server.",
+            configured = false,
+            onPair = {},
+            onForget = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Paired")
+@Composable
+private fun ConnectionRowPairedPreview() {
+    CmuxTheme {
+        ConnectionRow(
+            label = "Tailscale (direct)",
+            description = "Reaches your Mac directly over your tailnet.",
+            configured = true,
+            onPair = {},
+            onForget = {},
+        )
     }
 }
 

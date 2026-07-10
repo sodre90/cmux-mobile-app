@@ -28,11 +28,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -159,6 +161,65 @@ private fun InboxRow(
                 modifier = Modifier.padding(top = 10.dp),
             ) { Text("Send reply") }
         }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun InboxRowPreview() {
+    CmuxTheme {
+        InboxRow(
+            item = PendingFeedItem(
+                id = "item-1",
+                requestId = "req-1",
+                kind = "question",
+                title = "cmux-app",
+                cwd = "/Users/dev/projects/cmux-app",
+                questions = listOf(
+                    FeedQuestion(
+                        id = "q0",
+                        prompt = "Which branch should this land on?",
+                        multiSelect = false,
+                        options = listOf(
+                            FeedOption(id = "main", label = "main", description = "Ship straight to main"),
+                            FeedOption(id = "feature", label = "feature branch", description = "Open a PR instead"),
+                        ),
+                    ),
+                ),
+            ),
+            onSend = {},
+            onOpenTerminal = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Multi-select")
+@Composable
+private fun InboxRowMultiSelectPreview() {
+    CmuxTheme {
+        InboxRow(
+            item = PendingFeedItem(
+                id = "item-2",
+                requestId = "req-2",
+                kind = "permission",
+                title = "cmux-app",
+                cwd = "/Users/dev/projects/cmux-app",
+                questions = listOf(
+                    FeedQuestion(
+                        id = "q0",
+                        prompt = "Which tools should this rule cover?",
+                        multiSelect = true,
+                        options = listOf(
+                            FeedOption(id = "read", label = "Read"),
+                            FeedOption(id = "write", label = "Write"),
+                            FeedOption(id = "bash", label = "Bash"),
+                        ),
+                    ),
+                ),
+            ),
+            onSend = {},
+            onOpenTerminal = {},
+        )
     }
 }
 

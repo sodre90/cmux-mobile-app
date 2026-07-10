@@ -71,10 +71,12 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import kotlinx.coroutines.delay
 
@@ -371,6 +373,30 @@ private fun DeliveryStatusLabel(status: DeliveryStatus, lostInputNotice: Boolean
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
             style = MaterialTheme.typography.labelSmall,
         )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun DeliveryStatusLabelSendingPreview() {
+    CmuxTheme {
+        DeliveryStatusLabel(status = DeliveryStatus.SENDING, lostInputNotice = false)
+    }
+}
+
+@Preview(showBackground = true, name = "Delayed")
+@Composable
+private fun DeliveryStatusLabelDelayedPreview() {
+    CmuxTheme {
+        DeliveryStatusLabel(status = DeliveryStatus.DELAYED, lostInputNotice = false)
+    }
+}
+
+@Preview(showBackground = true, name = "Lost input notice")
+@Composable
+private fun DeliveryStatusLabelLostInputPreview() {
+    CmuxTheme {
+        DeliveryStatusLabel(status = DeliveryStatus.CONFIRMED, lostInputNotice = true)
     }
 }
 

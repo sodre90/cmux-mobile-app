@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
@@ -67,6 +68,7 @@ import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloAccent
 import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -521,6 +523,54 @@ private fun WorkspaceCard(
     }
 }
 
+@Preview(showBackground = true)
+@Composable
+private fun WorkspaceCardPreview() {
+    CmuxTheme {
+        WorkspaceCard(
+            ws = Workspace(
+                id = "ws-1",
+                cwd = "/Users/dev/projects/cmux-app",
+                title = "cmux-app",
+                terminals = listOf(TerminalPane(id = "t-1", title = "main", ready = true)),
+            ),
+            expanded = false,
+            onToggle = {},
+            onOpen = {},
+            onRename = {},
+            onYoloMode = {},
+            dragHandle = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Unread + attention + YOLO")
+@Composable
+private fun WorkspaceCardAttentionPreview() {
+    CmuxTheme {
+        WorkspaceCard(
+            ws = Workspace(
+                id = "ws-2",
+                cwd = "/Users/dev/projects/other-repo",
+                title = "other-repo",
+                hasUnread = true,
+                attention = "permission",
+                yoloMode = YoloMode.ALWAYS,
+                terminals = listOf(
+                    TerminalPane(id = "t-2", title = "main", ready = true, focused = true, kind = "claude"),
+                    TerminalPane(id = "t-3", title = "logs", ready = false, kind = "shell"),
+                ),
+            ),
+            expanded = true,
+            onToggle = {},
+            onOpen = {},
+            onRename = {},
+            onYoloMode = {},
+            dragHandle = {},
+        )
+    }
+}
+
 // Accent colors for the attention stripe. Null = no stripe (normal workspace).
 private val PermissionAccent = Color(0xFFE53935) // red — agent blocked on a prompt
 private val WaitingAccent = Color(0xFFFFB300) // amber — agent idle, waiting for input
@@ -565,6 +615,25 @@ private fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
     }
 }
 
+@Preview(showBackground = true)
+@Composable
+private fun PaneRowPreview() {
+    CmuxTheme {
+        PaneRow(pane = TerminalPane(id = "t-1", title = "main", ready = true, kind = "claude"), onOpen = {})
+    }
+}
+
+@Preview(showBackground = true, name = "Starting + focused")
+@Composable
+private fun PaneRowStartingFocusedPreview() {
+    CmuxTheme {
+        PaneRow(
+            pane = TerminalPane(id = "t-2", title = "build", ready = false, focused = true, kind = "shell"),
+            onOpen = {},
+        )
+    }
+}
+
 @Composable
 private fun KindBadge(kind: String) {
     Surface(
@@ -578,4 +647,16 @@ private fun KindBadge(kind: String) {
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun KindBadgePreview() {
+    CmuxTheme { KindBadge(kind = "claude") }
+}
+
+@Preview(showBackground = true, name = "Unknown kind")
+@Composable
+private fun KindBadgeUnknownPreview() {
+    CmuxTheme { KindBadge(kind = "") }
 }
