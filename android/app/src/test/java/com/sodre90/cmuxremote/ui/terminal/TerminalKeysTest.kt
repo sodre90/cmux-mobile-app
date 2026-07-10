@@ -66,4 +66,51 @@ class TerminalKeysTest {
 
     @Test fun physicalRegularCharKeyIsUnhandled() =
         assertNull(physicalKeySequence(Key.A, applicationCursorKeys = false))
+
+    // ctrlSequence: the Ctrl chip's letter -> control-byte mapping.
+    @Test fun ctrlSequenceAIsSoh() = assertEquals(Char(1).toString(), ctrlSequence('A'))
+
+    @Test fun ctrlSequenceLIsFormFeed() = assertEquals(Char(12).toString(), ctrlSequence('L'))
+
+    @Test fun ctrlSequenceRIsDc2() = assertEquals(Char(18).toString(), ctrlSequence('R'))
+
+    @Test fun ctrlSequenceIsCaseInsensitive() = assertEquals(ctrlSequence('a'), ctrlSequence('A'))
+
+    @Test fun ctrlSequenceRejectsNonLetter() = assertNull(ctrlSequence('1'))
+
+    @Test fun ctrlSequenceRejectsSpace() = assertNull(ctrlSequence(' '))
+
+    // ctrlSequence must match the quick buttons byte-for-byte -- the chip is
+    // meant to be an equivalent, general path to the same three combos, not a
+    // parallel implementation that could drift from them.
+    @Test fun ctrlSequenceCMatchesQuickButton() =
+        assertEquals(key("^C").sequence(applicationCursorKeys = false), ctrlSequence('C'))
+
+    @Test fun ctrlSequenceDMatchesQuickButton() =
+        assertEquals(key("^D").sequence(applicationCursorKeys = false), ctrlSequence('D'))
+
+    @Test fun ctrlSequenceZMatchesQuickButton() =
+        assertEquals(key("^Z").sequence(applicationCursorKeys = false), ctrlSequence('Z'))
+
+    // applyCtrlArm: what the key bar's latching Ctrl chip actually applies to
+    // outbound text -- single letters are rewritten, everything else passes
+    // through unchanged (multi-character text has no single Ctrl byte, and
+    // non-letters have no Ctrl mapping here).
+    @Test fun applyCtrlArmRewritesSingleLetter() = assertEquals(Char(12).toString(), applyCtrlArm("l"))
+
+    @Test fun applyCtrlArmLeavesMultiCharUnchanged() = assertEquals("ab", applyCtrlArm("ab"))
+
+    @Test fun applyCtrlArmLeavesNonLetterUnchanged() = assertEquals("5", applyCtrlArm("5"))
+
+    @Test fun applyCtrlArmLeavesEmptyUnchanged() = assertEquals("", applyCtrlArm(""))
+
+    // Byte-identical to the ^C/^D/^Z quick buttons for the combos they overlap on.
+    @Test fun applyCtrlArmCMatchesQuickButton() =
+        assertEquals(key("^C").sequence(applicationCursorKeys = false), applyCtrlArm("c"))
+
+    @Test fun applyCtrlArmDMatchesQuickButton() =
+        assertEquals(key("^D").sequence(applicationCursorKeys = false), applyCtrlArm("d"))
+
+    @Test fun applyCtrlArmZMatchesQuickButton() =
+        assertEquals(key("^Z").sequence(applicationCursorKeys = false), applyCtrlArm("z"))
 }

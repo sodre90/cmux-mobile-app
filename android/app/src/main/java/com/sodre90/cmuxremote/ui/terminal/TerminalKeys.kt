@@ -6,9 +6,13 @@ import androidx.compose.ui.input.key.Key
 // ESC is internal (not private) so TerminalScreen's physical-keyboard handling
 // can send it directly, the same sequence the on-screen "Esc" key uses.
 internal val ESC = Char(27).toString()
-private val CTRL_C = Char(3).toString()
-private val CTRL_D = Char(4).toString()
-private val CTRL_Z = Char(26).toString()
+
+// ^C/^D/^Z are derived from [ctrlSequence] (not their own Char literals) so the
+// quick buttons and the general Ctrl chip are guaranteed byte-identical for the
+// combos they overlap on.
+private val CTRL_C = ctrlSequence('C')!!
+private val CTRL_D = ctrlSequence('D')!!
+private val CTRL_Z = ctrlSequence('Z')!!
 private const val CR = "\r"
 
 /**
@@ -75,3 +79,28 @@ internal fun physicalKeySequence(key: Key, applicationCursorKeys: Boolean): Stri
     Key.Enter, Key.NumPadEnter -> CR
     else -> null
 }
+
+/**
+ * Maps a single Latin letter to its Ctrl+<letter> control byte -- Ctrl+A is
+ * 0x01 through Ctrl+Z's 0x1A, the ASCII convention every terminal expects for
+ * readline/vim/tmux bindings (Ctrl+L, Ctrl+A/E, Ctrl+R, ...). Case-insensitive,
+ * since a physical Shift key doesn't change what Ctrl+<letter> sends. Returns
+ * null for anything that isn't a single Latin letter -- there's no
+ * conventional Ctrl byte for those here.
+ */
+internal fun ctrlSequence(letter: Char): String? {
+    val upper = letter.uppercaseChar()
+    if (upper !in 'A'..'Z') return null
+    return Char(upper - 'A' + 1).toString()
+}
+
+/**
+ * The terminal key bar's latching Ctrl chip, applied to whatever [text] was
+ * about to be sent: rewritten to its Ctrl combination when it's exactly one
+ * letter, otherwise returned unchanged. Multi-character text (paste, IME
+ * composition, an already-built key-bar escape sequence) and non-letter
+ * single characters have no Ctrl+<key> byte in this mapping, so they pass
+ * through as typed -- only the chip's arming state (owned by the caller)
+ * decides whether this runs at all.
+ */
+internal fun applyCtrlArm(text: String): String = text.singleOrNull()?.let { ctrlSequence(it) } ?: text

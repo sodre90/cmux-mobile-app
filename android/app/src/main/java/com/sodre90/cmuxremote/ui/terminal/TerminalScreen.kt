@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -132,6 +133,23 @@ fun TerminalScreen(
     // one row per line with horizontal panning (keeps tables/TUI layouts aligned).
     var wrap by rememberSaveable { mutableStateOf(true) }
 
+    // Ctrl chip: armed by one tap, consumed by the next key sent (through
+    // [sendKey], the single funnel every key-bar button, typed-letter diff,
+    // and physical-key send below goes through) -- then disarms. Letters get
+    // rewritten to their Ctrl byte via applyCtrlArm; anything else the chip
+    // can't map (arrows, paste, PgUp, ...) is sent unchanged, but still
+    // consumes the arm, since the user's next key press is the one it applies
+    // to regardless of whether that key had a Ctrl form.
+    var ctrlArmed by rememberSaveable { mutableStateOf(false) }
+    val sendKey: (String) -> Unit = { text ->
+        if (ctrlArmed) {
+            vm.sendText(applyCtrlArm(text))
+            ctrlArmed = false
+        } else {
+            vm.sendText(text)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -166,10 +184,15 @@ fun TerminalScreen(
                 val appCursorKeys = (state as? UiState.Ready)?.data?.grid?.applicationCursorKeys ?: false
                 ArrowPad(
                     applicationCursorKeys = appCursorKeys,
-                    onKey = vm::sendText,
-                    onPaste = { clipboard.getText()?.text?.let { vm.sendText(it) } },
+                    onKey = sendKey,
+                    onPaste = { clipboard.getText()?.text?.let { sendKey(it) } },
                 )
-                KeyBar(applicationCursorKeys = appCursorKeys, onKey = vm::sendText)
+                KeyBar(
+                    applicationCursorKeys = appCursorKeys,
+                    ctrlArmed = ctrlArmed,
+                    onToggleCtrl = { ctrlArmed = !ctrlArmed },
+                    onKey = sendKey,
+                )
                 DeliveryStatusLabel(status = deliveryStatus, lostInputNotice = lostInputNotice)
             }
         },
@@ -276,7 +299,7 @@ fun TerminalScreen(
                                         input
                                     )} new=${describeForLog(new)} diff=${describeForLog(diff)}",
                                 )
-                                if (diff.isNotEmpty()) vm.sendText(diff)
+                                if (diff.isNotEmpty()) sendKey(diff)
                                 input = new
                             },
                             textStyle = TextStyle(color = Color.Transparent),
@@ -284,7 +307,7 @@ fun TerminalScreen(
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                             keyboardActions = KeyboardActions(onSend = {
-                                vm.sendText("\r")
+                                sendKey("\r")
                                 input = ""
                             }),
                             modifier = Modifier
@@ -308,12 +331,12 @@ fun TerminalScreen(
                                         return@onPreviewKeyEvent false
                                     }
                                     if (event.key == Key.Backspace && input.isEmpty()) {
-                                        vm.sendText(DEL)
+                                        sendKey(DEL)
                                         return@onPreviewKeyEvent true
                                     }
                                     val sequence = physicalKeySequence(event.key, grid.applicationCursorKeys)
                                         ?: return@onPreviewKeyEvent false
-                                    vm.sendText(sequence)
+                                    sendKey(sequence)
                                     if (event.key == Key.Enter || event.key == Key.NumPadEnter) input = ""
                                     true
                                 },
@@ -378,19 +401,57 @@ private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (
     ) { Text(key.label) }
 }
 
+/**
+ * The horizontally-scrolling key bar, with the latching Ctrl chip pinned
+ * outside the scroll (like the D-pad, it must never require scrolling to
+ * find). [ctrlArmed] is owned by the caller so the same arm/disarm state
+ * also gates typed-letter input outside this composable.
+ */
 @Composable
-private fun KeyBar(applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
+private fun KeyBar(
+    applicationCursorKeys: Boolean,
+    ctrlArmed: Boolean,
+    onToggleCtrl: () -> Unit,
+    onKey: (String) -> Unit,
+) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        TerminalKeys.forEach { key ->
-            OutlinedButton(onClick = { onKey(key.sequence(applicationCursorKeys)) }) {
-                Text(key.label)
+        CtrlChip(armed = ctrlArmed, onClick = onToggleCtrl)
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TerminalKeys.forEach { key ->
+                OutlinedButton(onClick = { onKey(key.sequence(applicationCursorKeys)) }) {
+                    Text(key.label)
+                }
             }
         }
     }
+}
+
+/**
+ * The general Ctrl modifier: tapping it arms sending the next key as its
+ * Ctrl combination (see [applyCtrlArm]) instead of its literal form, then
+ * disarms itself. Filled with the primary color while armed -- distinct
+ * enough at a glance that a modal toggle doesn't get left on unnoticed. The
+ * scrollable bar's own ^C/^D/^Z stay as one-tap shortcuts for the combos
+ * used often enough to be worth a dedicated button; this chip covers
+ * everything else (Ctrl+L, Ctrl+A/E, Ctrl+R, ...) without hardcoding a
+ * button per combo.
+ */
+@Composable
+private fun CtrlChip(armed: Boolean, onClick: () -> Unit) {
+    val colors = if (armed) {
+        ButtonDefaults.outlinedButtonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary,
+        )
+    } else {
+        ButtonDefaults.outlinedButtonColors()
+    }
+    OutlinedButton(onClick = onClick, colors = colors) { Text("Ctrl") }
 }
