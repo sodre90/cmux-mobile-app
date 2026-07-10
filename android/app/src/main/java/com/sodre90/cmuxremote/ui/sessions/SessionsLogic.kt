@@ -65,6 +65,21 @@ fun sortedByAttention(workspaces: List<Workspace>): List<Workspace> =
  *  not how many items are pending within one. */
 fun unreadWorkspaceCount(workspaces: List<Workspace>): Int = workspaces.count { it.hasUnread }
 
+/** A short phrase describing [ws]'s attention state and unread flag, or null
+ *  when there's nothing to call out. Backs the TalkBack announcement for
+ *  [WorkspaceCard]'s color-only attention stripe and unread dot, so the same
+ *  information those convey visually isn't lost on a screen reader. */
+fun workspaceStatusDescription(ws: Workspace): String? {
+    val parts = buildList {
+        when (ws.attention) {
+            "permission" -> add("needs permission")
+            "input" -> add("waiting for input")
+        }
+        if (ws.hasUnread) add("unread")
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
+}
+
 /** A compact "N workspaces on autopilot: foo, bar" summary of every workspace
  *  in an auto-reply YOLO mode (anything [yoloModeLabel] would badge on its
  *  card: Always/All tools/Bypass), or null when none are. Meant for a banner

@@ -7,6 +7,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.YoloMode
 
@@ -27,7 +29,15 @@ fun yoloModeLabel(mode: String): String? = when (mode) {
 
 @Composable
 fun YoloBadge(label: String) {
-    Surface(color = YoloAccent, shape = MaterialTheme.shapes.small) {
+    Surface(
+        color = YoloAccent,
+        shape = MaterialTheme.shapes.small,
+        // clearAndSetSemantics replaces (rather than adds to) the Text child's
+        // own semantics -- otherwise TalkBack would read the bare label
+        // ("ALWAYS") with nothing indicating it's this workspace's auto-reply
+        // mode, which is the whole point of the badge.
+        modifier = Modifier.clearAndSetSemantics { contentDescription = "Auto-reply mode: $label" },
+    ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,

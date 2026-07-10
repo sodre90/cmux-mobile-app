@@ -57,6 +57,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.TerminalPane
@@ -422,6 +424,14 @@ private fun WorkspaceCard(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Box {
+                    // The attention stripe and unread dot below are color/shape-only
+                    // (see attentionAccent) -- fold what they mean into this row's own
+                    // merged announcement instead, rather than putting semantics
+                    // directly on either: the stripe sits outside this clickable Row
+                    // entirely (a sibling in the outer accent Row), so a contentDescription
+                    // on it would surface as its own, title-less TalkBack stop instead of
+                    // part of this card's summary.
+                    val statusDescription = workspaceStatusDescription(ws)
                     Row(
                         modifier = Modifier.fillMaxWidth()
                             .combinedClickable(
@@ -431,6 +441,13 @@ private fun WorkspaceCard(
                                     if (direct != null) onOpen(direct) else onToggle()
                                 },
                                 onLongClick = { showActionMenu = true },
+                            )
+                            .then(
+                                if (statusDescription != null) {
+                                    Modifier.semantics { contentDescription = statusDescription }
+                                } else {
+                                    Modifier
+                                },
                             )
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,

@@ -162,6 +162,40 @@ class SessionsLogicTest {
     }
 
     @Test
+    fun workspaceStatusDescriptionIsNullForACalmReadWorkspace() {
+        assertNull(workspaceStatusDescription(Workspace(id = "w")))
+    }
+
+    @Test
+    fun workspaceStatusDescriptionNamesThePermissionState() {
+        assertEquals(
+            "needs permission",
+            workspaceStatusDescription(Workspace(id = "w", attention = "permission")),
+        )
+    }
+
+    @Test
+    fun workspaceStatusDescriptionNamesTheInputWaitState() {
+        assertEquals(
+            "waiting for input",
+            workspaceStatusDescription(Workspace(id = "w", attention = "input")),
+        )
+    }
+
+    @Test
+    fun workspaceStatusDescriptionNamesUnread() {
+        assertEquals("unread", workspaceStatusDescription(Workspace(id = "w", hasUnread = true)))
+    }
+
+    @Test
+    fun workspaceStatusDescriptionCombinesAttentionAndUnread() {
+        assertEquals(
+            "needs permission, unread",
+            workspaceStatusDescription(Workspace(id = "w", attention = "permission", hasUnread = true)),
+        )
+    }
+
+    @Test
     fun autopilotSummaryLabelIsNullWhenNoneAreOnAnAutoReplyMode() {
         val workspaces = listOf(
             Workspace(id = "a", title = "foo", yoloMode = YoloMode.OFF),
