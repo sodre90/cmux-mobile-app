@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -367,6 +368,11 @@ private fun WorkspaceCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        // Long-press already opens this same menu (power-user shortcut);
+                        // this icon is the discoverable affordance for everyone else.
+                        IconButton(onClick = { showActionMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Workspace actions")
+                        }
                         dragHandle()
                     }
                     DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
