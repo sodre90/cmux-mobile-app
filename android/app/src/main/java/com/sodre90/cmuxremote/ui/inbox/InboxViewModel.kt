@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
+import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,11 +28,20 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
 
     private val client = bridge.activeBridge()
 
-    private val _items = MutableStateFlow<List<PendingFeedItem>>(emptyList())
-    val items: StateFlow<List<PendingFeedItem>> = _items.asStateFlow()
+    // [UiState.Error] is never set here (see [refresh]) -- kept as the shared
+    // UiState<T> type for consistency with the other screens, but InboxScreen
+    // deliberately renders Loading and Error the same as an empty Ready list
+    // (see its doc comment) so this internal-modeling unification introduces
+    // no observable UI change: a failed fetch always surfaced as an error
+    // banner over the (possibly still-empty) list before this refactor too,
+    // never a full loading spinner or a full-screen error page.
+    private val _state = MutableStateFlow<UiState<List<PendingFeedItem>>>(UiState.Loading)
+    val state: StateFlow<UiState<List<PendingFeedItem>>> = _state.asStateFlow()
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error.asStateFlow()
+    // Surfaced separately from [state] so a failed refresh/reply doesn't blow
+    // away an already-loaded list (mirrors SessionsViewModel's actionError).
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
     private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth())
 
@@ -57,17 +67,20 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
 
     fun refresh() {
         val c = client ?: run {
-            _error.value = "Bridge not configured"
+            _actionError.value = "Bridge not configured"
             return
         }
         viewModelScope.launch {
             try {
                 // "question" (AskUserQuestion) is the only replyable kind cmux
                 // currently surfaces as a pending feed item.
-                _items.value = c.pendingFeed().filter { it.kind == "question" }
-                _error.value = null
+                val items = c.pendingFeed().filter { it.kind == "question" }
+                _state.value = UiState.Ready(items)
+                _actionError.value = null
             } catch (ex: Exception) {
-                _error.value = ex.message ?: "Failed to load inbox"
+                // Never demotes [state] to Error, whether or not a list was
+                // already showing -- see [_state]'s doc comment for why.
+                _actionError.value = ex.message ?: "Failed to load inbox"
             }
         }
     }
@@ -75,7 +88,7 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
     /** Answer a question item with the labels of the chosen options. */
     fun reply(item: PendingFeedItem, selections: List<String>) {
         val c = client ?: run {
-            _error.value = "Bridge not configured"
+            _actionError.value = "Bridge not configured"
             return
         }
         val params = buildJsonObject {
@@ -84,9 +97,11 @@ class InboxViewModel(bridge: BridgeGateway) : ViewModel() {
         viewModelScope.launch {
             try {
                 c.replyFeed(item.id, FeedReply("question", item.requestId, params))
-                _items.update { cur -> cur.filterNot { it.id == item.id } }
+                _state.update { cur ->
+                    if (cur is UiState.Ready) UiState.Ready(cur.data.filterNot { it.id == item.id }) else cur
+                }
             } catch (ex: Exception) {
-                _error.value = ex.message ?: "Reply failed"
+                _actionError.value = ex.message ?: "Reply failed"
             }
         }
     }

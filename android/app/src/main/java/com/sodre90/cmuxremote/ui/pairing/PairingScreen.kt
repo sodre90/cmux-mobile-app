@@ -27,6 +27,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,8 +63,10 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
         if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
-    LaunchedEffect(vm.state) {
-        if (vm.state is PairingUiState.Success) onPaired()
+    val state by vm.state.collectAsState()
+
+    LaunchedEffect(state) {
+        if (state is PairingUiState.Success) onPaired()
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { inner ->
@@ -71,7 +74,7 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(inner),
             verticalArrangement = Arrangement.Top,
         ) {
-            when (val state = vm.state) {
+            when (val s = state) {
                 is PairingUiState.Scanning -> {
                     var showManualEntry by remember { mutableStateOf(false) }
                     if (showManualEntry) {
@@ -108,7 +111,7 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(state.message)
+                    Text(s.message)
                     Button(onClick = vm::retry) { Text("Scan again") }
                 }
                 is PairingUiState.Success -> Unit // LaunchedEffect above navigates away

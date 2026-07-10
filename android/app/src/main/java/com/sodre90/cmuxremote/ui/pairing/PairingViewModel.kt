@@ -1,8 +1,5 @@
 package com.sodre90.cmuxremote.ui.pairing
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.ConnectionSlot
@@ -11,6 +8,9 @@ import com.sodre90.cmuxremote.data.pairing.PairingCodeInvalidException
 import com.sodre90.cmuxremote.data.pairing.PairingQr
 import com.sodre90.cmuxremote.data.pairing.isExpired
 import com.sodre90.cmuxremote.data.pairing.parsePairingQr
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 sealed interface PairingUiState {
@@ -25,17 +25,17 @@ sealed interface PairingUiState {
  *  ignored (foreign QR content, or a scan while already mid-pairing). */
 class PairingViewModel(private val pairing: PairingGateway, private val slot: ConnectionSlot) : ViewModel() {
 
-    var state by mutableStateOf<PairingUiState>(PairingUiState.Scanning)
-        private set
+    private val _state = MutableStateFlow<PairingUiState>(PairingUiState.Scanning)
+    val state: StateFlow<PairingUiState> = _state.asStateFlow()
 
     fun onQrScanned(raw: String) {
-        if (state !is PairingUiState.Scanning) return
+        if (_state.value !is PairingUiState.Scanning) return
         val qr = parsePairingQr(raw) ?: return
         if (qr.isExpired()) {
-            state = PairingUiState.Error("This code has expired -- ask the Mac to generate a new one.")
+            _state.value = PairingUiState.Error("This code has expired -- ask the Mac to generate a new one.")
             return
         }
-        state = PairingUiState.Pairing
+        _state.value = PairingUiState.Pairing
         viewModelScope.launch {
             pairAndUpdateState(
                 qr,
@@ -48,9 +48,9 @@ class PairingViewModel(private val pairing: PairingGateway, private val slot: Co
      *  pairing remotely): resolves the server URL + the code `cmux-bridge
      *  pair-device` also prints, into the same shape a scanned QR produces. */
     fun onManualEntrySubmitted(serverUrl: String, code: String) {
-        if (state !is PairingUiState.Scanning) return
+        if (_state.value !is PairingUiState.Scanning) return
         if (serverUrl.isBlank() || code.isBlank()) return
-        state = PairingUiState.Pairing
+        _state.value = PairingUiState.Pairing
         viewModelScope.launch {
             try {
                 val qr = pairing.pairingClient(slot).resolveManualCode(serverUrl.trim(), code.trim())
@@ -59,9 +59,9 @@ class PairingViewModel(private val pairing: PairingGateway, private val slot: Co
                     invalidCodeMessage = "This code has expired or was already used -- ask for a fresh one."
                 )
             } catch (e: PairingCodeInvalidException) {
-                state = PairingUiState.Error("This code has expired or was already used -- ask for a fresh one.")
+                _state.value = PairingUiState.Error("This code has expired or was already used -- ask for a fresh one.")
             } catch (e: Exception) {
-                state = PairingUiState.Error(e.message ?: "Pairing failed")
+                _state.value = PairingUiState.Error(e.message ?: "Pairing failed")
             }
         }
     }
@@ -69,16 +69,16 @@ class PairingViewModel(private val pairing: PairingGateway, private val slot: Co
     private suspend fun pairAndUpdateState(qr: PairingQr, invalidCodeMessage: String) {
         try {
             pairing.pairingClient(slot).pair(qr)
-            state = PairingUiState.Success
+            _state.value = PairingUiState.Success
         } catch (e: PairingCodeInvalidException) {
-            state = PairingUiState.Error(invalidCodeMessage)
+            _state.value = PairingUiState.Error(invalidCodeMessage)
         } catch (e: Exception) {
-            state = PairingUiState.Error(e.message ?: "Pairing failed")
+            _state.value = PairingUiState.Error(e.message ?: "Pairing failed")
         }
     }
 
     /** Returns to the scanning state after an error. */
     fun retry() {
-        state = PairingUiState.Scanning
+        _state.value = PairingUiState.Scanning
     }
 }

@@ -28,7 +28,7 @@ class SessionsViewModel(
     val state: StateFlow<UiState<List<Workspace>>> = _state.asStateFlow()
 
     // Surfaced separately from [state] so a failed rename doesn't blow away an
-    // already-loaded list (mirrors InboxViewModel's error/items split).
+    // already-loaded list (mirrors InboxViewModel's state/actionError split).
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 

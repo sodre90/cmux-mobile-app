@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
+import com.sodre90.cmuxremote.ui.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,8 +39,8 @@ fun InboxScreen(
     vm: InboxViewModel,
     onBack: () -> Unit,
 ) {
-    val items by vm.items.collectAsState()
-    val error by vm.error.collectAsState()
+    val state by vm.state.collectAsState()
+    val actionError by vm.actionError.collectAsState()
 
     Scaffold(
         topBar = {
@@ -52,17 +53,27 @@ fun InboxScreen(
     ) { inner ->
         Box(modifier = Modifier.fillMaxSize().padding(inner)) {
             Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-                error?.let {
+                actionError?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                 }
-                if (items.isEmpty()) {
-                    Box(Modifier.fillMaxSize()) {
+                // Loading/Error deliberately render exactly like an empty Ready
+                // list (see InboxViewModel's [_state] doc comment): this
+                // preserves the pre-unification look (a plain "No pending
+                // prompts" with the actionError banner above it, if any) --
+                // InboxViewModel never actually reaches UiState.Error today.
+                when (val s = state) {
+                    is UiState.Loading, is UiState.Error -> Box(Modifier.fillMaxSize()) {
                         Text("No pending prompts", Modifier.align(Alignment.Center))
                     }
-                } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(items, key = { it.id }) { item ->
-                            InboxRow(item) { labels -> vm.reply(item, labels) }
+                    is UiState.Ready -> if (s.data.isEmpty()) {
+                        Box(Modifier.fillMaxSize()) {
+                            Text("No pending prompts", Modifier.align(Alignment.Center))
+                        }
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(s.data, key = { it.id }) { item ->
+                                InboxRow(item) { labels -> vm.reply(item, labels) }
+                            }
                         }
                     }
                 }

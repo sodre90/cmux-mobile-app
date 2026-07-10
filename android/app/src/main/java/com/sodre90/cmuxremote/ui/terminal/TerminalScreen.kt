@@ -69,6 +69,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import kotlinx.coroutines.delay
@@ -162,7 +163,7 @@ fun TerminalScreen(
                     WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom),
                 ),
             ) {
-                val appCursorKeys = state.grid?.applicationCursorKeys ?: false
+                val appCursorKeys = (state as? UiState.Ready)?.data?.grid?.applicationCursorKeys ?: false
                 ArrowPad(
                     applicationCursorKeys = appCursorKeys,
                     onKey = vm::sendText,
@@ -174,20 +175,21 @@ fun TerminalScreen(
         },
     ) { inner ->
         Box(modifier = Modifier.fillMaxSize().padding(inner)) {
-            val s = state
-            when {
-                s.error != null -> Column(
+            when (val s = state) {
+                is UiState.Error -> Column(
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(s.error)
+                    Text(s.message)
                     Button(onClick = { vm.reconnect() }) { Text("Reconnect") }
                 }
 
-                s.grid == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
 
-                else -> {
+                is UiState.Ready -> {
+                    val grid = s.data.grid
+                    val styles = s.data.styles
                     val measurer = rememberTextMeasurer()
                     val density = LocalDensity.current
                     // Glyph advance per 1sp, measured once at the base size. The font is
@@ -248,13 +250,13 @@ fun TerminalScreen(
 
                         // Fit-to-width: size the font so the surface's full column count fits
                         // the viewport; pinch (userZoom) grows it from there to read a section.
-                        val gridCols = s.grid.columns.takeIf { it > 0 } ?: cols
+                        val gridCols = grid.columns.takeIf { it > 0 } ?: cols
                         val fitFontSp = fitFontSizeSp(wPx, gridCols, advancePerSp, MIN_FONT_SP, FIT_MAX_SP)
                         val fontSizeSp = (fitFontSp * userZoom).coerceIn(MIN_FONT_SP, MAX_FONT_SP)
 
                         RenderGridView(
-                            grid = s.grid,
-                            styles = s.styles,
+                            grid = grid,
+                            styles = styles,
                             fontSizeSp = fontSizeSp,
                             wrap = wrap,
                             modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -309,7 +311,7 @@ fun TerminalScreen(
                                         vm.sendText(DEL)
                                         return@onPreviewKeyEvent true
                                     }
-                                    val sequence = physicalKeySequence(event.key, s.grid.applicationCursorKeys)
+                                    val sequence = physicalKeySequence(event.key, grid.applicationCursorKeys)
                                         ?: return@onPreviewKeyEvent false
                                     vm.sendText(sequence)
                                     if (event.key == Key.Enter || event.key == Key.NumPadEnter) input = ""

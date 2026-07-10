@@ -10,6 +10,7 @@ import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
 import com.sodre90.cmuxremote.model.TerminalDown
+import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,10 +23,11 @@ private const val DELIVERY_CHECK_INTERVAL_MS = 500L
 
 private const val TAG = "TerminalInput"
 
-data class TerminalUiState(
-    val grid: DecodedGrid? = null,
+/** The decoded render-grid snapshot + its style palette -- [TerminalViewModel]'s
+ *  [UiState.Ready] payload. */
+data class TerminalContent(
+    val grid: DecodedGrid,
     val styles: List<Style> = emptyList(),
-    val error: String? = null,
 )
 
 class TerminalViewModel(
@@ -33,8 +35,8 @@ class TerminalViewModel(
     private val surfaceId: String,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(TerminalUiState())
-    val state: StateFlow<TerminalUiState> = _state.asStateFlow()
+    private val _state = MutableStateFlow<UiState<TerminalContent>>(UiState.Loading)
+    val state: StateFlow<UiState<TerminalContent>> = _state.asStateFlow()
     private var job: Job? = null
 
     // Picks RELAY vs DIRECT per reconnect attempt, preferring DIRECT only
@@ -99,11 +101,11 @@ class TerminalViewModel(
 
     private fun connect() {
         if (!bridge.anyBridgeConfigured()) {
-            _state.value = TerminalUiState(error = "Bridge not configured")
+            _state.value = UiState.Error("Bridge not configured")
             return
         }
         job?.cancel()
-        _state.value = TerminalUiState() // loading (grid == null, error == null)
+        _state.value = UiState.Loading
         // Reconnect automatically: the WebSocket is dropped when the app is
         // backgrounded (or the network blips), so retry with backoff instead of
         // leaving the user to tap Reconnect. A disconnect keeps the last grid
@@ -119,10 +121,8 @@ class TerminalViewModel(
                         return@onFrame false
                     }
                     val rg = frame.grid ?: return@onFrame false
-                    _state.value = TerminalUiState(
-                        grid = RenderGridDecoder.decode(rg),
-                        styles = rg.styles,
-                    )
+                    val content = TerminalContent(grid = RenderGridDecoder.decode(rg), styles = rg.styles)
+                    _state.value = UiState.Ready(content)
                     true
                 },
             )
