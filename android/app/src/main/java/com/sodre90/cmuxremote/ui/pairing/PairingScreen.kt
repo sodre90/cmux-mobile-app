@@ -68,10 +68,6 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
 
     val state by vm.state.collectAsState()
 
-    LaunchedEffect(state) {
-        if (state is PairingUiState.Success) onPaired()
-    }
-
     Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner),
@@ -132,7 +128,17 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                     Text(s.message)
                     Button(onClick = vm::retry) { Text(stringResource(R.string.pairing_scan_again)) }
                 }
-                is PairingUiState.Success -> Unit // LaunchedEffect above navigates away
+                is PairingUiState.Success -> Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(stringResource(R.string.pairing_success_title))
+                    Text(s.fingerprint, style = MaterialTheme.typography.headlineSmall)
+                    Text(stringResource(R.string.pairing_success_body))
+                    Button(onClick = onPaired, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.action_done))
+                    }
+                }
             }
         }
     }

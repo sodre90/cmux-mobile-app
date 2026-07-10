@@ -97,14 +97,14 @@ class PairingViewModelTest {
     }
 
     @Test
-    fun confirmingCommitsAndTransitionsToSuccess() {
-        val session = FakePairingSession()
+    fun confirmingCommitsAndTransitionsToSuccessCarryingTheSameFingerprint() {
+        val session = FakePairingSession(onPrepare = { "ABCD-1234-EF56" })
         val vm = testViewModel(session)
         vm.onQrScanned(validQrJson())
 
         vm.onConfirmed()
 
-        waitUntil { vm.state.value == PairingUiState.Success }
+        waitUntil { vm.state.value == PairingUiState.Success("ABCD-1234-EF56") }
         assertEquals(1, session.commitCallCount)
     }
 

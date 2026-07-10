@@ -21,7 +21,14 @@ sealed interface PairingUiState {
      *  commits. See docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md. */
     data class AwaitingConfirmation(val fingerprint: String) : PairingUiState
     data object Pairing : PairingUiState
-    data object Success : PairingUiState
+
+    /** Carries the same fingerprint [AwaitingConfirmation] showed -- the CLI
+     *  can't print its own fingerprint until it sees this device's POST
+     *  land, so it necessarily appears *after* the phone's screen already
+     *  moved past AwaitingConfirmation. Keeping the code here (until the
+     *  human dismisses it, rather than auto-navigating away) is what makes
+     *  a real comparison against the CLI's printout possible. */
+    data class Success(val fingerprint: String) : PairingUiState
     data class Error(val message: String) : PairingUiState
 }
 
@@ -103,13 +110,13 @@ class PairingViewModel(
     /** The human confirmed the fingerprint matches the CLI's: complete the
      *  pairing (POST /devices/pair, derive the shared secret, persist). */
     fun onConfirmed() {
-        if (_state.value !is PairingUiState.AwaitingConfirmation) return
+        val awaiting = _state.value as? PairingUiState.AwaitingConfirmation ?: return
         val qr = pendingQr ?: return
         _state.value = PairingUiState.Pairing
         viewModelScope.launch {
             try {
                 pairing.pairingClient(slot).commit(qr)
-                _state.value = PairingUiState.Success
+                _state.value = PairingUiState.Success(awaiting.fingerprint)
             } catch (e: PairingCodeInvalidException) {
                 _state.value = PairingUiState.Error(pendingInvalidCodeMessage)
             } catch (e: Exception) {
