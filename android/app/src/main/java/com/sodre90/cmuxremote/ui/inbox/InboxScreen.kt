@@ -28,8 +28,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
@@ -51,9 +53,13 @@ fun InboxScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Agent inbox") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
-                actions = { TextButton(onClick = vm::refresh) { Text("Refresh") } },
+                title = { Text(stringResource(R.string.inbox_title)) },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
+                },
+                actions = {
+                    TextButton(onClick = vm::refresh) { Text(stringResource(R.string.action_refresh)) }
+                },
             )
         },
     ) { inner ->
@@ -69,11 +75,11 @@ fun InboxScreen(
                 // InboxViewModel never actually reaches UiState.Error today.
                 when (val s = state) {
                     is UiState.Loading, is UiState.Error -> Box(Modifier.fillMaxSize()) {
-                        Text("No pending prompts", Modifier.align(Alignment.Center))
+                        Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
                     }
                     is UiState.Ready -> if (s.data.isEmpty()) {
                         Box(Modifier.fillMaxSize()) {
-                            Text("No pending prompts", Modifier.align(Alignment.Center))
+                            Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
                         }
                     } else {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -135,7 +141,7 @@ private fun InboxRow(
                 // Additional affordance alongside the reply flow below -- jumps
                 // straight to the terminal this prompt came from instead of
                 // making the user back out to Sessions and hunt for it.
-                TextButton(onClick = onOpenTerminal) { Text("Open terminal") }
+                TextButton(onClick = onOpenTerminal) { Text(stringResource(R.string.inbox_open_terminal)) }
             }
             questions.forEach { q ->
                 val heading = q.prompt.ifBlank { q.header }
@@ -159,7 +165,7 @@ private fun InboxRow(
                 },
                 enabled = ready,
                 modifier = Modifier.padding(top = 10.dp),
-            ) { Text("Send reply") }
+            ) { Text(stringResource(R.string.inbox_send_reply)) }
         }
     }
 }
