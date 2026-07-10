@@ -70,7 +70,7 @@ func (s *Sender) Send(ctx context.Context, fcmToken, title, body string, data ma
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("fcm status %d", resp.StatusCode)
 	}

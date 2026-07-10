@@ -240,7 +240,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	ch := s.hub.register()
 	defer s.hub.unregister(ch)
 
@@ -248,7 +248,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
-				c.Close()
+				_ = c.Close()
 				return
 			}
 		}

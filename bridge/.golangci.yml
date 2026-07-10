@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - staticcheck
+  exclusions:
+    rules:
+      # Ignoring the error from a deferred/best-effort Close, Write, or
+      # SetDeadline on test sockets/response bodies is the standard Go test
+      # idiom (see golangci-lint's own reference config) -- it doesn't hide a
+      # real bug, since the test's own assertions are what determine pass/fail.
+      - path: _test\.go
+        linters:
+          - errcheck

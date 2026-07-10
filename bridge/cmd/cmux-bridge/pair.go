@@ -71,7 +71,7 @@ func requestPairingCode(client *http.Client, agentBase, agentPubkeyB64 string) (
 	if err != nil {
 		return "", "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", "", fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
@@ -91,7 +91,7 @@ func pollPairingCode(client *http.Client, agentBase, code string) (devicePubkey,
 	if err != nil {
 		return "", "", false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", false, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
@@ -131,9 +131,9 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 	if err != nil {
 		return fmt.Errorf("marshal QR payload: %w", err)
 	}
-	fmt.Fprintf(out, "Scan this QR code with the cmux app (code expires %s):\n\n", expiresAt)
+	_, _ = fmt.Fprintf(out, "Scan this QR code with the cmux app (code expires %s):\n\n", expiresAt)
 	qrterminal.GenerateHalfBlock(string(qrJSON), qrterminal.L, out)
-	fmt.Fprintf(out, "\nOr enter this code manually: %s\n\n", code)
+	_, _ = fmt.Fprintf(out, "\nOr enter this code manually: %s\n\n", code)
 
 	for {
 		if time.Now().After(deadline) {
@@ -143,7 +143,7 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 		if err != nil {
 			// Transient relay errors (network blip, brief 5xx) shouldn't abort
 			// the whole pairing attempt -- keep polling until the deadline.
-			fmt.Fprintf(out, "poll error (will retry): %v\n", err)
+			_, _ = fmt.Fprintf(out, "poll error (will retry): %v\n", err)
 			time.Sleep(pollPeriod)
 			continue
 		}
@@ -166,7 +166,7 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 		if err := sessions.AddDevice(tokenHash, devicePub, secret); err != nil {
 			return fmt.Errorf("persist paired device: %w", err)
 		}
-		fmt.Fprintf(out, "Device paired successfully.\n")
+		_, _ = fmt.Fprintf(out, "Device paired successfully.\n")
 		return nil
 	}
 }

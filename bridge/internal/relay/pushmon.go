@@ -48,7 +48,7 @@ func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, stor
 	if err != nil {
 		return err
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 	for {
 		var f wire.EventFrame
 		if err := ws.ReadJSON(&f); err != nil {

@@ -142,11 +142,11 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open store %s: %w", path, err)
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 	if err := applyMigrations(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	return &Store{db: db}, nil
@@ -228,7 +228,7 @@ func (s *Store) ListTenants() ([]Tenant, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Tenant
 	for rows.Next() {
 		var t Tenant
@@ -320,7 +320,7 @@ func (s *Store) List() []Device {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Device
 	for rows.Next() {
 		var dev Device
@@ -401,7 +401,7 @@ func (s *Store) TenantFCMDevices(tenantID string) []FCMDevice {
 	if err != nil {
 		return []FCMDevice{}
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	seen := map[string]bool{}
 	out := []FCMDevice{}
 	for rows.Next() {

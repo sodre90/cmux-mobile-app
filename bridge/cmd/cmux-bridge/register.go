@@ -55,7 +55,7 @@ func ensureRegistered(cfg config.AgentConfig) error {
 	if err != nil {
 		return fmt.Errorf("register with relay: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("register with relay: status %d", resp.StatusCode)
 	}

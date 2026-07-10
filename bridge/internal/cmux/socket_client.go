@@ -101,21 +101,21 @@ func (sc *socketConn) connectLocked() error {
 		return fmt.Errorf("dial %s: %w", path, err)
 	}
 	if err := conn.SetDeadline(time.Now().Add(socketIOTimeout)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("set deadline: %w", err)
 	}
 	if _, err := conn.Write([]byte("auth " + password + "\n")); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("write auth: %w", err)
 	}
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("read auth response: %w", err)
 	}
 	if !strings.HasPrefix(line, "OK:") {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("auth rejected: %s", strings.TrimSpace(line))
 	}
 	sc.conn = conn
@@ -125,7 +125,7 @@ func (sc *socketConn) connectLocked() error {
 
 func (sc *socketConn) closeLocked() {
 	if sc.conn != nil {
-		sc.conn.Close()
+		_ = sc.conn.Close()
 		sc.conn = nil
 		sc.reader = nil
 	}
@@ -188,7 +188,7 @@ func (sc *socketConn) rpc(ctx context.Context, method string, params any) (resul
 	go func() {
 		select {
 		case <-ctx.Done():
-			sc.conn.SetDeadline(time.Now())
+			_ = sc.conn.SetDeadline(time.Now())
 		case <-done:
 		}
 	}()

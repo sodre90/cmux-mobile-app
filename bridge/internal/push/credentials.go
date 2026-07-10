@@ -18,7 +18,7 @@ func FromServiceAccount(ctx context.Context, projectID, credentialsPath string) 
 	if err != nil {
 		return nil, fmt.Errorf("read fcm credentials: %w", err)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, key, fcmScope)
+	creds, err := google.CredentialsFromJSONWithType(ctx, key, google.ServiceAccount, fcmScope)
 	if err != nil {
 		return nil, fmt.Errorf("parse fcm credentials: %w", err)
 	}

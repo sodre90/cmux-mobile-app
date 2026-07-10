@@ -78,7 +78,7 @@ func dialAndServe(ctx context.Context, relayURL string, tlsCfg *tls.Config, hand
 	if err != nil {
 		return err
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	return http.Serve(sess, handler)
 }
 
@@ -230,7 +230,7 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 	go func() { errCh <- http.Serve(tlsLn, mux) }()
 	select {
 	case <-ctx.Done():
-		tlsLn.Close()
+		_ = tlsLn.Close()
 		return ctx.Err()
 	case err := <-errCh:
 		return err

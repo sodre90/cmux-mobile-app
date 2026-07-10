@@ -42,7 +42,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	start := time.Now()
 	log.Printf("terminal %s: connected", id)
 	ctx, cancel := context.WithCancel(r.Context())
