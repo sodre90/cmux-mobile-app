@@ -80,7 +80,7 @@ private class FakeSessionsBridgeGateway : BridgeGateway {
 /**
  * Covers the two pieces of SessionsViewModel's refresh machinery that had no
  * JVM tests before: the `fetchInFlight` overlap guard shared by
- * silentRefresh/autoRefresh (and refresh()'s deliberate exemption from it),
+ * userRefresh/autoRefresh (and refresh()'s deliberate exemption from it),
  * and the debounced coalescing of cmux event-driven refetches. All
  * synchronization is on observable side effects (request counts / VM state)
  * via polling rather than assumptions about coroutine dispatch order, since
@@ -129,7 +129,7 @@ class SessionsViewModelTest {
     }
 
     @Test
-    fun silentRefreshSkipsAConcurrentCallWhileAFetchIsAlreadyInFlight() {
+    fun userRefreshSkipsAConcurrentCallWhileAFetchIsAlreadyInFlight() {
         val requestCount = AtomicInteger(0)
         val gate = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {
@@ -142,27 +142,27 @@ class SessionsViewModelTest {
 
         // Starts unconfigured so init's own refresh() (not gated by
         // fetchInFlight at all) never touches the server -- this test is
-        // only about silentRefresh deduping against itself.
+        // only about userRefresh deduping against itself.
         val gw = FakeSessionsBridgeGateway()
         val vm = SessionsViewModel(gw, orderGateway)
         gw.bridge = bridgeFor(server)
 
-        vm.silentRefresh()
+        vm.userRefresh()
         waitUntil { requestCount.get() == 1 } // in flight, blocked on the gate
 
-        vm.silentRefresh() // must be a no-op: a fetch is already in flight
+        vm.userRefresh() // must be a no-op: a fetch is already in flight
         Thread.sleep(200) // give a wrongly-issued second request a chance to arrive
         assertEquals(1, requestCount.get())
 
         gate.countDown()
         waitUntil { !vm.isRefreshing.value }
 
-        vm.silentRefresh() // fetchInFlight is clear again -> must proceed
+        vm.userRefresh() // fetchInFlight is clear again -> must proceed
         waitUntil { requestCount.get() == 2 }
     }
 
     @Test
-    fun refreshProceedsEvenWhileASilentRefreshIsInFlight() {
+    fun refreshProceedsEvenWhileAUserRefreshIsInFlight() {
         val requestCount = AtomicInteger(0)
         val gate = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {
@@ -177,12 +177,12 @@ class SessionsViewModelTest {
         val vm = SessionsViewModel(gw, orderGateway)
         gw.bridge = bridgeFor(server)
 
-        vm.silentRefresh()
+        vm.userRefresh()
         waitUntil { requestCount.get() == 1 } // in flight, blocked on the gate
 
         // refresh() is NOT gated by fetchInFlight -- it's the "hard reload"
         // path (init, post-rename) and must issue its own request even
-        // though silentRefresh's fetch hasn't resolved yet.
+        // though userRefresh's fetch hasn't resolved yet.
         vm.refresh()
         waitUntil { requestCount.get() == 2 }
 
@@ -235,7 +235,7 @@ class SessionsViewModelTest {
     }
 
     @Test
-    fun autoRefreshSkipsWhileASilentRefreshIsInFlight() {
+    fun autoRefreshSkipsWhileAUserRefreshIsInFlight() {
         val requestCount = AtomicInteger(0)
         val gate = CountDownLatch(1)
         val gateEnabled = AtomicBoolean(false)
@@ -270,10 +270,10 @@ class SessionsViewModelTest {
         waitUntil { requestCount.get() >= 1 } // init's own refresh(), ungated
         val socket = socketRef.get()
 
-        // Put a silentRefresh fetch in flight and hold it there.
+        // Put a userRefresh fetch in flight and hold it there.
         gateEnabled.set(true)
-        vm.silentRefresh()
-        waitUntil { requestCount.get() >= 2 } // silentRefresh's request has arrived and is now blocked
+        vm.userRefresh()
+        waitUntil { requestCount.get() >= 2 } // userRefresh's request has arrived and is now blocked
         val blockedAt = requestCount.get()
 
         // A cmux event fires while that fetch is still in flight: after the
@@ -283,7 +283,7 @@ class SessionsViewModelTest {
         Thread.sleep(1_200) // past the 800ms debounce window
         assertEquals(blockedAt, requestCount.get())
 
-        // Release the blocked silentRefresh fetch; fetchInFlight clears.
+        // Release the blocked userRefresh fetch; fetchInFlight clears.
         gateEnabled.set(false)
         gate.countDown()
         waitUntil { !vm.isRefreshing.value }

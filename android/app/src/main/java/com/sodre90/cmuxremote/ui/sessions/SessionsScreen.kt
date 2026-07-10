@@ -79,7 +79,7 @@ fun SessionsScreen(
                 title = { Text("cmux sessions") },
                 actions = {
                     TextButton(onClick = onOpenInbox) { Text("Inbox") }
-                    TextButton(onClick = { vm.silentRefresh() }) { Text("Refresh") }
+                    TextButton(onClick = { vm.userRefresh() }) { Text("Refresh") }
                     TextButton(onClick = onSettings) { Text("Re-pair device") }
                 },
             )
@@ -96,7 +96,7 @@ fun SessionsScreen(
                 )
                 is UiState.Ready -> PullToRefreshBox(
                     isRefreshing = isRefreshing,
-                    onRefresh = { vm.silentRefresh() },
+                    onRefresh = { vm.userRefresh() },
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     WorkspaceList(vm, s.data, onOpenTerminal)

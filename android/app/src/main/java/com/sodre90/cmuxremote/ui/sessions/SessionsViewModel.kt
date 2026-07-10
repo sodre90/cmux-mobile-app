@@ -129,7 +129,7 @@ class SessionsViewModel(
      *  -- refetches without dropping the list into [UiState.Loading], and
      *  shows [isRefreshing] so PullToRefreshBox's spinner appears. Skips if a
      *  fetch is already in flight. */
-    fun silentRefresh() {
+    fun userRefresh() {
         val client = bridge.activeBridge() ?: run {
             _actionError.value = "Bridge not configured"
             return
@@ -148,7 +148,7 @@ class SessionsViewModel(
     }
 
     /** Background refresh triggered by [subscribeToEvents] -- same non-
-     *  blocking refetch as [silentRefresh] but never touches [isRefreshing],
+     *  blocking refetch as [userRefresh] but never touches [isRefreshing],
      *  so cmux agent activity the user didn't ask about never pops the
      *  pull-to-refresh spinner. */
     private fun autoRefresh() {
