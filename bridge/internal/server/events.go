@@ -15,40 +15,18 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/backoff"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
-// EventFrame is the stable, app-facing event pushed over WS /events.
-type EventFrame struct {
-	Type           string `json:"type"` // "feed" | "notification" | "heartbeat"
-	Name           string `json:"name,omitempty"`
-	NeedsAttention bool   `json:"needs_attention"`
-	FeedID         string `json:"feed_id,omitempty"`
-	WorkspaceID    string `json:"workspace_id,omitempty"`
-	SurfaceID      string `json:"surface_id,omitempty"`
-	Title          string `json:"title,omitempty"`
-	// Preview is the workspace's live status preview (e.g. "Claude needs your
-	// permission"), set by enrichTitle -- kept separate from Title so a push
-	// notification can put the workspace name in the title and this in the
-	// body, instead of one combined string in both.
-	Preview string `json:"preview,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	// EncryptedPush holds, per paired deviceID, an e2e-encrypted {title,body}
-	// push payload (see buildEncryptedPush in push.go) -- populated by
-	// ingestEvents for NeedsAttention frames so relay-mode push (which reads
-	// this same frame over a plaintext internal subscription, see
-	// writeEventFrame) never needs the real Title/Preview to build a
-	// notification. Keyed by the same deviceID e2e.Store.EncryptFrame uses.
-	EncryptedPush map[string]string `json:"encrypted_push,omitempty"`
-}
-
-// classify maps a raw cmux event frame to an EventFrame. The bool is false for
-// frames the app should not see (acks, surface/pane/workspace churn).
-func classify(m map[string]any) (EventFrame, bool) {
+// classify maps a raw cmux event frame to a wire.EventFrame. The bool is
+// false for frames the app should not see (acks, surface/pane/workspace
+// churn).
+func classify(m map[string]any) (wire.EventFrame, bool) {
 	switch str(m, "type") {
 	case "ack":
-		return EventFrame{}, false
+		return wire.EventFrame{}, false
 	case "heartbeat":
-		return EventFrame{Type: "heartbeat"}, true
+		return wire.EventFrame{Type: "heartbeat"}, true
 	}
 	name := str(m, "name")
 	payload, _ := m["payload"].(map[string]any)
@@ -58,7 +36,7 @@ func classify(m map[string]any) (EventFrame, bool) {
 	switch str(m, "category") {
 	case "feed":
 		hookEvent := str(payload, "hook_event_name")
-		return EventFrame{
+		return wire.EventFrame{
 			Type:           "feed",
 			Name:           name,
 			Kind:           hookEvent,
@@ -71,7 +49,7 @@ func classify(m map[string]any) (EventFrame, bool) {
 	case "notification":
 		// Note: cmux redacts notification title/body in the event stream, so we
 		// forward these as informational only and do not set NeedsAttention.
-		return EventFrame{
+		return wire.EventFrame{
 			Type:        "notification",
 			Name:        name,
 			WorkspaceID: wsID,
@@ -79,7 +57,7 @@ func classify(m map[string]any) (EventFrame, bool) {
 			Title:       str(payload, "title"),
 		}, true
 	}
-	return EventFrame{}, false
+	return wire.EventFrame{}, false
 }
 
 // needsAttention reports whether a cmux feed item is a blocking agent prompt
@@ -118,7 +96,7 @@ func attentionLabel(payload map[string]any) string {
 // waiting for your input") — the richest context cmux exposes for a prompt
 // whose actual text it redacts. On any lookup failure the cheap cwd-basename
 // Title classify already set is left as-is, and Preview stays empty.
-func (s *Server) enrichTitle(ctx context.Context, f *EventFrame) {
+func (s *Server) enrichTitle(ctx context.Context, f *wire.EventFrame) {
 	if f.WorkspaceID == "" {
 		return
 	}
@@ -200,20 +178,20 @@ func (s *Server) RunEvents(ctx context.Context) {
 
 type hub struct {
 	mu    sync.Mutex
-	conns map[chan EventFrame]bool
+	conns map[chan wire.EventFrame]bool
 }
 
-func newHub() *hub { return &hub{conns: map[chan EventFrame]bool{}} }
+func newHub() *hub { return &hub{conns: map[chan wire.EventFrame]bool{}} }
 
-func (h *hub) register() chan EventFrame {
-	ch := make(chan EventFrame, 32)
+func (h *hub) register() chan wire.EventFrame {
+	ch := make(chan wire.EventFrame, 32)
 	h.mu.Lock()
 	h.conns[ch] = true
 	h.mu.Unlock()
 	return ch
 }
 
-func (h *hub) unregister(ch chan EventFrame) {
+func (h *hub) unregister(ch chan wire.EventFrame) {
 	h.mu.Lock()
 	if h.conns[ch] {
 		delete(h.conns, ch)
@@ -222,7 +200,7 @@ func (h *hub) unregister(ch chan EventFrame) {
 	h.mu.Unlock()
 }
 
-func (h *hub) broadcast(f EventFrame) {
+func (h *hub) broadcast(f wire.EventFrame) {
 	h.mu.Lock()
 	for ch := range h.conns {
 		select {
@@ -294,7 +272,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // (kind, ids) it needs to fan out push notifications. When s.sessions == nil
 // there is no device/relay distinction or blindness guarantee being made at
 // all (a bare test/dev configuration), so nothing is redacted.
-func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f EventFrame) error {
+func (s *Server) writeEventFrame(c *websocket.Conn, deviceID string, f wire.EventFrame) error {
 	if s.sessions == nil {
 		return c.WriteJSON(f)
 	}

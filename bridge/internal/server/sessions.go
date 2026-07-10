@@ -8,51 +8,27 @@ import (
 	"unicode"
 
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
-
-// Workspace is the app-facing representation of a cmux workspace and its
-// terminal surfaces (panes). Each pane's ID is a streamable terminal-surface id
-// the app opens via /terminal/{id}.
-type Workspace struct {
-	ID        string         `json:"id"`
-	CWD       string         `json:"cwd"`
-	Title     string         `json:"title"`
-	Preview   string         `json:"preview"`
-	HasUnread bool           `json:"has_unread"`
-	Attention string         `json:"attention,omitempty"`
-	YoloMode  string         `json:"yolo_mode,omitempty"`
-	Terminals []TerminalPane `json:"terminals"`
-}
-
-// TerminalPane is one terminal surface within a workspace. ID is the cmux
-// terminal-surface id; Kind is a cosmetic badge derived from the title.
-type TerminalPane struct {
-	ID      string `json:"id"`
-	CWD     string `json:"cwd"`
-	Title   string `json:"title"`
-	Focused bool   `json:"focused"`
-	Ready   bool   `json:"ready"`
-	Kind    string `json:"kind"`
-}
 
 // findWorkspace fetches the live workspace list and returns the one matching
 // id, if any. Used by callers that need a single workspace's live fields
 // (CWD, title, preview) without re-deriving the whole list themselves.
-func (s *Server) findWorkspace(ctx context.Context, id string) (Workspace, bool) {
+func (s *Server) findWorkspace(ctx context.Context, id string) (wire.Workspace, bool) {
 	raw, err := s.cmux.Rpc(ctx, "mobile.workspace.list", nil)
 	if err != nil {
-		return Workspace{}, false
+		return wire.Workspace{}, false
 	}
 	workspaces, err := parseWorkspaces(raw)
 	if err != nil {
-		return Workspace{}, false
+		return wire.Workspace{}, false
 	}
 	for _, ws := range workspaces {
 		if ws.ID == id {
 			return ws, true
 		}
 	}
-	return Workspace{}, false
+	return wire.Workspace{}, false
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -86,13 +62,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 // a hostile cmux.
 const maxWorkspaceWalkDepth = 64
 
-func parseWorkspaces(raw []byte) ([]Workspace, error) {
+func parseWorkspaces(raw []byte) ([]wire.Workspace, error) {
 	var root any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
-	out := []Workspace{}
+	out := []wire.Workspace{}
 	var walk func(any, int)
 	walk = func(node any, depth int) {
 		if depth > maxWorkspaceWalkDepth {
@@ -107,7 +83,7 @@ func parseWorkspaces(raw []byte) ([]Workspace, error) {
 				cwd, _ := stringField(v, "current_directory")
 				hasUnread, _ := v["has_unread"].(bool)
 				preview := firstString(v, "preview")
-				out = append(out, Workspace{
+				out = append(out, wire.Workspace{
 					ID:        id,
 					CWD:       cwd,
 					Title:     cleanTitle(firstString(v, "title")),
@@ -130,10 +106,11 @@ func parseWorkspaces(raw []byte) ([]Workspace, error) {
 	return out, nil
 }
 
-// parsePanes maps a workspace's "terminals" array into TerminalPanes. Panes
-// without an id are skipped; an empty array yields an empty (non-nil) slice.
-func parsePanes(terms []any) []TerminalPane {
-	panes := []TerminalPane{}
+// parsePanes maps a workspace's "terminals" array into wire.TerminalPanes.
+// Panes without an id are skipped; an empty array yields an empty (non-nil)
+// slice.
+func parsePanes(terms []any) []wire.TerminalPane {
+	panes := []wire.TerminalPane{}
 	for _, t := range terms {
 		m, ok := t.(map[string]any)
 		if !ok {
@@ -147,7 +124,7 @@ func parsePanes(terms []any) []TerminalPane {
 		title := cleanTitle(firstString(m, "title"))
 		focused, _ := m["is_focused"].(bool)
 		ready, _ := m["is_ready"].(bool)
-		panes = append(panes, TerminalPane{
+		panes = append(panes, wire.TerminalPane{
 			ID:      id,
 			CWD:     cwd,
 			Title:   title,

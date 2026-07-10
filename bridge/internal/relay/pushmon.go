@@ -12,7 +12,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/backoff"
-	"github.com/sodre90/cmux-bridge/internal/server"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // Pusher delivers an attention push to a single device token. push.Sender
@@ -50,7 +50,7 @@ func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, stor
 	}
 	defer ws.Close()
 	for {
-		var f server.EventFrame
+		var f wire.EventFrame
 		if err := ws.ReadJSON(&f); err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ func subscribeOnce(tenantID string, sess *yamux.Session, relayToken string, stor
 // sees the frame). A device missing from EncryptedPush still gets a push
 // with routing metadata only, so the app can show a generic notification
 // rather than nothing.
-func fanout(tenantID string, store *auth.Store, push Pusher, f server.EventFrame) {
+func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) {
 	devices := store.TenantFCMDevices(tenantID)
 	if len(devices) == 0 {
 		return

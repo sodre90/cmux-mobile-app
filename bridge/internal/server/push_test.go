@@ -14,6 +14,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 type fakePusher struct {
@@ -41,21 +42,21 @@ func (p *fakePusher) callCount() int {
 }
 
 func TestPushTitlePrefersWorkspaceTitle(t *testing.T) {
-	f := EventFrame{Title: "cmux-app"}
+	f := wire.EventFrame{Title: "cmux-app"}
 	if got := f.PushTitle(); got != "cmux-app" {
 		t.Fatalf("PushTitle() = %q, want %q", got, "cmux-app")
 	}
 }
 
 func TestPushTitleFallsBackWhenNoTitle(t *testing.T) {
-	f := EventFrame{}
+	f := wire.EventFrame{}
 	if got := f.PushTitle(); got != "Agent needs your attention" {
 		t.Fatalf("PushTitle() = %q, want the generic fallback", got)
 	}
 }
 
 func TestPushBodyPrefersPreview(t *testing.T) {
-	f := EventFrame{Preview: "Claude needs your permission", Kind: "AskUserQuestion"}
+	f := wire.EventFrame{Preview: "Claude needs your permission", Kind: "AskUserQuestion"}
 	if got := f.PushBody(); got != "Claude needs your permission" {
 		t.Fatalf("PushBody() = %q, want the frame's Preview", got)
 	}
@@ -69,7 +70,7 @@ func TestPushBodyMapsKnownKindsWithoutPreview(t *testing.T) {
 		"unknown-kind":    "Open cmux to reply",
 	}
 	for kind, want := range cases {
-		if got := (EventFrame{Kind: kind}).PushBody(); got != want {
+		if got := (wire.EventFrame{Kind: kind}).PushBody(); got != want {
 			t.Fatalf("PushBody() for kind %q = %q, want %q", kind, got, want)
 		}
 	}
@@ -92,14 +93,14 @@ func TestMaybeSendPushNoopWithoutPusher(t *testing.T) {
 	store.SetFCMToken(tok, "fcm-token-1")
 	// s.pusher is nil (SetPusher never called) -- must not panic, must not
 	// look anything up.
-	s.maybeSendPush(context.Background(), EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
+	s.maybeSendPush(context.Background(), wire.EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
 }
 
 func TestMaybeSendPushNoopWithoutStore(t *testing.T) {
 	s := New(&cmux.Client{}, nil) // store nil: direct mode off
 	fp := &fakePusher{}
 	s.SetPusher(fp, "some-tenant")
-	s.maybeSendPush(context.Background(), EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
+	s.maybeSendPush(context.Background(), wire.EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
 	if fp.callCount() != 0 {
 		t.Fatalf("must not call pusher when store is nil, got %d calls", fp.callCount())
 	}
@@ -121,7 +122,7 @@ func TestMaybeSendPushSendsToEveryRegisteredToken(t *testing.T) {
 	fp := &fakePusher{}
 	s.SetPusher(fp, tenant)
 
-	s.maybeSendPush(context.Background(), EventFrame{
+	s.maybeSendPush(context.Background(), wire.EventFrame{
 		NeedsAttention: true, FeedID: "F1", WorkspaceID: "W1", SurfaceID: "S1",
 		Title: "cmux-app", Preview: "Claude needs your permission", Kind: "permissionRequest",
 	})
@@ -167,7 +168,7 @@ func TestMaybeSendPushSendsEncryptedPayload(t *testing.T) {
 	fp := &fakePusher{}
 	s.SetPusher(fp, dev.TenantID)
 
-	f := EventFrame{
+	f := wire.EventFrame{
 		NeedsAttention: true, FeedID: "F1", WorkspaceID: "W1", SurfaceID: "S1",
 		Title: "cmux-app", Preview: "Claude needs your permission", Kind: "permissionRequest",
 	}
@@ -209,7 +210,7 @@ func TestMaybeSendPushNoopWithNoRegisteredTokens(t *testing.T) {
 	fp := &fakePusher{}
 	s.SetPusher(fp, tenant)
 
-	s.maybeSendPush(context.Background(), EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
+	s.maybeSendPush(context.Background(), wire.EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
 
 	if fp.callCount() != 0 {
 		t.Fatalf("no tokens registered -- want 0 calls, got %d", fp.callCount())
@@ -228,7 +229,7 @@ func TestMaybeSendPushScopesToOwnTenant(t *testing.T) {
 	fp := &fakePusher{}
 	s.SetPusher(fp, tenantA) // Server only knows about tenantA
 
-	s.maybeSendPush(context.Background(), EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
+	s.maybeSendPush(context.Background(), wire.EventFrame{NeedsAttention: true, Kind: "permissionRequest"})
 
 	if fp.callCount() != 1 || fp.calls[0].token != "fcm-a" {
 		t.Fatalf("push must be scoped to directTenantID only, got calls: %+v", fp.calls)

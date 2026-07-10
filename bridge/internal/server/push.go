@@ -11,6 +11,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // Pusher sends an FCM data message to one registration token. push.Sender
@@ -20,35 +21,6 @@ import (
 // interface type across a package boundary that otherwise has none.
 type Pusher interface {
 	Send(ctx context.Context, fcmToken, title, body string, data map[string]string) error
-}
-
-// PushTitle returns a NeedsAttention frame's notification title: the
-// workspace's own live title (set by enrichTitle), so the notification shows
-// which workspace at a glance, or a generic fallback when the workspace
-// couldn't be resolved.
-func (f EventFrame) PushTitle() string {
-	if f.Title != "" {
-		return f.Title
-	}
-	return "Agent needs your attention"
-}
-
-// PushBody returns a NeedsAttention frame's notification body: the
-// workspace's live status preview (set by enrichTitle) when known, else a
-// phrase derived from the underlying Claude Code hook event, else a generic
-// fallback.
-func (f EventFrame) PushBody() string {
-	if f.Preview != "" {
-		return f.Preview
-	}
-	switch f.Kind {
-	case "AskUserQuestion":
-		return "Has a question for you"
-	case "Notification":
-		return "Needs your attention"
-	default:
-		return "Open cmux to reply"
-	}
 }
 
 // pushPayload is the plaintext JSON encrypted per-device into
@@ -68,7 +40,7 @@ type pushPayload struct {
 // subscription). Returns nil when e2e isn't configured (s.sessions == nil);
 // callers then send push with no "e2e" data key at all, and the app shows a
 // generic notification instead of silently dropping it.
-func (s *Server) buildEncryptedPush(f EventFrame) map[string]string {
+func (s *Server) buildEncryptedPush(f wire.EventFrame) map[string]string {
 	if s.sessions == nil {
 		return nil
 	}
@@ -93,7 +65,7 @@ func (s *Server) buildEncryptedPush(f EventFrame) map[string]string {
 // handles relay-paired devices completely independently and is untouched by
 // this). No-op with zero store/network cost when direct mode or FCM aren't
 // configured, the common case for an agent that hasn't opted into either.
-func (s *Server) maybeSendPush(ctx context.Context, f EventFrame) {
+func (s *Server) maybeSendPush(ctx context.Context, f wire.EventFrame) {
 	if s.pusher == nil || s.store == nil {
 		return
 	}

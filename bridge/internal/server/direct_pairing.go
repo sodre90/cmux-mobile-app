@@ -7,44 +7,8 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
-
-// pairingCodeTTL mirrors internal/relay/relay.go's constant of the same
-// name -- how long a self-service pairing code stays redeemable.
-const pairingCodeTTL = 10 * time.Minute
-
-type pairingCodeResp struct {
-	Code      string `json:"code"`
-	ExpiresAt string `json:"expires_at"`
-	TenantID  string `json:"tenant_id"`
-}
-
-type newPairingCodeReq struct {
-	AgentPubkey string `json:"agent_pubkey"`
-}
-
-type pairingCodeStatusResp struct {
-	Redeemed     bool   `json:"redeemed"`
-	DevicePubkey string `json:"device_pubkey,omitempty"`
-	TokenHash    string `json:"token_hash,omitempty"`
-}
-
-type pairingCodeInfoResp struct {
-	AgentPubkey string `json:"agent_pubkey"`
-	ExpiresAt   string `json:"expires_at"`
-	TenantID    string `json:"tenant_id"`
-}
-
-type devicePairReq struct {
-	Code         string `json:"code"`
-	DevicePubkey string `json:"device_pubkey"`
-	Name         string `json:"name"`
-}
-
-type devicePairResp struct {
-	Token    string `json:"token"`
-	TenantID string `json:"tenant_id"`
-}
 
 // MountDirectPairing registers the four pre-auth pairing routes direct mode
 // needs onto mux, backed by store and scoped to the single implicit tenant
@@ -56,21 +20,21 @@ type devicePairResp struct {
 // network ACLs, not a per-request identity check on these four routes.
 func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) {
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		var rq newPairingCodeReq
+		var rq wire.NewPairingCodeReq
 		if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
 			httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
 			return
 		}
-		code, err := store.NewPairingCode(tenantID, rq.AgentPubkey, pairingCodeTTL)
+		code, err := store.NewPairingCode(tenantID, rq.AgentPubkey, wire.PairingCodeTTL)
 		if err != nil {
 			httpjson.Error(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(pairingCodeResp{
+		_ = json.NewEncoder(w).Encode(wire.PairingCodeResp{
 			Code:      code,
-			ExpiresAt: time.Now().Add(pairingCodeTTL).UTC().Format(time.RFC3339),
+			ExpiresAt: time.Now().Add(wire.PairingCodeTTL).UTC().Format(time.RFC3339),
 			TenantID:  tenantID,
 		})
 	}))
@@ -84,7 +48,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(pairingCodeStatusResp{
+		_ = json.NewEncoder(w).Encode(wire.PairingCodeStatusResp{
 			Redeemed:     redeemed,
 			DevicePubkey: pubkey,
 			TokenHash:    hash,
@@ -100,7 +64,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(pairingCodeInfoResp{
+		_ = json.NewEncoder(w).Encode(wire.PairingCodeInfoResp{
 			AgentPubkey: agentPubkey,
 			ExpiresAt:   expiresAt,
 			TenantID:    tid,
@@ -109,7 +73,7 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 
 	mux.Handle("POST /devices/pair", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
-		var rq devicePairReq
+		var rq wire.DevicePairReq
 		if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
 			httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
 			return
@@ -125,6 +89,6 @@ func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(devicePairResp{Token: tok, TenantID: tid})
+		_ = json.NewEncoder(w).Encode(wire.DevicePairResp{Token: tok, TenantID: tid})
 	}))
 }

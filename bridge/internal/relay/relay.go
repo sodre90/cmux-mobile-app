@@ -19,6 +19,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // agentCNPrefix marks a client cert as belonging to a Mac agent, followed by
@@ -29,9 +30,6 @@ const agentCNPrefix = "agent:"
 // rotation without losing tenant identity is out of scope for this version —
 // after this window an agent must re-register, minting a new tenant ID.
 const agentCertValidity = 365 * 24 * time.Hour
-
-// pairingCodeTTL is how long a self-service pairing code stays redeemable.
-const pairingCodeTTL = 10 * time.Minute
 
 // defaultMaxTenants is a generous safety valve against unbounded tenant
 // growth from /tenants/register abuse, not a real usage limit for a
@@ -270,16 +268,6 @@ func (r *Relay) handleTunnel(w http.ResponseWriter, req *http.Request) {
 	cancel()
 }
 
-type pairingCodeResp struct {
-	Code      string `json:"code"`
-	ExpiresAt string `json:"expires_at"`
-	TenantID  string `json:"tenant_id"`
-}
-
-type newPairingCodeReq struct {
-	AgentPubkey string `json:"agent_pubkey"`
-}
-
 // handleNewPairingCode lets an already-registered agent request a fresh
 // single-use pairing code to embed in a QR code (see
 // cmd/cmux-bridge/pair.go). Agent-CN-gated: only a request presenting a
@@ -296,12 +284,12 @@ func (r *Relay) handleNewPairingCode(w http.ResponseWriter, req *http.Request) {
 		httpjson.Error(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	var rq newPairingCodeReq
+	var rq wire.NewPairingCodeReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.AgentPubkey == "" {
 		httpjson.Error(w, http.StatusBadRequest, "missing agent_pubkey")
 		return
 	}
-	code, err := r.store.NewPairingCode(tenantID, rq.AgentPubkey, pairingCodeTTL)
+	code, err := r.store.NewPairingCode(tenantID, rq.AgentPubkey, wire.PairingCodeTTL)
 	if err != nil {
 		log.Printf("relay: new pairing code: %v", err)
 		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
@@ -309,17 +297,11 @@ func (r *Relay) handleNewPairingCode(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(pairingCodeResp{
+	_ = json.NewEncoder(w).Encode(wire.PairingCodeResp{
 		Code:      code,
-		ExpiresAt: time.Now().Add(pairingCodeTTL).UTC().Format(time.RFC3339),
+		ExpiresAt: time.Now().Add(wire.PairingCodeTTL).UTC().Format(time.RFC3339),
 		TenantID:  tenantID,
 	})
-}
-
-type pairingCodeInfoResp struct {
-	AgentPubkey string `json:"agent_pubkey"`
-	ExpiresAt   string `json:"expires_at"`
-	TenantID    string `json:"tenant_id"`
 }
 
 // handlePairingCodeInfo lets a phone that can't scan the QR (no camera, or
@@ -341,17 +323,11 @@ func (r *Relay) handlePairingCodeInfo(w http.ResponseWriter, req *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(pairingCodeInfoResp{
+	_ = json.NewEncoder(w).Encode(wire.PairingCodeInfoResp{
 		AgentPubkey: agentPubkey,
 		ExpiresAt:   expiresAt,
 		TenantID:    tenantID,
 	})
-}
-
-type pairingCodeStatusResp struct {
-	Redeemed     bool   `json:"redeemed"`
-	DevicePubkey string `json:"device_pubkey,omitempty"`
-	TokenHash    string `json:"token_hash,omitempty"`
 }
 
 // handlePairingCodeStatus lets the agent that requested a pairing code poll
@@ -371,7 +347,7 @@ func (r *Relay) handlePairingCodeStatus(w http.ResponseWriter, req *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(pairingCodeStatusResp{
+	_ = json.NewEncoder(w).Encode(wire.PairingCodeStatusResp{
 		Redeemed:     redeemed,
 		DevicePubkey: pubkey,
 		TokenHash:    hash,
@@ -470,17 +446,6 @@ func (r *Relay) handleRegisterTenant(w http.ResponseWriter, req *http.Request) {
 	log.Printf("relay: registered new tenant %q", tenantID)
 }
 
-type devicePairReq struct {
-	Code         string `json:"code"`
-	DevicePubkey string `json:"device_pubkey"`
-	Name         string `json:"name"`
-}
-
-type devicePairResp struct {
-	Token    string `json:"token"`
-	TenantID string `json:"tenant_id"`
-}
-
 // handleDevicePair is the public, no-auth endpoint a phone hits directly
 // after scanning the agent's pairing QR code. Reachable without a client
 // cert (see deploy/nginx-cmux-relay.conf's ssl_verify_client optional
@@ -492,7 +457,7 @@ type devicePairResp struct {
 // app knows which workspace it just joined.
 func (r *Relay) handleDevicePair(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 4<<10)
-	var rq devicePairReq
+	var rq wire.DevicePairReq
 	if err := json.NewDecoder(req.Body).Decode(&rq); err != nil || rq.Code == "" || rq.DevicePubkey == "" {
 		httpjson.Error(w, http.StatusBadRequest, "missing code or device_pubkey")
 		return
@@ -511,6 +476,6 @@ func (r *Relay) handleDevicePair(w http.ResponseWriter, req *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(devicePairResp{Token: tok, TenantID: tenantID})
+	_ = json.NewEncoder(w).Encode(wire.DevicePairResp{Token: tok, TenantID: tenantID})
 	log.Printf("relay: device paired via QR code")
 }

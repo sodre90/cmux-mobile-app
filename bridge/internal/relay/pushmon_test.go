@@ -12,7 +12,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
-	"github.com/sodre90/cmux-bridge/internal/server"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 type fakePusher struct {
@@ -51,7 +51,7 @@ func TestMonitorAgentPushesAttention(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_ = ws.WriteJSON(server.EventFrame{
+			_ = ws.WriteJSON(wire.EventFrame{
 				Type: "feed", NeedsAttention: true, FeedID: "F1",
 				Kind: "permissionRequest", Title: "Run rm -rf?",
 			})
@@ -132,7 +132,7 @@ func TestMonitorAgentForwardsEncryptedPushForKnownDevice(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_ = ws.WriteJSON(server.EventFrame{
+			_ = ws.WriteJSON(wire.EventFrame{
 				Type: "feed", NeedsAttention: true, FeedID: "F1",
 				Kind:          "permissionRequest",
 				EncryptedPush: map[string]string{deviceID: "cipher-blob"},
@@ -180,7 +180,7 @@ func TestMonitorAgentScopesPushToOwnTenant(t *testing.T) {
 			if err != nil {
 				return
 			}
-			_ = ws.WriteJSON(server.EventFrame{
+			_ = ws.WriteJSON(wire.EventFrame{
 				Type: "feed", NeedsAttention: true, FeedID: "F1",
 				Kind: "permissionRequest", Title: "Run rm -rf?",
 			})

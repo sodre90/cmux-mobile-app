@@ -14,6 +14,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func wsConnectEncrypted(t *testing.T, srvURL, path, relayTok, deviceID string) *websocket.Conn {
@@ -61,7 +62,7 @@ func TestTerminalReplayEncryptedWhenSessionsSet(t *testing.T) {
 	if counter != 0 {
 		t.Fatalf("want first frame counter 0, got %d", counter)
 	}
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := json.Unmarshal(plain, &down); err != nil {
 		t.Fatalf("unmarshal decrypted frame: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestTerminalInputDispatchedWhenEncrypted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	upBytes, err := json.Marshal(TerminalUp{Type: "input", Text: "ls\r"})
+	upBytes, err := json.Marshal(wire.TerminalUp{Type: "input", Text: "ls\r"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	upBytes, err := json.Marshal(TerminalUp{Type: "input", Text: "ls\r", Seq: 9})
+	upBytes, err := json.Marshal(wire.TerminalUp{Type: "input", Text: "ls\r", Seq: 9})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeFrame: %v", err)
 	}
-	var ack TerminalDown
+	var ack wire.TerminalDown
 	if err := json.Unmarshal(plain, &ack); err != nil {
 		t.Fatalf("unmarshal decrypted ack: %v", err)
 	}

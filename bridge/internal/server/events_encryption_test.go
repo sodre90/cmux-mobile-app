@@ -13,6 +13,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func wsDialEncrypted(t *testing.T, srvURL, relayTok, deviceID string) *websocket.Conn {
@@ -44,7 +45,7 @@ func TestEventsBroadcastEncryptedWhenSessionsSet(t *testing.T) {
 	defer c.Close()
 	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
 
-	s.hub.broadcast(EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
+	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	msgType, raw, err := c.ReadMessage()
@@ -61,7 +62,7 @@ func TestEventsBroadcastEncryptedWhenSessionsSet(t *testing.T) {
 	if counter != 0 {
 		t.Fatalf("want counter 0, got %d", counter)
 	}
-	var got EventFrame
+	var got wire.EventFrame
 	if err := json.Unmarshal(plain, &got); err != nil {
 		t.Fatalf("unmarshal decrypted frame: %v", err)
 	}
@@ -98,10 +99,10 @@ func TestEventsServesPlaintextForRelayPushWhenSessionsSet(t *testing.T) {
 	defer c.Close()
 	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
 
-	s.hub.broadcast(EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
+	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatalf("expected a plaintext JSON frame for the relay's push subscription, got: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 	defer c.Close()
 	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
 
-	s.hub.broadcast(EventFrame{
+	s.hub.broadcast(wire.EventFrame{
 		Type:           "feed",
 		FeedID:         "X",
 		NeedsAttention: true,
@@ -149,7 +150,7 @@ func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 	})
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatalf("expected a plaintext JSON frame for the relay's push subscription, got: %v", err)
 	}

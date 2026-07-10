@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func newDirectPairingServer(t *testing.T) (srv *httptest.Server, store *auth.Store, tenantID string) {
@@ -39,7 +40,7 @@ func TestDirectNewPairingCodeIssuesCode(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var body pairingCodeResp
+	var body wire.PairingCodeResp
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestDirectPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	poll := func() pairingCodeStatusResp {
+	poll := func() wire.PairingCodeStatusResp {
 		resp, err := http.Get(srv.URL + "/agent/pairing-code/" + code)
 		if err != nil {
 			t.Fatal(err)
@@ -83,7 +84,7 @@ func TestDirectPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("want 200, got %d", resp.StatusCode)
 		}
-		var body pairingCodeStatusResp
+		var body wire.PairingCodeStatusResp
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
@@ -136,7 +137,7 @@ func TestDirectPairingCodeInfoReturnsAgentPubkey(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var body pairingCodeInfoResp
+	var body wire.PairingCodeInfoResp
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +178,7 @@ func TestDirectDevicePairRedeemsCode(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var got devicePairResp
+	var got wire.DevicePairResp
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}

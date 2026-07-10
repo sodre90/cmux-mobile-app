@@ -9,6 +9,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/testutil"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
@@ -80,7 +81,7 @@ func TestSessionsDedupAndShape(t *testing.T) {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
 	var body struct {
-		Workspaces []Workspace `json:"workspaces"`
+		Workspaces []wire.Workspace `json:"workspaces"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestSessionsDedupAndShape(t *testing.T) {
 	if len(body.Workspaces) != 3 {
 		t.Fatalf("want 3 deduped workspaces, got %d: %+v", len(body.Workspaces), body.Workspaces)
 	}
-	byID := map[string]Workspace{}
+	byID := map[string]wire.Workspace{}
 	for _, w := range body.Workspaces {
 		byID[w.ID] = w
 	}

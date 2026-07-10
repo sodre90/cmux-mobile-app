@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // fakeTerminalScript answers replay with a canned render-grid and logs every
@@ -66,7 +68,7 @@ func TestTerminalReplayOnConnect(t *testing.T) {
 	defer c.Close()
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
 	}
@@ -93,12 +95,12 @@ func TestTerminalInputDispatched(t *testing.T) {
 
 	// Drain the initial replay frame.
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.WriteJSON(TerminalUp{Type: "input", Text: "ls\r"}); err != nil {
+	if err := c.WriteJSON(wire.TerminalUp{Type: "input", Text: "ls\r"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,17 +149,17 @@ func TestTerminalInputAcked(t *testing.T) {
 
 	// Drain the initial replay frame.
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.WriteJSON(TerminalUp{Type: "input", Text: "ls\r", Seq: 42}); err != nil {
+	if err := c.WriteJSON(wire.TerminalUp{Type: "input", Text: "ls\r", Seq: 42}); err != nil {
 		t.Fatal(err)
 	}
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var ack TerminalDown
+	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
 	}
@@ -177,17 +179,17 @@ func TestTerminalInputAckReflectsRpcFailure(t *testing.T) {
 	defer c.Close()
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.WriteJSON(TerminalUp{Type: "input", Text: "ls\r", Seq: 7}); err != nil {
+	if err := c.WriteJSON(wire.TerminalUp{Type: "input", Text: "ls\r", Seq: 7}); err != nil {
 		t.Fatal(err)
 	}
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var ack TerminalDown
+	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
 	}
@@ -207,21 +209,21 @@ func TestTerminalNoAckWhenSeqUnset(t *testing.T) {
 	defer c.Close()
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var down TerminalDown
+	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.WriteJSON(TerminalUp{Type: "resize", Columns: 80, Rows: 24}); err != nil {
+	if err := c.WriteJSON(wire.TerminalUp{Type: "resize", Columns: 80, Rows: 24}); err != nil {
 		t.Fatal(err)
 	}
 	// Nudge a second, seq'd message through and confirm *its* ack is the very
 	// next frame -- proving the unseq'd resize above never produced one.
-	if err := c.WriteJSON(TerminalUp{Type: "resize", Columns: 81, Rows: 24, Seq: 1}); err != nil {
+	if err := c.WriteJSON(wire.TerminalUp{Type: "resize", Columns: 81, Rows: 24, Seq: 1}); err != nil {
 		t.Fatal(err)
 	}
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var ack TerminalDown
+	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
 	}
@@ -242,7 +244,7 @@ func TestTerminalForwardsContentChange(t *testing.T) {
 
 	// First frame: the full replay.
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var replay TerminalDown
+	var replay wire.TerminalDown
 	if err := c.ReadJSON(&replay); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +255,7 @@ func TestTerminalForwardsContentChange(t *testing.T) {
 	// The screen content changes on the next poll while seq stays 0. The poll
 	// loop must forward it as an output frame rather than freezing on seq.
 	c.SetReadDeadline(time.Now().Add(3 * time.Second))
-	var out TerminalDown
+	var out wire.TerminalDown
 	if err := c.ReadJSON(&out); err != nil {
 		t.Fatalf("expected an output frame after content change, got: %v", err)
 	}

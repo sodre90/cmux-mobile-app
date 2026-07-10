@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func TestNewPairingCodeRequiresAgentCN(t *testing.T) {
@@ -58,7 +59,7 @@ func TestDevicePairRedeemsCode(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var got devicePairResp
+	var got wire.DevicePairResp
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestDevicePairDefaultsName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var got devicePairResp
+	var got wire.DevicePairResp
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +278,7 @@ func TestNewPairingCodeIssuesCode(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var body pairingCodeResp
+	var body wire.PairingCodeResp
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +361,7 @@ func TestPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	poll := func() pairingCodeStatusResp {
+	poll := func() wire.PairingCodeStatusResp {
 		req, _ := http.NewRequest("GET", srv.URL+"/agent/pairing-code/"+code, nil)
 		req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
 		req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
@@ -372,7 +373,7 @@ func TestPairingCodeStatusPendingThenRedeemed(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("want 200, got %d", resp.StatusCode)
 		}
-		var body pairingCodeStatusResp
+		var body wire.PairingCodeStatusResp
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
@@ -510,7 +511,7 @@ func TestPairingCodeInfoReturnsAgentPubkey(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
-	var body pairingCodeInfoResp
+	var body wire.PairingCodeInfoResp
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}

@@ -12,33 +12,8 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
-
-// TerminalDown is a server->client terminal message. Grid carries the cmux
-// render-grid object (format "cmux.render-grid.v1") verbatim; the app renders it
-// as a styled cell grid. "ack" echoes back an input/paste/resize message's Seq
-// once its RPC has run, with Ok reflecting whether that RPC actually succeeded.
-type TerminalDown struct {
-	Type    string          `json:"type"` // "replay" | "output" | "ack"
-	Grid    json.RawMessage `json:"grid,omitempty"`
-	Columns int             `json:"columns,omitempty"`
-	Rows    int             `json:"rows,omitempty"`
-	Seq     int64           `json:"seq,omitempty"`
-	// Ok is only meaningful for "ack" frames; not omitempty because a failed
-	// RPC's ack (Ok: false) must be distinguishable on the wire from an "ok"
-	// field that was never set.
-	Ok bool `json:"ok"`
-}
-
-// TerminalUp is a client->server terminal message. Seq is a client-assigned
-// monotonic id echoed back in the matching "ack" TerminalDown.
-type TerminalUp struct {
-	Type    string `json:"type"` // "input" | "paste" | "resize"
-	Text    string `json:"text,omitempty"`
-	Columns int    `json:"columns,omitempty"`
-	Rows    int    `json:"rows,omitempty"`
-	Seq     int64  `json:"seq,omitempty"`
-}
 
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -78,7 +53,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// every write goes through this mutex-guarded helper instead of calling
 	// writeTerminalFrame directly.
 	var writeMu sync.Mutex
-	write := func(fr TerminalDown) error {
+	write := func(fr wire.TerminalDown) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
@@ -142,7 +117,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
-func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr TerminalDown) error {
+func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.TerminalDown) error {
 	if s.sessions == nil {
 		return c.WriteJSON(fr)
 	}
@@ -157,10 +132,10 @@ func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr Termi
 	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(TerminalDown) error) {
+func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(wire.TerminalDown) error) {
 	defer cancel()
 	for {
-		var up TerminalUp
+		var up wire.TerminalUp
 		if s.sessions == nil {
 			if err := c.ReadJSON(&up); err != nil {
 				log.Printf("terminal %s: read loop ended: %v", id, err)
@@ -199,20 +174,20 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 		if up.Seq == 0 {
 			continue // no seq set (shouldn't happen from the app) -- nothing to ack.
 		}
-		if err := write(TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil}); err != nil {
+		if err := write(wire.TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil}); err != nil {
 			log.Printf("terminal %s: ack write failed: %v", id, err)
 			return
 		}
 	}
 }
 
-// fetchReplay calls mobile.terminal.replay and returns a TerminalDown (Type
-// unset) holding the render grid and dimensions.
-func (s *Server) fetchReplay(ctx context.Context, id string) (TerminalDown, error) {
+// fetchReplay calls mobile.terminal.replay and returns a wire.TerminalDown
+// (Type unset) holding the render grid and dimensions.
+func (s *Server) fetchReplay(ctx context.Context, id string) (wire.TerminalDown, error) {
 	raw, err := s.cmux.Rpc(ctx, "mobile.terminal.replay",
 		map[string]any{"surface_id": id})
 	if err != nil {
-		return TerminalDown{}, err
+		return wire.TerminalDown{}, err
 	}
 	var top struct {
 		Columns    int             `json:"columns"`
@@ -221,9 +196,9 @@ func (s *Server) fetchReplay(ctx context.Context, id string) (TerminalDown, erro
 		RenderGrid json.RawMessage `json:"render_grid"`
 	}
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return TerminalDown{}, err
+		return wire.TerminalDown{}, err
 	}
-	return TerminalDown{
+	return wire.TerminalDown{
 		Grid:    top.RenderGrid,
 		Columns: top.Columns,
 		Rows:    top.Rows,

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func TestNeedsAttention(t *testing.T) {
@@ -138,10 +140,10 @@ func TestWSEventsDeliversBroadcast(t *testing.T) {
 	defer c.Close()
 	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
 
-	s.hub.broadcast(EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
+	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +180,7 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 	go s.ingestEvents(context.Background(), strings.NewReader(noise+"\n"+feed+"\n"))
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +206,7 @@ func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +232,7 @@ func TestIngestEventsKeepsFallbackTitleWhenWorkspaceNotFound(t *testing.T) {
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +263,7 @@ func TestIngestEventsAutoResolvesWhenYoloEnabled(t *testing.T) {
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +297,7 @@ func TestIngestEventsDoesNotAutoResolveWhenYoloOff(t *testing.T) {
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
 	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var got EventFrame
+	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
 	}
