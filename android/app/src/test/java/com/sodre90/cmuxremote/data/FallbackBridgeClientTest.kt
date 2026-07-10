@@ -148,12 +148,16 @@ class FallbackBridgeClientTest {
 
     @Test
     fun primary4xxPropagatesWithoutFailoverOrPenalty() {
+        // registerDevice is a write, so it's never subject to sessions()/
+        // pendingFeed()'s not_paired retry (see the sessions*PairingRetry
+        // tests below) -- that keeps this test isolated to the "4xx never
+        // fails over" behavior it's actually named for.
         primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
-        primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}""")) // must be consumed by the 2nd call
+        primaryServer.enqueue(MockResponse()) // must be consumed by the 2nd call
         val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
 
         try {
-            runBlocking { fb.sessions() }
+            runBlocking { fb.registerDevice("tok") }
             fail("expected the primary's 409 to propagate instead of failing over")
         } catch (e: BridgeException) {
             assertEquals(409, e.code)
@@ -161,11 +165,81 @@ class FallbackBridgeClientTest {
         assertEquals(0, fallbackServer.requestCount)
 
         // No penalty was set, so the second call must still try primary first.
+        runBlocking { fb.registerDevice("tok") }
+
+        assertEquals(2, primaryServer.requestCount)
+        assertEquals(0, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun sessionsRetriesA409NotPairedThenSucceeds() {
+        // The post-pairing race: a read right after pairing can hit the Mac
+        // agent before it's derived the e2e session yet.
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"not_paired"}"""))
+        primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { null },
+            pairingRetryDelayMs = 0L,
+        )
+
         val result = runBlocking { fb.sessions() }
 
         assertEquals(0, result.size)
         assertEquals(2, primaryServer.requestCount)
-        assertEquals(0, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun pendingFeedAlsoRetriesA409NotPaired() {
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"not_paired"}"""))
+        primaryServer.enqueue(MockResponse().setBody("""{"items":[]}"""))
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { null },
+            pairingRetryDelayMs = 0L,
+        )
+
+        val result = runBlocking { fb.pendingFeed() }
+
+        assertEquals(0, result.size)
+        assertEquals(2, primaryServer.requestCount)
+    }
+
+    @Test
+    fun sessionsGivesUpAfterExhaustingPairingRetriesAndPropagates409() {
+        repeat(3) { primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"not_paired"}""")) }
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { null },
+            pairingRetryDelayMs = 0L,
+        )
+
+        try {
+            runBlocking { fb.sessions() }
+            fail("expected the 409 to propagate once pairing retries are exhausted")
+        } catch (e: BridgeException) {
+            assertEquals(409, e.code)
+        }
+        assertEquals(3, primaryServer.requestCount)
+    }
+
+    @Test
+    fun sessionsDoesNotRetryANon409FourXx() {
+        primaryServer.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"bad_request"}"""))
+        primaryServer.enqueue(MockResponse().setBody("""{"workspaces":[]}""")) // must NOT be consumed
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { null },
+            pairingRetryDelayMs = 0L,
+        )
+
+        try {
+            runBlocking { fb.sessions() }
+            fail("expected a non-409 4xx to propagate without retry")
+        } catch (e: BridgeException) {
+            assertEquals(400, e.code)
+        }
+        assertEquals(1, primaryServer.requestCount)
     }
 
     @Test

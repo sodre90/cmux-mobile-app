@@ -2,7 +2,6 @@ package com.sodre90.cmuxremote.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.sodre90.cmuxremote.data.BridgeException
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.SocketReconnector
@@ -12,7 +11,6 @@ import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -118,7 +116,7 @@ class SessionsViewModel(
         _state.value = UiState.Loading
         viewModelScope.launch {
             _state.value = try {
-                UiState.Ready(fetchSessionsWithPairingRetry(client))
+                UiState.Ready(client.sessions())
             } catch (e: Exception) {
                 UiState.Error(e.message ?: "Failed to load sessions")
             }
@@ -166,7 +164,7 @@ class SessionsViewModel(
 
     private suspend fun fetchAndApply(client: FallbackBridgeClient) {
         try {
-            _state.value = UiState.Ready(fetchSessionsWithPairingRetry(client))
+            _state.value = UiState.Ready(client.sessions())
             _actionError.value = null
         } catch (e: Exception) {
             _actionError.value = e.message ?: "Failed to refresh sessions"
@@ -190,26 +188,7 @@ class SessionsViewModel(
         }
     }
 
-    // Right after pairing, the phone can call this before the Mac agent's
-    // pair-device poll loop has derived and stored the e2e session -- the
-    // relay authenticates the device's token fine, but the agent replies 409
-    // not_paired for that narrow window. Retry a few times before surfacing
-    // it as a real error.
-    private suspend fun fetchSessionsWithPairingRetry(client: FallbackBridgeClient): List<Workspace> {
-        repeat(NOT_PAIRED_RETRY_ATTEMPTS - 1) {
-            try {
-                return client.sessions()
-            } catch (e: BridgeException) {
-                if (e.code != 409) throw e
-                delay(NOT_PAIRED_RETRY_DELAY_MS)
-            }
-        }
-        return client.sessions()
-    }
-
     private companion object {
-        const val NOT_PAIRED_RETRY_ATTEMPTS = 3
-        const val NOT_PAIRED_RETRY_DELAY_MS = 500L
         const val EVENT_REFRESH_DEBOUNCE_MS = 800L
     }
 }
