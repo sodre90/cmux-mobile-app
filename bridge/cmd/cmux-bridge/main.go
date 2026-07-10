@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/sodre90/cmux-bridge/internal/logging"
 	"github.com/sodre90/cmux-bridge/internal/version"
 )
 
 func main() {
+	logging.Init()
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

@@ -3,28 +3,47 @@ package relay
 import (
 	"bufio"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sodre90/cmux-bridge/internal/auth"
 )
 
 // logProxy wraps the app-facing proxy with a concise per-request access log:
-// method, path, client CN, whether the request asked to upgrade (WebSocket),
-// and the outcome — the captured status code, or "101 upgraded" when the proxy
-// hijacked the connection for a successful WebSocket upgrade. For long-lived
-// streams (/events, /terminal/{id}) the line lands when the stream closes, so
-// the duration doubles as the stream's lifetime. This is the relay's window
-// into per-route behaviour (e.g. why /terminal/{id} fails while /events works).
+// method, route, tenant/device identity, whether the request asked to
+// upgrade (WebSocket), and the outcome — the captured status code, or "101
+// upgraded" when the proxy hijacked the connection for a successful
+// WebSocket upgrade. For long-lived streams (/events, /terminal/{id}) the
+// line lands when the stream closes, so dur_ms doubles as the stream's
+// lifetime. This is the relay's window into per-route, per-tenant behaviour.
+//
+// tenant_id/device come from auth.DeviceFromContext rather than the mTLS CN
+// header: this route only ever sees device (phone) traffic (notAgent already
+// rejected any verified-agent CN ahead of this handler), and auth.Require --
+// which always runs before logProxy in the chain -- guarantees a Device is
+// resolved in context by the time this line is logged.
 func (r *Relay) logProxy(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
 		next.ServeHTTP(rec, req)
-		log.Printf("relay: %s %s cn=%q upgrade=%t -> %s (%s)",
-			req.Method, req.URL.Path, r.clientCN(req), isUpgrade(req),
-			rec.outcome(), time.Since(start).Round(time.Millisecond))
+
+		var tenantID, device string
+		if dev, ok := auth.DeviceFromContext(req.Context()); ok {
+			tenantID, device = dev.TenantID, dev.HashSuffix
+		}
+		slog.Info("relay: request",
+			"method", req.Method,
+			"route", req.URL.Path,
+			"tenant_id", tenantID,
+			"device", device,
+			"upgrade", isUpgrade(req),
+			"status", rec.outcome(),
+			"dur_ms", time.Since(start).Milliseconds(),
+		)
 	})
 }
 
