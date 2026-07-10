@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.data.pairing
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
+import com.sodre90.cmuxremote.data.e2e.pairingFingerprint
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -27,7 +28,7 @@ class PairingClientTest {
     private lateinit var server: MockWebServer
     private lateinit var http: OkHttpClient
 
-    // pairInternal now rejects a non-https pair_url (see hasSafePairUrl), so
+    // prepareInternal/commitInternal now reject a non-https pair_url (see hasSafePairUrl), so
     // the MockWebServer these tests POST/GET against must actually speak
     // TLS -- a self-signed cert the client is told to trust, same as
     // OkHttp's own test suite does for localhost.
@@ -80,7 +81,7 @@ class PairingClientTest {
             tenantId = "t1",
         )
 
-        runBlocking { client.pair(qr) }
+        runBlocking { client.commit(qr) }
 
         assertEquals(server.url("/").toString().trimEnd('/'), recordedBaseUrl[0])
         assertEquals("tok-abc", recordedToken[0])
@@ -108,7 +109,7 @@ class PairingClientTest {
             tenantId = "t",
         )
         try {
-            runBlocking { client.pair(qr) }
+            runBlocking { client.commit(qr) }
             fail("expected PairingCodeInvalidException")
         } catch (e: PairingCodeInvalidException) {
             // expected
@@ -116,7 +117,7 @@ class PairingClientTest {
     }
 
     @Test
-    fun pairRejectsNonHttpsPairUrlWithoutIssuingARequest() {
+    fun prepareRejectsNonHttpsPairUrlWithoutIssuingARequest() {
         val (phonePriv, phonePub) = generateX25519KeyPair()
         val client = TestablePairingClient(http, phonePriv, phonePub, { _, _ -> }, {}, {})
         val qr = PairingQr(
@@ -127,11 +128,30 @@ class PairingClientTest {
             tenantId = "t",
         )
         try {
-            runBlocking { client.pair(qr) }
+            client.prepare(qr)
             fail("expected an IOException for a non-https pair_url")
         } catch (e: IOException) {
             // expected
         }
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun prepareComputesFingerprintWithoutIssuingARequest() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        val client = TestablePairingClient(http, phonePriv, phonePub, { _, _ -> }, {}, {})
+        val qr = PairingQr(
+            pairUrl = server.url("/devices/pair").toString(),
+            code = "X",
+            agentPubkey = Base64.getEncoder().encodeToString(agentPub),
+            expiresAt = "2099-01-01T00:00:00Z",
+            tenantId = "t",
+        )
+
+        val fingerprint = client.prepare(qr)
+
+        assertEquals(pairingFingerprint(phonePub, agentPub), fingerprint)
         assertEquals(0, server.requestCount)
     }
 
@@ -173,10 +193,10 @@ class PairingClientTest {
 
     /** Exercises TestablePairingClient's closure-capture shape only -- does
      *  NOT construct or call the real PairingClient class. The real
-     *  PairingClient.pair() slot-threading is a two-line, branch-free
+     *  PairingClient.commit() slot-threading is a two-line, branch-free
      *  pass-through verified by inspection, not by this test. */
     @Test
-    fun pairWritesIntoTheConstructedSlotNotAHardcodedOne() {
+    fun commitWritesIntoTheConstructedSlotNotAHardcodedOne() {
         val (agentPriv, agentPub) = generateX25519KeyPair()
         val (phonePriv, phonePub) = generateX25519KeyPair()
         server.enqueue(MockResponse().setBody("""{"token":"tok-direct","tenant_id":"t1"}"""))
@@ -203,7 +223,7 @@ class PairingClientTest {
             tenantId = "t1",
         )
 
-        runBlocking { client.pair(qr) }
+        runBlocking { client.commit(qr) }
 
         assertEquals(slot, recordedBaseUrlSlot)
         assertEquals(slot, recordedTokenSlot)
@@ -226,8 +246,9 @@ class PairingClientTest {
     }
 }
 
-/** Test seam: same logic as PairingClient.pair, but with persistence as
- *  three callbacks instead of real Identity/CryptoSession/Settings instances. */
+/** Test seam: same logic as PairingClient.prepare/commit, but with
+ *  persistence as three callbacks instead of real
+ *  Identity/CryptoSession/Settings instances. */
 private class TestablePairingClient(
     private val http: OkHttpClient,
     private val phonePrivateKey: ByteArray,
@@ -236,7 +257,9 @@ private class TestablePairingClient(
     private val onSetBaseUrl: (String) -> Unit,
     private val onSetToken: (String) -> Unit,
 ) {
-    suspend fun pair(qr: PairingQr) = pairInternal(
+    fun prepare(qr: PairingQr): String = prepareInternal(qr, phonePublicKey)
+
+    suspend fun commit(qr: PairingQr) = commitInternal(
         http,
         qr,
         phonePrivateKey,

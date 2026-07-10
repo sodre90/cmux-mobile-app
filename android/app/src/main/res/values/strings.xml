@@ -7,6 +7,7 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_rename">Rename</string>
     <string name="action_pair">Pair</string>
+    <string name="action_confirm">Confirm</string>
     <string name="action_done">Done</string>
     <string name="action_enable">Enable</string>
     <string name="status_sending">Sending…</string>
@@ -79,6 +80,8 @@
     <string name="pairing_server_url_placeholder">https://cmux.example.com</string>
     <string name="pairing_code_label">Pairing code</string>
     <string name="pairing_scan_qr_instead">Scan QR code instead</string>
+    <string name="pairing_confirm_fingerprint_title">Verify this code matches the Mac</string>
+    <string name="pairing_confirm_fingerprint_body">Compare this code against the one `cmux-bridge pair-device` printed on the Mac. Only confirm if they match exactly -- this check is what stops a compromised relay from silently swapping in its own keys.</string>
 
     <!-- Connection settings screen -->
     <string name="connections_title">Connections</string>

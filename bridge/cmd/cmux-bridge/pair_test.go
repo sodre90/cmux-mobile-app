@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestPairDeviceStopsOnRedemption(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 
-	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(2*time.Second))
+	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, strings.NewReader("y\n"), 10*time.Millisecond, time.Now().Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("pairDevice: %v", err)
 	}
@@ -81,6 +82,52 @@ func TestPairDeviceStopsOnRedemption(t *testing.T) {
 	}
 	if _, ok := sessions.SharedSecret("fake-token-hash"); !ok {
 		t.Fatal("expected pairDevice to persist a shared secret for the redeemed device")
+	}
+}
+
+func TestPairDeviceAbortsOnRejectedFingerprint(t *testing.T) {
+	devicePub := testDevicePubkeyB64(t)
+	srv, _ := fakePairingRelay(t, "CODE1234", devicePub, 2, 0)
+	defer srv.Close()
+
+	identity, err := e2e.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity.key"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, strings.NewReader("n\n"), 10*time.Millisecond, time.Now().Add(2*time.Second))
+	if err == nil {
+		t.Fatal("expected pairDevice to abort when the fingerprint is rejected")
+	}
+	if _, ok := sessions.SharedSecret("fake-token-hash"); ok {
+		t.Fatal("expected pairDevice not to persist a shared secret when the fingerprint is rejected")
+	}
+}
+
+func TestPairDeviceConfirmFingerprintFailsClosed(t *testing.T) {
+	devicePub := testDevicePubkeyB64(t)
+	srv, _ := fakePairingRelay(t, "CODE1234", devicePub, 2, 0)
+	defer srv.Close()
+
+	identity, err := e2e.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity.key"))
+	if err != nil {
+		t.Fatalf("LoadOrCreateIdentity: %v", err)
+	}
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+
+	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, strings.NewReader(""), 10*time.Millisecond, time.Now().Add(2*time.Second))
+	if err == nil {
+		t.Fatal("expected pairDevice to abort when confirmation input hits EOF")
+	}
+	if _, ok := sessions.SharedSecret("fake-token-hash"); ok {
+		t.Fatal("expected pairDevice not to persist a shared secret when confirmation input hits EOF")
 	}
 }
 
@@ -99,7 +146,7 @@ func TestPairDeviceRetriesOnTransientError(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 
-	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(2*time.Second))
+	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, strings.NewReader("y\n"), 10*time.Millisecond, time.Now().Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("pairDevice: %v", err)
 	}
@@ -123,7 +170,7 @@ func TestPairDeviceTimesOut(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 
-	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, 10*time.Millisecond, time.Now().Add(50*time.Millisecond))
+	err = pairDevice(srv.Client(), srv.URL, "https://phone.example/devices/pair", identity, sessions, io.Discard, strings.NewReader("y\n"), 10*time.Millisecond, time.Now().Add(50*time.Millisecond))
 	if err == nil {
 		t.Fatal("expected pairDevice to time out")
 	}

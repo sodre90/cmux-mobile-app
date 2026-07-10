@@ -15,6 +15,11 @@ import kotlinx.coroutines.launch
 
 sealed interface PairingUiState {
     data object Scanning : PairingUiState
+
+    /** The SAS fingerprint is computed (no network call yet) -- a human
+     *  compares it against the CLI's printed fingerprint before either side
+     *  commits. See docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md. */
+    data class AwaitingConfirmation(val fingerprint: String) : PairingUiState
     data object Pairing : PairingUiState
     data object Success : PairingUiState
     data class Error(val message: String) : PairingUiState
@@ -44,6 +49,12 @@ class PairingViewModel(
     private val _state = MutableStateFlow<PairingUiState>(PairingUiState.Scanning)
     val state: StateFlow<PairingUiState> = _state.asStateFlow()
 
+    // Set while state is AwaitingConfirmation, consumed by onConfirmed/
+    // onRejected. Not part of PairingUiState itself: the confirmation
+    // screen only needs the fingerprint to display, not the QR payload.
+    private var pendingQr: PairingQr? = null
+    private var pendingInvalidCodeMessage: String = pairingFailedMessage
+
     fun onQrScanned(raw: String) {
         if (_state.value !is PairingUiState.Scanning) return
         val qr = parsePairingQr(raw) ?: return
@@ -51,10 +62,7 @@ class PairingViewModel(
             _state.value = PairingUiState.Error(codeExpiredMessage)
             return
         }
-        _state.value = PairingUiState.Pairing
-        viewModelScope.launch {
-            pairAndUpdateState(qr, invalidCodeMessage = codeInvalidScanAgainMessage)
-        }
+        prepareAndAwaitConfirmation(qr, invalidCodeMessage = codeInvalidScanAgainMessage)
     }
 
     /** Manual-entry fallback for when scanning isn't possible (no camera, or
@@ -67,7 +75,7 @@ class PairingViewModel(
         viewModelScope.launch {
             try {
                 val qr = pairing.pairingClient(slot).resolveManualCode(serverUrl.trim(), code.trim())
-                pairAndUpdateState(qr, invalidCodeMessage = codeInvalidAskFreshMessage)
+                prepareAndAwaitConfirmation(qr, invalidCodeMessage = codeInvalidAskFreshMessage)
             } catch (e: PairingCodeInvalidException) {
                 _state.value = PairingUiState.Error(codeInvalidAskFreshMessage)
             } catch (e: Exception) {
@@ -76,19 +84,54 @@ class PairingViewModel(
         }
     }
 
-    private suspend fun pairAndUpdateState(qr: PairingQr, invalidCodeMessage: String) {
-        try {
-            pairing.pairingClient(slot).pair(qr)
-            _state.value = PairingUiState.Success
-        } catch (e: PairingCodeInvalidException) {
-            _state.value = PairingUiState.Error(invalidCodeMessage)
+    /** Computes the SAS fingerprint for [qr] (no network call) and moves to
+     *  AwaitingConfirmation, or straight to Error if [qr] fails the
+     *  https:// check [com.sodre90.cmuxremote.data.pairing.PairingSession.prepare]
+     *  also performs. */
+    private fun prepareAndAwaitConfirmation(qr: PairingQr, invalidCodeMessage: String) {
+        val fingerprint = try {
+            pairing.pairingClient(slot).prepare(qr)
         } catch (e: Exception) {
             _state.value = PairingUiState.Error(e.message ?: pairingFailedMessage)
+            return
         }
+        pendingQr = qr
+        pendingInvalidCodeMessage = invalidCodeMessage
+        _state.value = PairingUiState.AwaitingConfirmation(fingerprint)
+    }
+
+    /** The human confirmed the fingerprint matches the CLI's: complete the
+     *  pairing (POST /devices/pair, derive the shared secret, persist). */
+    fun onConfirmed() {
+        if (_state.value !is PairingUiState.AwaitingConfirmation) return
+        val qr = pendingQr ?: return
+        _state.value = PairingUiState.Pairing
+        viewModelScope.launch {
+            try {
+                pairing.pairingClient(slot).commit(qr)
+                _state.value = PairingUiState.Success
+            } catch (e: PairingCodeInvalidException) {
+                _state.value = PairingUiState.Error(pendingInvalidCodeMessage)
+            } catch (e: Exception) {
+                _state.value = PairingUiState.Error(e.message ?: pairingFailedMessage)
+            } finally {
+                pendingQr = null
+            }
+        }
+    }
+
+    /** The human rejected the fingerprint (or backed out): [prepare] never
+     *  made a network call, so this returns to scanning with nothing
+     *  consumed server-side. */
+    fun onRejected() {
+        if (_state.value !is PairingUiState.AwaitingConfirmation) return
+        pendingQr = null
+        _state.value = PairingUiState.Scanning
     }
 
     /** Returns to the scanning state after an error. */
     fun retry() {
+        pendingQr = null
         _state.value = PairingUiState.Scanning
     }
 }

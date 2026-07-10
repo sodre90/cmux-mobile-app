@@ -11,6 +11,7 @@ import org.bouncycastle.crypto.params.X25519KeyGenerationParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 /** Agent's outgoing / phone's incoming direction tag (see Global Constraints). */
@@ -90,6 +91,27 @@ fun deriveSharedSecret(myPrivateKeyRaw: ByteArray, theirPublicKeyRaw: ByteArray)
     val out = ByteArray(32)
     hkdf.generateBytes(out, 0, 32)
     return out
+}
+
+/**
+ * Short authentication string (SAS) both peers in a device-pairing exchange
+ * compute locally, purely from public keys they already hold, and a human
+ * compares by eye before either side commits trust -- see
+ * docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md.
+ * Order-independent (same canonicalization as [buildInfo]) and mirrors
+ * bridge/internal/e2e/cipher.go's PairingFingerprint byte-for-byte.
+ */
+fun pairingFingerprint(pubkeyA: ByteArray, pubkeyB: ByteArray): String {
+    val (lo, hi) = if (compareBytes(pubkeyA, pubkeyB) > 0) pubkeyB to pubkeyA else pubkeyA to pubkeyB
+    val digest = MessageDigest.getInstance("SHA-256").digest(lo + hi)
+    return "%02X%02X-%02X%02X-%02X%02X".format(
+        digest[0],
+        digest[1],
+        digest[2],
+        digest[3],
+        digest[4],
+        digest[5],
+    )
 }
 
 class DecryptFailedException : Exception("decrypt_failed")

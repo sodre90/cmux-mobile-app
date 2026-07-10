@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ecdh"
@@ -113,7 +114,7 @@ func pollPairingCode(client *http.Client, agentBase, code string) (devicePubkey,
 // secret with the redeeming device and persists it to sessions, keyed by the
 // device's token hash — the same key the relay's proxy Director injects as
 // X-Device-ID on every subsequent request from that device.
-func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *e2e.Identity, sessions *e2e.Store, out io.Writer, pollPeriod time.Duration, deadline time.Time) error {
+func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *e2e.Identity, sessions *e2e.Store, out io.Writer, in io.Reader, pollPeriod time.Duration, deadline time.Time) error {
 	agentPubkeyB64 := base64.StdEncoding.EncodeToString(identity.PublicKey().Bytes())
 	code, expiresAt, tenantID, err := requestPairingCode(client, agentBase, agentPubkeyB64)
 	if err != nil {
@@ -163,12 +164,43 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 		if err != nil {
 			return fmt.Errorf("derive shared secret: %w", err)
 		}
+
+		// The redeemed device_pubkey above came back through the same
+		// relay-mediated poll on every pairing, QR or manual -- the relay
+		// operator could have fabricated it (see
+		// docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md).
+		// A human comparing this fingerprint against the phone's own
+		// confirmation screen is the only channel the relay can't forge.
+		fingerprint := e2e.PairingFingerprint(identity.PublicKey().Bytes(), devicePub.Bytes())
+		_, _ = fmt.Fprintf(out, "\nVerify this code matches the phone's confirmation screen: %s\n", fingerprint)
+		confirmed, err := confirmFingerprint(in, out)
+		if err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
+		if !confirmed {
+			return fmt.Errorf("pairing aborted: fingerprint not confirmed for code %s", code)
+		}
+
 		if err := sessions.AddDevice(tokenHash, devicePub, secret); err != nil {
 			return fmt.Errorf("persist paired device: %w", err)
 		}
 		_, _ = fmt.Fprintf(out, "Device paired successfully.\n")
 		return nil
 	}
+}
+
+// confirmFingerprint prompts on out and reads one line from in. Only an
+// explicit "y"/"yes" (case-insensitive) counts as confirmed -- EOF, a
+// blank line, or anything else fails closed (not confirmed, no error),
+// since an aborted pairing is ordinary control flow here, not exceptional.
+func confirmFingerprint(in io.Reader, out io.Writer) (bool, error) {
+	_, _ = fmt.Fprint(out, "Confirm? [y/N]: ")
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil {
+		return false, nil
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes", nil
 }
 
 func runPairDevice(args []string) int {
@@ -239,7 +271,7 @@ func runPairDevice(args []string) int {
 		return 1
 	}
 
-	if err := pairDevice(client, agentBase, devicePairURL, identity, sessions, os.Stdout, 2*time.Second, time.Now().Add(*timeout)); err != nil {
+	if err := pairDevice(client, agentBase, devicePairURL, identity, sessions, os.Stdout, os.Stdin, 2*time.Second, time.Now().Add(*timeout)); err != nil {
 		slog.Error("pair-device: pair", "err", err)
 		return 1
 	}

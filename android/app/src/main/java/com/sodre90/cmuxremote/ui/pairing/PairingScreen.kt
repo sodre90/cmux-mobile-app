@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -106,6 +107,20 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text(stringResource(R.string.pairing_enter_manually)) }
                         }
+                    }
+                }
+                is PairingUiState.AwaitingConfirmation -> Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(stringResource(R.string.pairing_confirm_fingerprint_title))
+                    Text(stringResource(R.string.pairing_confirm_fingerprint_body))
+                    Text(s.fingerprint, style = MaterialTheme.typography.headlineSmall)
+                    Button(onClick = vm::onConfirmed, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.action_confirm))
+                    }
+                    TextButton(onClick = vm::onRejected, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.action_cancel))
                     }
                 }
                 is PairingUiState.Pairing ->

@@ -106,6 +106,52 @@ func TestOpenRejectsWrongKey(t *testing.T) {
 	}
 }
 
+func TestPairingFingerprintOrderIndependent(t *testing.T) {
+	agentRaw := make([]byte, 32)
+	deviceRaw := make([]byte, 32)
+	for i := range agentRaw {
+		agentRaw[i] = 0x01
+		deviceRaw[i] = 0x02
+	}
+	agentPriv, err := ecdh.X25519().NewPrivateKey(agentRaw)
+	if err != nil {
+		t.Fatalf("agent NewPrivateKey: %v", err)
+	}
+	devicePriv, err := ecdh.X25519().NewPrivateKey(deviceRaw)
+	if err != nil {
+		t.Fatalf("device NewPrivateKey: %v", err)
+	}
+	agentPub := agentPriv.PublicKey().Bytes()
+	devicePub := devicePriv.PublicKey().Bytes()
+
+	// Golden vector shared with the Kotlin side's CipherTest -- both
+	// implementations must produce this exact string for these exact keys.
+	const want = "616B-56DB-4C6E"
+	if got := PairingFingerprint(agentPub, devicePub); got != want {
+		t.Fatalf("PairingFingerprint(agent, device) = %q, want %q", got, want)
+	}
+	if got := PairingFingerprint(devicePub, agentPub); got != want {
+		t.Fatalf("PairingFingerprint(device, agent) = %q, want %q (order-independence)", got, want)
+	}
+}
+
+func TestPairingFingerprintDistinctForDistinctKeys(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 8; i++ {
+		a := make([]byte, 32)
+		b := make([]byte, 32)
+		for j := range a {
+			a[j] = byte(i)
+			b[j] = byte(i + 100)
+		}
+		fp := PairingFingerprint(a, b)
+		if seen[fp] {
+			t.Fatalf("PairingFingerprint collided for iteration %d: %q", i, fp)
+		}
+		seen[fp] = true
+	}
+}
+
 func TestOpenRejectsWrongDirection(t *testing.T) {
 	key := make([]byte, 32)
 	ct, err := Seal(key, Nonce(DirAgentToDevice, 0), []byte("secret"))

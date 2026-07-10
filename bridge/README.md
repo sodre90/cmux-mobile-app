@@ -210,10 +210,24 @@ public key. The app (see the separate Android QR-scanning work) scans it,
 generates its own keypair, and calls the relay directly to redeem the code —
 no client certificate needed for that call. `pair-device` polls in the
 background and, once the phone redeems the code, derives a shared secret
-with the device (X25519 + HKDF) and saves it locally: content sent between
-this agent and that device is now end-to-end encrypted, so the relay
-operator (or anyone who compromises the relay host) can route messages but
-not read them.
+with the device (X25519 + HKDF).
+
+The device public key that redemption hands back came through the relay —
+a compromised relay could substitute its own key there and silently MITM
+the whole session. So before saving anything, `pair-device` prints a short
+verification code (the SAS fingerprint of both public keys) and waits for
+you to confirm it matches the one the phone is now showing:
+
+```
+Verify this code matches the phone's confirmation screen: 9F3A-B02C-77E1
+Confirm? [y/N]:
+```
+
+Only on `y`/`yes` does it derive and save the shared secret; anything else
+(including a blank line or Ctrl-D) aborts the pairing. Once confirmed,
+content sent between this agent and that device is end-to-end encrypted, so
+the relay operator (or anyone who compromises the relay host) can route
+messages but not read them or forge a peer.
 
 No camera handy, or pairing a phone remotely (e.g. over SSH)? The Android app
 also has a manual-entry form: enter the server URL (the same `https://` base
@@ -221,8 +235,8 @@ the QR's `pair_url` uses) and the printed code. It resolves the agent's
 public key via `GET /devices/pair-info/{code}` — a public, unauthenticated
 endpoint that hands back exactly what the QR carries (`agent_pubkey`,
 `expires_at`, `tenant_id`), scoped to the code alone since the phone doesn't
-know its tenant yet. Same single-use code, same handshake, same e2e result —
-just without a scan.
+know its tenant yet. Same single-use code, same handshake, same e2e result,
+same fingerprint-confirmation step on both ends — just without a scan.
 
 `pair-device` never displays a raw device token to the operator — only the
 phone that scanned the QR code ever sees it. List/revoke devices and tenants

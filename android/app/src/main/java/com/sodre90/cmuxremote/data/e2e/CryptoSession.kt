@@ -251,7 +251,7 @@ internal data class LegacySessionRecord(
 /** Free function form of [CryptoSession.absorbLegacyIfTarget], parameterized over
  *  plain read/write callbacks so a JVM test can exercise it against
  *  in-memory maps instead of real EncryptedSharedPreferences -- mirrors
- *  [com.sodre90.cmuxremote.data.pairing.pairInternal]'s injectable-I/O
+ *  [com.sodre90.cmuxremote.data.pairing.commitInternal]'s injectable-I/O
  *  pattern. Returns the migrated record (for the caller to also update its
  *  own in-memory counter cache), or null if [isMigrationTarget] is false or
  *  there was nothing to migrate. */

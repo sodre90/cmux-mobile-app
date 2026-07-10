@@ -83,6 +83,31 @@ class CipherTest {
         assertArrayEquals(plaintext, pt)
     }
 
+    @Test
+    fun pairingFingerprintMatchesGoFixedVectorAndIsOrderIndependent() {
+        // Mirrors bridge/internal/e2e/cipher_test.go TestPairingFingerprintOrderIndependent.
+        val agentPriv = ByteArray(32) { 0x01 }
+        val devicePriv = ByteArray(32) { 0x02 }
+        val agentPub = x25519PublicKeyFromPrivate(agentPriv)
+        val devicePub = x25519PublicKeyFromPrivate(devicePriv)
+
+        val want = "616B-56DB-4C6E"
+        assertEquals(want, pairingFingerprint(agentPub, devicePub))
+        assertEquals(want, pairingFingerprint(devicePub, agentPub))
+    }
+
+    @Test
+    fun pairingFingerprintDiffersForDistinctKeys() {
+        val seen = mutableSetOf<String>()
+        for (i in 0 until 8) {
+            val a = ByteArray(32) { i.toByte() }
+            val b = ByteArray(32) { (i + 100).toByte() }
+            val fp = pairingFingerprint(a, b)
+            assertEquals(false, fp in seen)
+            seen.add(fp)
+        }
+    }
+
     @Test(expected = DecryptFailedException::class)
     fun openRejectsWrongKey() {
         val key1 = ByteArray(32)

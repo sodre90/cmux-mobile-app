@@ -1,6 +1,6 @@
 package com.sodre90.cmuxremote.data
 
-import com.sodre90.cmuxremote.data.pairing.PairingClient
+import com.sodre90.cmuxremote.data.pairing.PairingSession
 
 /**
  * The pairing surface [PairingViewModel][com.sodre90.cmuxremote.ui.pairing.PairingViewModel]
@@ -8,5 +8,5 @@ import com.sodre90.cmuxremote.data.pairing.PairingClient
  * [AppContainer]. [AppContainer] is the sole real implementation.
  */
 interface PairingGateway {
-    fun pairingClient(slot: ConnectionSlot): PairingClient
+    fun pairingClient(slot: ConnectionSlot): PairingSession
 }

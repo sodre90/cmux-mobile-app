@@ -104,7 +104,7 @@ class Settings(context: Context) {
 /** Free function form of [Settings.migrateLegacyIfNeeded], parameterized over
  *  plain read/write callbacks so a JVM test can exercise it against
  *  in-memory maps instead of real EncryptedSharedPreferences -- mirrors
- *  [com.sodre90.cmuxremote.data.pairing.pairInternal]'s injectable-I/O
+ *  [com.sodre90.cmuxremote.data.pairing.commitInternal]'s injectable-I/O
  *  pattern. [applyMigration] is expected to persist [ConnectionSlot]'s new
  *  base_url/device_token and clear the legacy keys in one atomic commit,
  *  same as the real prefs transaction it replaces. */
