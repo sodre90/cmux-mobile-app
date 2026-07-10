@@ -47,11 +47,28 @@ func (s *Server) routes(wrap func(http.Handler) http.Handler) http.Handler {
 // TrustedHandler is the handler the Mac agent serves over the relay tunnel:
 // device-bearer auth is replaced by the relay-token check, and the opt-in
 // e2e encryption layer (SetSessions) wraps the whole route set.
+//
+// /internal/test-push-encrypt (see test_push.go's handleTestPushEncrypt) is
+// mounted on a separate outer mux ahead of the encryptionMiddleware-wrapped
+// route set, rather than inside routes() like every other trusted route: it
+// is called by the relay itself (never a device) naming an arbitrary target
+// deviceID in its body, so it has no X-Device-ID of its own for
+// encryptionMiddleware to gate on. An exact mux pattern always wins over the
+// "/" catch-all regardless of registration order, so this reaches
+// handleTestPushEncrypt directly -- the same effect /events' Upgrade-header
+// bypass already has for the relay's own plaintext push-monitor
+// subscription, just arranged via mux precedence instead of a header check
+// since this route is a plain POST, not a websocket upgrade.
 func (s *Server) TrustedHandler(relayToken string) http.Handler {
-	base := s.routes(func(h http.Handler) http.Handler {
+	relayWrap := func(h http.Handler) http.Handler {
 		return RequireRelayToken(relayToken, h)
-	})
-	return s.encryptionMiddleware(base)
+	}
+	encrypted := s.encryptionMiddleware(s.routes(relayWrap))
+
+	top := http.NewServeMux()
+	top.Handle("POST /internal/test-push-encrypt", relayWrap(http.HandlerFunc(s.handleTestPushEncrypt)))
+	top.Handle("/", encrypted)
+	return top
 }
 
 // authWrap is the production device-bearer middleware used by Handler.

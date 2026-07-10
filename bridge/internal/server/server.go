@@ -11,6 +11,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/ratelimit"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
@@ -42,6 +43,11 @@ type Server struct {
 	// the `cmux events --reconnect` stream (0 means "none yet"), read by
 	// LastEventAt for the cmux-bridge status subcommand.
 	lastEventAt atomic.Int64
+	// testPushCooldown bounds how often a single direct-mode device may
+	// trigger handleTestPushDevice (see test_push.go) -- defense-in-depth
+	// against a paired device turning "send test notification" into a
+	// push-spam vector against itself and its own FCM quota.
+	testPushCooldown *ratelimit.Cooldown
 }
 
 // LastEventAt returns when this agent last processed a frame from its cmux
@@ -74,10 +80,11 @@ func (s *Server) SetPusher(p Pusher, tenantID string) {
 // New constructs a Server.
 func New(c *cmux.Client, s *auth.Store) *Server {
 	return &Server{
-		cmux:         c,
-		store:        s,
-		hub:          newHub(),
-		terminalPoll: 250 * time.Millisecond,
+		cmux:             c,
+		store:            s,
+		hub:              newHub(),
+		terminalPoll:     250 * time.Millisecond,
+		testPushCooldown: ratelimit.NewCooldown(testPushDeviceCooldown),
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/ca"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/pairing"
+	"github.com/sodre90/cmux-bridge/internal/ratelimit"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
 )
 
@@ -51,6 +52,14 @@ const tenantRegisterMinInterval = 10 * time.Second
 // magnitude as tenantRegisterMinInterval.
 const devicePairMinInterval = 5 * time.Second
 
+// testPushDeviceCooldown bounds how often a single device may trigger
+// handleTestPush (testpush.go) -- see
+// docs/improvement-guide.md item 7.7's "rate-limit sensibly" requirement.
+// 30s is generous for a manual "let me check push works" tap while still
+// making the endpoint useless as a spam vector; matches
+// internal/server.testPushDeviceCooldown, direct mode's equivalent.
+const testPushDeviceCooldown = 30 * time.Second
+
 // Relay is the home-server rendezvous: it accepts Mac agents' tunnels and
 // reverse-proxies authenticated app requests over them.
 type Relay struct {
@@ -64,6 +73,13 @@ type Relay struct {
 	registerLimiter   *ipRateLimiter
 	devicePairLimiter *ipRateLimiter
 	maxTenants        int
+	// push is nil unless SetPusher is called (only by cmux-relay serve's
+	// production wiring, and only when FCM config is present). Nil means
+	// POST /devices/test-push (testpush.go) reports 503 push_not_configured;
+	// real attention-event fanout (pushmon.go's MonitorAgent) takes its own
+	// Pusher directly via SetSessionHook and is unaffected by this field.
+	push             Pusher
+	testPushCooldown *ratelimit.Cooldown
 }
 
 // New builds a Relay. store may be nil only in tests that never hit auth
@@ -79,8 +95,17 @@ func New(store *auth.Store, signer *ca.CA, relayToken string) *Relay {
 		registerLimiter:   newIPRateLimiter(tenantRegisterMinInterval),
 		devicePairLimiter: newIPRateLimiter(devicePairMinInterval),
 		maxTenants:        defaultMaxTenants,
+		testPushCooldown:  ratelimit.NewCooldown(testPushDeviceCooldown),
 	}
 }
+
+// SetPusher enables POST /devices/test-push (testpush.go). Independent of
+// SetSessionHook's pushmon wiring, which fans real attention events out to
+// every device on a tenant; both share the same Pusher instance in
+// production (cmd/cmux-relay/serve.go) but are wired separately since a test
+// push is deliberately scoped to the one calling device, never a tenant-wide
+// fanout.
+func (r *Relay) SetPusher(p Pusher) { r.push = p }
 
 // ipRateLimiter allows one call per key per interval, sweeping stale entries
 // on access so the map doesn't grow unboundedly under a distributed-source
@@ -227,6 +252,7 @@ func (r *Relay) Handler() http.Handler {
 	})
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
+	mux.Handle("POST /devices/test-push", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleTestPush))))
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))
 	if r.edgeToken == "" {
 		return mux

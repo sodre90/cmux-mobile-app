@@ -36,5 +36,6 @@ func (s *Server) DirectHandler() http.Handler {
 	}
 	mux := s.routes(wrap).(*http.ServeMux)
 	mux.Handle("POST /devices/register", wrap(http.HandlerFunc(s.handleRegisterDevice)))
+	mux.Handle("POST /devices/test-push", wrap(http.HandlerFunc(s.handleTestPushDevice)))
 	return mux
 }

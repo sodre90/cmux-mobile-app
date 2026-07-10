@@ -80,6 +80,11 @@ func runServe(args []string) int {
 			slog.Info("serve: FCM push enabled", "fcm_project_id", cfg.FCMProjectID)
 		}
 	}
+	// SetPusher powers POST /devices/test-push regardless of whether
+	// SetSessionHook's real-attention-event fanout below is also wired; both
+	// share this same pusher instance but are independent (nil is fine here
+	// too -- handleTestPush then reports 503 push_not_configured).
+	rl.SetPusher(pusher)
 	if pusher != nil {
 		rl.SetSessionHook(func(ctx context.Context, tenantID string, sess *yamux.Session) {
 			relay.MonitorAgent(ctx, tenantID, sess, cfg.RelayToken, store, pusher)
