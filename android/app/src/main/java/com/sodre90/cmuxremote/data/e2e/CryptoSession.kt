@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /** The subset of [CryptoSession] that [encryptBody]/[decryptBody]/[encryptFrame]/
  *  [decryptFrame] need -- lets tests substitute an in-memory fake. */
@@ -47,16 +48,23 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
     // these from EncryptedSharedPreferences. Every method that touches
     // either field -- including setPairing/clear/absorbLegacyIfTarget, not
     // just the hot-path nextSendCounter/commitRecvCounter -- synchronizes on
-    // `this` and routes its prefs write through persist() on writeScope, so
-    // (a) callers on different threads (Compose's main thread for sends, an
-    // OkHttp callback thread for recvs, the pairing/forget flows) never see
-    // a torn read, and (b) the on-disk value always converges to match
-    // whichever write was most recently applied in memory -- a queued write
-    // from before a reset can't land after it and resurrect stale counters,
-    // since writeScope is single-threaded FIFO. peer_pubkey/shared_secret
-    // are deliberately NOT part of this cache: isPaired()/sharedSecret()
-    // read them straight from prefs and need read-after-write consistency,
-    // so their writes stay synchronous exactly as before.
+    // `this` and routes its prefs write through writeScope (persist() or the
+    // blocking persistDurably()), so (a) callers on different threads
+    // (Compose's main thread for sends, an OkHttp callback thread for
+    // recvs, the pairing/forget flows) never see a torn read, and (b) the
+    // on-disk value always converges to match whichever write was most
+    // recently applied in memory -- a queued write from before a reset
+    // can't land after it and resurrect stale counters, since writeScope is
+    // single-threaded FIFO regardless of which of the two helpers enqueued
+    // it. nextSendCounter/commitRecvCounter use persistDurably specifically
+    // because their value is handed out (as an AEAD nonce input) before
+    // this class can know it was ever durably written; setPairing/clear
+    // reset both fields to fixed constants, so a lost write there just
+    // reappears identically on the next mutation, not as a reusable nonce.
+    // peer_pubkey/shared_secret are deliberately NOT part of this cache:
+    // isPaired()/sharedSecret() read them straight from prefs and need
+    // read-after-write consistency, so their writes stay synchronous
+    // exactly as before.
     private var sendCounter: Long = prefs.getLong(key(KEY_SEND_COUNTER), 0L)
     private var replayWindow: ReplayWindow =
         ReplayWindow(prefs.getLong(key(KEY_RECV_HIGHEST), -1L), prefs.getLong(key(KEY_RECV_WINDOW_BITS), 0L))
@@ -72,6 +80,28 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
             editor.block()
             editor.apply()
         }
+    }
+
+    // Send/recv counters back the AEAD nonce, so a lost write is a security
+    // bug, not just a stale cache: apply() only queues the disk write and can
+    // be dropped entirely by a process death (crash/OOM-kill/force-stop)
+    // before it lands, unlike commit(), which blocks until the write is on
+    // disk. Blocking here (via runBlocking) keeps the same writeScope
+    // ordering persist() relies on elsewhere -- still one queue, one writer
+    // -- while guaranteeing the counter this call just handed out can never
+    // be re-issued after a restart. The callers (encryptFrame/decryptFrame,
+    // on the terminal socket's send path and OkHttp's WS reader thread; the
+    // e2e HTTP interceptor, on OkHttp's dispatcher pool) are already
+    // throttled well above single-digit-millisecond disk-write latency by
+    // DeliveryTracker's one-RPC-in-flight gate and OkHttp's own connection
+    // handling, so this doesn't introduce user-visible jank.
+    private fun persistDurably(block: SharedPreferences.Editor.() -> Unit) {
+        val job = writeScope.launch {
+            val editor = prefs.edit()
+            editor.block()
+            editor.commit()
+        }
+        runBlocking { job.join() }
     }
 
     /**
@@ -147,27 +177,32 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
         }
     }
 
-    /** Durable, never reset across reconnects. */
+    /** Durable -- the bump is on disk before this returns, never reset across
+     *  reconnects -- so a value handed out here can never be handed out
+     *  again after a crash/kill, which would otherwise reuse an AEAD nonce. */
     override fun nextSendCounter(): Long {
         val n = synchronized(this) {
             val current = sendCounter
             sendCounter = current + 1
             current
         }
-        persist { putLong(key(KEY_SEND_COUNTER), n + 1) }
+        persistDurably { putLong(key(KEY_SEND_COUNTER), n + 1) }
         return n
     }
 
     /** Read-only check -- call before attempting to decrypt. */
     override fun canAcceptRecvCounter(n: Long): Boolean = synchronized(this) { replayWindow.canAccept(n) }
 
-    /** Mutating -- call only after the corresponding ciphertext has verified. */
+    /** Mutating -- call only after the corresponding ciphertext has verified.
+     *  Durable before returning, so a crash/kill can't re-widen the replay
+     *  window back to a point that would re-accept an already-processed
+     *  (captured) frame. */
     override fun commitRecvCounter(n: Long) {
         val updated = synchronized(this) {
             replayWindow = replayWindow.commit(n)
             replayWindow
         }
-        persist {
+        persistDurably {
             putLong(key(KEY_RECV_HIGHEST), updated.highestSeen)
             putLong(key(KEY_RECV_WINDOW_BITS), updated.windowBits)
         }
