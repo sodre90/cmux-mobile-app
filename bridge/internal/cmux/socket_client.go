@@ -164,31 +164,38 @@ type socketResponse struct {
 // cmux's side) even though this call is still reporting failure, so the
 // caller must treat it as final -- typed input isn't idempotent, and retrying
 // an ambiguous send through a different transport risks double-executing it.
+//
+// One exception: if this call reused a connection cached from a prior rpc
+// (rather than dialing fresh just now) and the write fails, that connection
+// had already gone stale before this call began -- e.g. cmux restarted while
+// the bridge held the socket open -- so the write cannot have delivered any
+// bytes of this request. That's safe to detect and retry internally (a fresh
+// reconnect plus one more attempt) without ever surfacing committed=false for
+// a write that actually reached a live connection.
 func (sc *socketConn) rpc(ctx context.Context, method string, params any) (result json.RawMessage, committed bool, err error) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 
-	if sc.conn == nil {
+	reused := sc.conn != nil
+	if !reused {
 		if err := sc.connectLocked(); err != nil {
 			return nil, false, err
 		}
 	}
 
-	deadline := time.Now().Add(socketIOTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = sc.conn.SetDeadline(deadline)
-
-	// Unblock the read/write below promptly if ctx is cancelled mid-flight
+	// Unblock the write/read below promptly if ctx is cancelled mid-flight
 	// (e.g. the owning WebSocket connection closes) instead of waiting out
-	// the full timeout.
+	// the full timeout. Reads sc.conn fresh each time it fires (guarded by
+	// nil-check) rather than a snapshot, so it keeps working across the
+	// reconnect-and-retry below.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = sc.conn.SetDeadline(time.Now())
+			if sc.conn != nil {
+				_ = sc.conn.SetDeadline(time.Now())
+			}
 		case <-done:
 		}
 	}()
@@ -198,25 +205,53 @@ func (sc *socketConn) rpc(ctx context.Context, method string, params any) (resul
 	if err != nil {
 		return nil, false, fmt.Errorf("marshal params: %w", err)
 	}
+	line := append(req, '\n')
 
-	if _, err := sc.conn.Write(append(req, '\n')); err != nil {
-		sc.closeLocked()
-		return nil, true, fmt.Errorf("cmux socket rpc %s: write: %w", method, err)
+	result, wrote, err := sc.attemptLocked(ctx, method, id, line)
+	if err == nil {
+		return result, true, nil
 	}
-
-	line, err := sc.reader.ReadString('\n')
+	sc.closeLocked()
+	if wrote || !reused {
+		return nil, true, err
+	}
+	if connErr := sc.connectLocked(); connErr != nil {
+		return nil, false, connErr
+	}
+	result, _, err = sc.attemptLocked(ctx, method, id, line)
 	if err != nil {
 		sc.closeLocked()
+		return nil, true, err
+	}
+	return result, true, nil
+}
+
+// attemptLocked writes one request line to sc.conn and reads back its
+// response. The wrote flag reports whether the write itself succeeded --
+// once it has, any later failure (read, decode, mismatched id, an
+// application-level error from cmux) must be treated as committed, since the
+// request may already have taken effect on cmux's side.
+func (sc *socketConn) attemptLocked(ctx context.Context, method, id string, line []byte) (result json.RawMessage, wrote bool, err error) {
+	deadline := time.Now().Add(socketIOTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = sc.conn.SetDeadline(deadline)
+
+	if _, err := sc.conn.Write(line); err != nil {
+		return nil, false, fmt.Errorf("cmux socket rpc %s: write: %w", method, err)
+	}
+
+	respLine, err := sc.reader.ReadString('\n')
+	if err != nil {
 		return nil, true, fmt.Errorf("cmux socket rpc %s: read: %w", method, err)
 	}
 
 	var resp socketResponse
-	if err := json.Unmarshal([]byte(line), &resp); err != nil {
-		sc.closeLocked()
+	if err := json.Unmarshal([]byte(respLine), &resp); err != nil {
 		return nil, true, fmt.Errorf("cmux socket rpc %s: decode response: %w", method, err)
 	}
 	if resp.ID != id {
-		sc.closeLocked()
 		return nil, true, fmt.Errorf("cmux socket rpc %s: response id mismatch: want %s got %s", method, id, resp.ID)
 	}
 	if !resp.OK {

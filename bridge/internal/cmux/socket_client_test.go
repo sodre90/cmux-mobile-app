@@ -223,6 +223,89 @@ exit 1
 	}
 }
 
+// TestFastPathRetriesOnceWhenReusedConnectionWentStale reproduces the bug
+// behind the app's intermittent "bridge HTTP 502: cmux unavailable" that
+// cleared itself on manual refresh: cmux restarts (or the Mac sleeps/wakes)
+// between two calls that land on the same pooled socketConn. The client's
+// cached sc.conn is still non-nil going into the later call -- unlike
+// TestFastPathReconnectsAfterConnectionDrop, nothing ever called
+// pool.closeAll() -- so the bug was in treating a write failure on that
+// stale-but-still-cached connection as "committed," which skipped any retry
+// and surfaced the error straight to the caller.
+//
+// The pool round-robins fastPathPoolSize connections FIFO, so issuing exactly
+// fastPathPoolSize calls first (each landing on a distinct, freshly-dialed
+// connection that the fake server closes right after answering) guarantees
+// the next call cycles back to the very first connection -- reused from the
+// client's point of view, but already dead on the server side.
+func TestFastPathRetriesOnceWhenReusedConnectionWentStale(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "cmux.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var calls atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				r := bufio.NewReader(conn)
+				authLine, err := r.ReadString('\n')
+				if err != nil || strings.TrimSpace(authLine) != "auth "+fakeSocketPassword {
+					return
+				}
+				conn.Write([]byte("OK: Authenticated\n"))
+				reqLine, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				calls.Add(1)
+				var req struct {
+					ID string `json:"id"`
+				}
+				json.Unmarshal([]byte(reqLine), &req)
+				resp, _ := json.Marshal(map[string]any{"id": req.ID, "ok": true, "result": json.RawMessage(`{"via":"socket"}`)})
+				conn.Write(append(resp, '\n'))
+				// Answer exactly one request, then hang up from the SERVER
+				// side -- simulates cmux restarting while the bridge's
+				// client-side pool still holds this connection open (its
+				// sc.conn stays non-nil; nothing here touches the client).
+			}()
+		}
+	}()
+	t.Setenv("CMUX_SOCKET_PATH", path)
+	t.Setenv("CMUX_SOCKET_PASSWORD", fakeSocketPassword)
+
+	bin := testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "subprocess should not have been used" >&2
+exit 1
+`)
+	c := &Client{Bin: bin, FastPath: true}
+
+	for i := 0; i < fastPathPoolSize; i++ {
+		if _, err := c.Rpc(context.Background(), "mobile.workspace.list", nil); err != nil {
+			t.Fatalf("seed call %d: %v", i, err)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	out, err := c.Rpc(context.Background(), "mobile.workspace.list", nil)
+	if err != nil {
+		t.Fatalf("call on a since-gone-stale cached connection should transparently reconnect and retry, got: %v", err)
+	}
+	if !strings.Contains(string(out), `"via":"socket"`) {
+		t.Fatalf("want reconnected socket response, got %s", out)
+	}
+	if calls.Load() != fastPathPoolSize+1 {
+		t.Fatalf("want %d socket-side calls (one per seed connection, plus the retried one), got %d", fastPathPoolSize+1, calls.Load())
+	}
+}
+
 // TestFastPathPoolSlowCallDoesNotBlockConcurrentFastCall is the accept
 // criterion for the pool: before this pool existed, every fast-path call
 // funneled through one shared socketConn whose mutex was held for the whole
