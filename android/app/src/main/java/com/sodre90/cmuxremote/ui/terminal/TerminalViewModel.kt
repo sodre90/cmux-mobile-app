@@ -39,6 +39,7 @@ class TerminalViewModel(
     private val bridge: BridgeGateway,
     private val surfaceId: String,
     private val bridgeNotConfiguredMessage: String,
+    private val cancelAttentionNotification: (workspaceId: String) -> Unit = {},
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<UiState<TerminalContent>>(UiState.Loading)
@@ -81,7 +82,7 @@ class TerminalViewModel(
 
     init {
         connect()
-        loadYoloMode()
+        loadWorkspaceContext()
         viewModelScope.launch {
             while (isActive) {
                 delay(DELIVERY_CHECK_INTERVAL_MS)
@@ -90,16 +91,20 @@ class TerminalViewModel(
         }
     }
 
-    // The terminal route is keyed by surface (pane) id, but YOLO mode is a
-    // workspace-level setting -- several panes can share one workspace -- so
-    // this finds the owning workspace via the existing sessions list rather
-    // than needing a new bridge endpoint or extra nav args.
-    private fun loadYoloMode() {
+    // The terminal route is keyed by surface (pane) id, but both YOLO mode and
+    // the attention-push notification id are workspace-level -- several panes
+    // can share one workspace -- so this finds the owning workspace via the
+    // existing sessions list rather than needing a new bridge endpoint or
+    // extra nav args. Once found, its attention notification (if any is still
+    // showing) is cancelled: the user is looking at this workspace's terminal
+    // now, however they navigated here, so it's no longer unread.
+    private fun loadWorkspaceContext() {
         val client = bridge.activeBridge() ?: return
         viewModelScope.launch {
             try {
                 val ws = client.sessions().firstOrNull { ws -> ws.terminals.any { it.id == surfaceId } }
                 _yoloMode.value = ws?.yoloMode.orEmpty()
+                ws?.let { cancelAttentionNotification(it.id) }
             } catch (_: Exception) {
                 // Best-effort display only; leave it blank on failure.
             }

@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui
 
+import android.app.NotificationManager
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
@@ -9,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -21,6 +23,7 @@ import androidx.navigation.navArgument
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.push.attentionNotificationId
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
 import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsScreen
@@ -38,6 +41,14 @@ fun CmuxNavHost(
     container: AppContainer,
     pendingWorkspaceId: String? = null,
     pendingSurfaceId: String? = null,
+    // Bumped once per notification tap, even when it targets the same
+    // workspace/surface as the previous one -- see MainActivity.applyDeepLink.
+    // LaunchedEffect only restarts when a KEY's value actually changes, and a
+    // repeat prompt from the same workspace (the common case: one agent
+    // pinging you again) would otherwise leave pendingWorkspaceId unchanged
+    // and silently drop the tap, stranding the user on whatever screen was
+    // already open.
+    pendingDeepLinkToken: Int = 0,
 ) {
     val navController = rememberNavController()
     val configured = container.anyBridgeConfigured()
@@ -71,7 +82,7 @@ fun CmuxNavHost(
     // AppContainer), so the backgrounded terminal's poll traffic can advance
     // that shared window past the newly-opened terminal's frames and get them
     // dropped as replays.
-    LaunchedEffect(pendingWorkspaceId, pendingSurfaceId, configured) {
+    LaunchedEffect(pendingDeepLinkToken, configured) {
         if (!configured) return@LaunchedEffect
         if (pendingSurfaceId != null) {
             navController.navigate(Routes.terminal(pendingSurfaceId)) {
@@ -227,8 +238,21 @@ fun CmuxNavHost(
         ) { entry ->
             val id = entry.arguments?.getString("id").orEmpty()
             val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
+            val context = LocalContext.current
             val vm: TerminalViewModel = viewModel(
-                factory = viewModelFactory { initializer { TerminalViewModel(container, id, bridgeNotConfigured) } },
+                factory = viewModelFactory {
+                    initializer {
+                        TerminalViewModel(
+                            container,
+                            id,
+                            bridgeNotConfigured,
+                            cancelAttentionNotification = { workspaceId ->
+                                context.getSystemService(NotificationManager::class.java)
+                                    ?.cancel(attentionNotificationId(workspaceId, surfaceId = null))
+                            },
+                        )
+                    }
+                },
             )
             TerminalScreen(vm = vm, onBack = { navController.popBackStack() })
         }

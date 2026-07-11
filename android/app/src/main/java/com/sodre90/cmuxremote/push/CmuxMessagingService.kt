@@ -98,7 +98,7 @@ class CmuxMessagingService : FirebaseMessagingService() {
         // prompt that's still pending. Keying on workspaceId means a repeat
         // push updates the same notification tile instead of stacking a new
         // one for the same terminal.
-        val notificationId = (workspaceId ?: surfaceId ?: "attention").hashCode()
+        val notificationId = attentionNotificationId(workspaceId, surfaceId)
         val pending = PendingIntent.getActivity(
             this,
             notificationId,
@@ -124,3 +124,12 @@ class CmuxMessagingService : FirebaseMessagingService() {
         private const val GENERIC_BODY = "Open the app to see what's happening"
     }
 }
+
+/**
+ * The notification id an attention/test push is filed under -- shared between
+ * the poster ([CmuxMessagingService.showNotification]) and anything that later
+ * needs to cancel it (e.g. CmuxNavHost, once the workspace it points at is
+ * actually opened) so the two never drift apart.
+ */
+fun attentionNotificationId(workspaceId: String?, surfaceId: String?): Int =
+    (workspaceId ?: surfaceId ?: "attention").hashCode()

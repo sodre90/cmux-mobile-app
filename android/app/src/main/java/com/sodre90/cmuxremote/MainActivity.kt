@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
@@ -31,6 +32,14 @@ class MainActivity : ComponentActivity() {
     private var pendingWorkspaceId by mutableStateOf<String?>(null)
     private var pendingSurfaceId by mutableStateOf<String?>(null)
 
+    // Bumped on every applyDeepLink call, independent of whether the ids
+    // above actually changed value. A repeat notification for the same
+    // workspace (e.g. the same agent pinging again) would otherwise leave
+    // pendingWorkspaceId equal to its previous value, and CmuxNavHost's
+    // LaunchedEffect only restarts when a keyed value changes - so without
+    // this token, re-tapping such a notification silently did nothing.
+    private var pendingDeepLinkToken by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -49,6 +58,7 @@ class MainActivity : ComponentActivity() {
                     container,
                     pendingWorkspaceId = pendingWorkspaceId,
                     pendingSurfaceId = pendingSurfaceId,
+                    pendingDeepLinkToken = pendingDeepLinkToken,
                 )
             }
         }
@@ -63,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private fun applyDeepLink(intent: Intent) {
         pendingWorkspaceId = intent.getStringExtra(EXTRA_WORKSPACE_ID)
         pendingSurfaceId = intent.getStringExtra(EXTRA_SURFACE_ID)
+        pendingDeepLinkToken++
     }
 
     /**
