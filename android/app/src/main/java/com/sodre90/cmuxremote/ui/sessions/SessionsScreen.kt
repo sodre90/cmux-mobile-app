@@ -588,8 +588,10 @@ private fun attentionAccent(attention: String): Color? = when (attention) {
     else -> null
 }
 
+// Not private: reused by TerminalPickerDialog to render the same pane row in
+// its notification/inbox terminal-picker popup.
 @Composable
-private fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
+fun PaneRow(pane: TerminalPane, onOpen: (String) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth()
             .clickable { onOpen(pane.id) }
@@ -641,8 +643,9 @@ private fun PaneRowStartingFocusedPreview() {
     }
 }
 
+// Not private: reused by TerminalPickerDialog via PaneRow.
 @Composable
-private fun KindBadge(kind: String) {
+fun KindBadge(kind: String) {
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         shape = MaterialTheme.shapes.small,

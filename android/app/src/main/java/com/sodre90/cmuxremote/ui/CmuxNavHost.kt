@@ -8,6 +8,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -23,6 +24,7 @@ import androidx.navigation.navArgument
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.push.attentionNotificationId
 import com.sodre90.cmuxremote.ui.inbox.InboxScreen
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
@@ -32,6 +34,7 @@ import com.sodre90.cmuxremote.ui.pairing.PairingScreen
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
+import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
 import com.sodre90.cmuxremote.ui.sessions.notificationTarget
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
@@ -62,6 +65,12 @@ fun CmuxNavHost(
     // showing whatever paired/unpaired status it read before the navigation.
     var forgetGeneration by remember { mutableIntStateOf(0) }
 
+    // Set when a notification tap's workspace has more than one candidate
+    // pane and none is uniquely resolvable -- see the LaunchedEffect below.
+    // Rendered as a TerminalPickerDialog over the sessions list so the user
+    // picks directly instead of hunting for the right card themselves.
+    var pendingPicker by remember { mutableStateOf<Workspace?>(null) }
+
     // A notification tap carries which workspace needs attention (cmux never
     // tells us the exact pane). Resolve it once after launch, but only when the
     // bridge is configured — otherwise onboarding must come first: if the
@@ -69,9 +78,11 @@ fun CmuxNavHost(
     // live session list and resolve a target pane via notificationTarget — one
     // pane opens directly, several resolve to cmux's own focused pane if there
     // is exactly one, and anything still ambiguous falls back to the
-    // (attention-striped) sessions list. That fallback must navigate there
-    // explicitly: the tap can arrive while a different, unrelated terminal is
-    // already open, so doing nothing would strand the user on it.
+    // (attention-striped) sessions list, with pendingPicker offering a direct
+    // pane picker over it when there's more than one candidate to choose from.
+    // That fallback must navigate there explicitly: the tap can arrive while a
+    // different, unrelated terminal is already open, so doing nothing would
+    // strand the user on it.
     //
     // Every jump here collapses the back stack down to SESSIONS first. Without
     // that, a notification tap while a terminal is already open would push the
@@ -84,6 +95,7 @@ fun CmuxNavHost(
     // dropped as replays.
     LaunchedEffect(pendingDeepLinkToken, configured) {
         if (!configured) return@LaunchedEffect
+        pendingPicker = null
         if (pendingSurfaceId != null) {
             navController.navigate(Routes.terminal(pendingSurfaceId)) {
                 popUpTo(Routes.SESSIONS) { inclusive = false }
@@ -92,10 +104,10 @@ fun CmuxNavHost(
             return@LaunchedEffect
         }
         if (pendingWorkspaceId != null) {
-            val target = runCatching { container.activeBridge()?.sessions() }
+            val ws = runCatching { container.activeBridge()?.sessions() }
                 .getOrNull()
                 ?.firstOrNull { it.id == pendingWorkspaceId }
-                ?.let { notificationTarget(it) }
+            val target = ws?.let { notificationTarget(it) }
             if (target != null) {
                 navController.navigate(Routes.terminal(target)) {
                     popUpTo(Routes.SESSIONS) { inclusive = false }
@@ -106,8 +118,20 @@ fun CmuxNavHost(
                     popUpTo(Routes.SESSIONS) { inclusive = true }
                     launchSingleTop = true
                 }
+                if (ws != null && ws.terminals.size > 1) pendingPicker = ws
             }
         }
+    }
+
+    pendingPicker?.let { ws ->
+        TerminalPickerDialog(
+            workspaces = listOf(ws),
+            onSelect = { surfaceId ->
+                pendingPicker = null
+                navController.navigate(Routes.terminal(surfaceId)) { launchSingleTop = true }
+            },
+            onDismiss = { pendingPicker = null },
+        )
     }
 
     // Predictive back (enabled in the manifest) makes Navigation Compose

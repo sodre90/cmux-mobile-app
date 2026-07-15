@@ -21,6 +21,7 @@
     <string name="sessions_workspace_actions_description">Workspace actions</string>
     <string name="sessions_drag_to_reorder_description">Drag to reorder</string>
     <string name="sessions_rename_dialog_title">Rename workspace</string>
+    <string name="terminal_picker_title">Which terminal?</string>
     <string name="pane_starting">starting…</string>
     <string name="pane_focus">focus</string>
     <string name="kind_badge_unknown">?</string>
