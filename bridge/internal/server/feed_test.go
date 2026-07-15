@@ -1,10 +1,12 @@
 package server
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -121,6 +123,58 @@ echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"question","status":"pendi
 	logData, _ := os.ReadFile(logPath)
 	if !strings.Contains(string(logData), "feed.list") || !strings.Contains(string(logData), "pending_only") {
 		t.Fatalf("cmux not called with feed.list pending_only; got:\n%s", logData)
+	}
+}
+
+// TestFeedPendingCanonicalizesCWD reproduces the same live-observed symlink
+// mismatch as yolo_test.go's TestResolvePendingPermissionMatchesSymlinkedCWD:
+// cmux's feed.list reports an item's cwd as a symlink alias while
+// mobile.workspace.list (surfaced through /sessions) reports the resolved
+// form for the same location. /feed/pending must rewrite "cwd" to its
+// canonical form so the app's cwd-based item-to-workspace matching
+// (pendingItemTarget in SessionsLogic.kt) has a chance of succeeding.
+func TestFeedPendingCanonicalizesCWD(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+echo '{"items":[{"id":"I1","request_id":"REQ1","kind":"question","status":"pending","cwd":"` + alias + `"}]}'
+`
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, script)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/feed/pending", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Items []struct {
+			CWD string `json:"cwd"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Items) != 1 || body.Items[0].CWD != real {
+		t.Fatalf("want cwd rewritten to canonical %q, got %+v", real, body.Items)
 	}
 }
 

@@ -84,8 +84,11 @@ func parseWorkspaces(raw []byte) ([]wire.Workspace, error) {
 				hasUnread, _ := v["has_unread"].(bool)
 				preview := firstString(v, "preview")
 				out = append(out, wire.Workspace{
-					ID:        id,
-					CWD:       cwd,
+					ID: id,
+					// Canonicalized so it matches feed.list's cwd byte-for-byte
+					// (see canonicalizeFeedCWDs) -- cmux reports the two
+					// symlinked differently for the same location.
+					CWD:       canonicalPath(cwd),
 					Title:     cleanTitle(firstString(v, "title")),
 					Preview:   preview,
 					HasUnread: hasUnread,

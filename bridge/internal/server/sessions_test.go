@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
@@ -130,6 +132,52 @@ func TestSessionsDedupAndShape(t *testing.T) {
 	}
 	if empty := byID["EMPTY01"]; len(empty.Terminals) != 0 {
 		t.Fatalf("EMPTY01 want 0 panes, got %d", len(empty.Terminals))
+	}
+}
+
+// TestSessionsCanonicalizesWorkspaceCWD mirrors yolo_test.go's
+// TestResolvePendingPermissionMatchesSymlinkedCWD: mobile.workspace.list
+// reports a workspace's raw current_directory, which can be a symlink alias
+// (e.g. macOS's /tmp -> /private/tmp). /sessions must resolve it to the same
+// canonical form /feed/pending uses (see canonicalizeFeedCWDs) so the app's
+// cwd-based item-to-workspace matching has both sides in agreement.
+func TestSessionsCanonicalizesWorkspaceCWD(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	script := `#!/bin/sh
+echo '{"workspaces":[{"id":"WS1","current_directory":"` + alias + `","title":"t","terminals":[]}]}'
+`
+	s, tok := newTestServer(t, script)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Workspaces []wire.Workspace `json:"workspaces"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Workspaces) != 1 || body.Workspaces[0].CWD != real {
+		t.Fatalf("want cwd resolved to canonical %q, got %+v", real, body.Workspaces)
 	}
 }
 
