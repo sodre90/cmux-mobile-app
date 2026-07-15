@@ -148,10 +148,14 @@ class SessionsViewModelTest {
 
     @Test
     fun userRefreshSkipsAConcurrentCallWhileAFetchIsAlreadyInFlight() {
+        // Only /sessions is counted/gated -- fetchAndApply also fires a
+        // /feed/pending request (for the Inbox badge count) that must not be
+        // mistaken for a second /sessions call by this test's assertions.
         val requestCount = AtomicInteger(0)
         val gate = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path != "/sessions") return MockResponse().setBody("""{"items":[]}""")
                 requestCount.incrementAndGet()
                 gate.await()
                 return MockResponse().setBody("""{"workspaces":[]}""")
@@ -181,10 +185,13 @@ class SessionsViewModelTest {
 
     @Test
     fun refreshProceedsEvenWhileAUserRefreshIsInFlight() {
+        // Only /sessions is counted/gated -- see the same note in
+        // userRefreshSkipsAConcurrentCallWhileAFetchIsAlreadyInFlight above.
         val requestCount = AtomicInteger(0)
         val gate = CountDownLatch(1)
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path != "/sessions") return MockResponse().setBody("""{"items":[]}""")
                 requestCount.incrementAndGet()
                 gate.await()
                 return MockResponse().setBody("""{"workspaces":[]}""")

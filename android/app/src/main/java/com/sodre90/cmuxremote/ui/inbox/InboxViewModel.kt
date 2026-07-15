@@ -86,11 +86,7 @@ class InboxViewModel(
         }
         viewModelScope.launch {
             try {
-                // "question" (AskUserQuestion) and "permissionRequest" (a
-                // gated tool call) are the replyable kinds cmux currently
-                // surfaces as a pending feed item; "exitPlan" is not yet
-                // surfaced here (its reply schema isn't confirmed live).
-                val items = c.pendingFeed().filter { it.kind == "question" || it.kind == "permissionRequest" }
+                val items = c.pendingFeed().filter { isPendingInboxKind(it.kind) }
                 _state.value = UiState.Ready(items)
                 _actionError.value = null
             } catch (ex: Exception) {

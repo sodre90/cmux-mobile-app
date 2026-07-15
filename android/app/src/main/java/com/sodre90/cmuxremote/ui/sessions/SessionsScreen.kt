@@ -88,7 +88,7 @@ fun SessionsScreen(
     onSettings: () -> Unit,
 ) {
     val state by vm.state.collectAsState()
-    val unreadCount = (state as? UiState.Ready)?.data?.let { unreadWorkspaceCount(it) } ?: 0
+    val pendingCount by vm.pendingCount.collectAsState()
 
     Scaffold(
         topBar = {
@@ -96,7 +96,7 @@ fun SessionsScreen(
                 title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
                     BadgedBox(
-                        badge = { if (unreadCount > 0) Badge { Text(unreadCount.toString()) } },
+                        badge = { if (pendingCount > 0) Badge { Text(pendingCount.toString()) } },
                     ) {
                         TextButton(onClick = onOpenInbox) { Text(stringResource(R.string.sessions_inbox_button)) }
                     }

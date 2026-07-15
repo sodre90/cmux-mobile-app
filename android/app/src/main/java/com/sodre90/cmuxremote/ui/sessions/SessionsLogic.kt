@@ -76,12 +76,6 @@ fun needsAttention(ws: Workspace): Boolean = ws.attention.isNotEmpty()
 fun sortedByAttention(workspaces: List<Workspace>): List<Workspace> =
     workspaces.sortedByDescending { needsAttention(it) }
 
-/** Number of [workspaces] with a pending unread prompt -- the same signal
- *  behind each card's red dot, aggregated for the top-bar Inbox badge. Not an
- *  exact unread-item count: the bridge only reports hasUnread per workspace,
- *  not how many items are pending within one. */
-fun unreadWorkspaceCount(workspaces: List<Workspace>): Int = workspaces.count { it.hasUnread }
-
 /**
  * A short phrase describing [ws]'s attention state and unread flag, or null
  * when there's nothing to call out. Backs the TalkBack announcement for

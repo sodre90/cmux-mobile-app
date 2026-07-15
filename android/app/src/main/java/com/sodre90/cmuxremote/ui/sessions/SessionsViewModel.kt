@@ -9,6 +9,7 @@ import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
 import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.inbox.isPendingInboxKind
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -34,6 +35,15 @@ class SessionsViewModel(
 
     private val _state = MutableStateFlow<UiState<List<Workspace>>>(UiState.Loading)
     val state: StateFlow<UiState<List<Workspace>>> = _state.asStateFlow()
+
+    // Backs the top-bar Inbox badge -- deliberately the same `/feed/pending`
+    // count the Inbox screen itself renders (see [isPendingInboxKind]), not
+    // workspaces' cmux `has_unread` flag: that flag fires on any new output,
+    // so it previously showed a badge count with nothing behind it once
+    // opened. Kept stale on a failed fetch rather than reset to 0, same as
+    // [state] on a background refresh failure -- see [fetchAndApply].
+    private val _pendingCount = MutableStateFlow(0)
+    val pendingCount: StateFlow<Int> = _pendingCount.asStateFlow()
 
     // Surfaced separately from [state] so a failed rename doesn't blow away an
     // already-loaded list (mirrors InboxViewModel's state/actionError split).
@@ -134,6 +144,7 @@ class SessionsViewModel(
             } catch (e: Exception) {
                 UiState.Error(e.message ?: loadSessionsFailedMessage)
             }
+            refreshPendingCount(client)
         }
     }
 
@@ -183,6 +194,14 @@ class SessionsViewModel(
         } catch (e: Exception) {
             _actionError.value = e.message ?: refreshSessionsFailedMessage
         }
+        refreshPendingCount(client)
+    }
+
+    private suspend fun refreshPendingCount(client: FallbackBridgeClient) {
+        _pendingCount.value = runCatching { client.pendingFeed() }
+            .getOrNull()
+            ?.count { isPendingInboxKind(it.kind) }
+            ?: _pendingCount.value
     }
 
     // Re-fetch on cmux agent activity: SessionStart/SessionEnd change which

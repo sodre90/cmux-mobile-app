@@ -6,6 +6,16 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 /**
+ * The pending-feed [kind]s the Inbox actually renders and can reply to --
+ * shared with SessionsScreen's Inbox badge count so the badge never shows a
+ * number the Inbox itself can't back up (e.g. a workspace's cmux `has_unread`
+ * flag, which fires on any new output, not just a repliable prompt).
+ * "exitPlan" is excluded: not yet wired into the Inbox (its reply schema
+ * isn't confirmed live).
+ */
+fun isPendingInboxKind(kind: String): Boolean = kind == "question" || kind == "permissionRequest"
+
+/**
  * A `PendingFeedItem.toolInput` is cmux's own JSON-encoded string of the raw
  * tool args, shape varying per tool (Bash's `command`, Read's `file_path`,
  * ...) -- rendered as generic key/value lines rather than one UI per tool.
