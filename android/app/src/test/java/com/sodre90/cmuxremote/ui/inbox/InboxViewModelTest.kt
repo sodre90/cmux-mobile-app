@@ -9,6 +9,7 @@ import com.sodre90.cmuxremote.data.RelayHealth
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -194,7 +195,33 @@ class InboxViewModelTest {
         )
         val target = runBlocking { vm.terminalTarget(item) }
 
-        assertEquals("p1", target)
+        assertEquals(TerminalMatch.Direct("p1"), target)
+    }
+
+    @Test
+    fun terminalTargetReturnsAmbiguousWhenSeveralWorkspacesShareTheCwdAndSetsNoActionError() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"id":"i1","kind":"question","cwd":"/home/dev/proj"}]}""",
+            ),
+        )
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+        val item = (vm.state.value as UiState.Ready).data.first()
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"workspaces":[
+                    {"id":"w1","cwd":"/home/dev/proj","terminals":[{"id":"p1"}]},
+                    {"id":"w2","cwd":"/home/dev/proj","terminals":[{"id":"p2"}]}
+                ]}""",
+            ),
+        )
+        val target = runBlocking { vm.terminalTarget(item) }
+
+        assertTrue(target is TerminalMatch.Ambiguous)
+        assertEquals(listOf("w1", "w2"), (target as TerminalMatch.Ambiguous).workspaces.map { it.id })
+        assertEquals(null, vm.actionError.value)
     }
 
     @Test

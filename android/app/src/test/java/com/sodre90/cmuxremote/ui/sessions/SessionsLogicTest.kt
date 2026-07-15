@@ -64,14 +64,14 @@ class SessionsLogicTest {
             Workspace(id = "other", cwd = "/home/dev/other", terminals = listOf(TerminalPane(id = "op1"))),
             ws("p1").copy(cwd = "/home/dev/proj"),
         )
-        assertEquals("p1", pendingItemTarget(item, workspaces))
+        assertEquals(TerminalMatch.Direct("p1"), pendingItemTarget(item, workspaces))
     }
 
     @Test
     fun pendingItemTargetFallsBackToFirstPaneWhenNoPaneIsFocused() {
         val item = PendingFeedItem(id = "i1", cwd = "/home/dev/proj")
         val matching = wsWithFocus("p1" to false, "p2" to false).copy(cwd = "/home/dev/proj")
-        assertEquals("p1", pendingItemTarget(item, listOf(matching)))
+        assertEquals(TerminalMatch.Direct("p1"), pendingItemTarget(item, listOf(matching)))
     }
 
     @Test
@@ -84,6 +84,17 @@ class SessionsLogicTest {
     fun pendingItemTargetIsNullWhenItemHasNoCwd() {
         val item = PendingFeedItem(id = "i1", cwd = "")
         assertNull(pendingItemTarget(item, listOf(ws("p1").copy(cwd = ""))))
+    }
+
+    @Test
+    fun pendingItemTargetIsAmbiguousWhenSeveralWorkspacesShareTheCwd() {
+        // Live-observed: several parallel agent sessions commonly sit in the
+        // same repo, all reporting the identical cwd -- firstOrNull would
+        // silently route to an arbitrary one of them.
+        val item = PendingFeedItem(id = "i1", cwd = "/home/dev/proj")
+        val a = ws("p1").copy(id = "a", cwd = "/home/dev/proj")
+        val b = ws("p2").copy(id = "b", cwd = "/home/dev/proj")
+        assertEquals(TerminalMatch.Ambiguous(listOf(a, b)), pendingItemTarget(item, listOf(a, b)))
     }
 
     @Test

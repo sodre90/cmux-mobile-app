@@ -24,8 +24,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -35,7 +37,10 @@ import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
+import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
+import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import kotlinx.coroutines.launch
 
@@ -49,6 +54,10 @@ fun InboxScreen(
     val state by vm.state.collectAsState()
     val actionError by vm.actionError.collectAsState()
     val scope = rememberCoroutineScope()
+    // Set when an "open terminal" tap's item.cwd matches more than one live
+    // workspace (e.g. several parallel sessions in the same repo) -- see
+    // TerminalMatch.Ambiguous. Shown as a picker instead of guessing.
+    var pickerWorkspaces by remember { mutableStateOf<List<Workspace>>(emptyList()) }
 
     Scaffold(
         topBar = {
@@ -88,7 +97,13 @@ fun InboxScreen(
                                     item = item,
                                     onSend = { labels -> vm.reply(item, labels) },
                                     onOpenTerminal = {
-                                        scope.launch { vm.terminalTarget(item)?.let(onOpenTerminal) }
+                                        scope.launch {
+                                            when (val match = vm.terminalTarget(item)) {
+                                                is TerminalMatch.Direct -> onOpenTerminal(match.surfaceId)
+                                                is TerminalMatch.Ambiguous -> pickerWorkspaces = match.workspaces
+                                                null -> Unit // actionError already set by the ViewModel
+                                            }
+                                        }
                                     },
                                 )
                             }
@@ -97,6 +112,17 @@ fun InboxScreen(
                 }
             }
         }
+    }
+
+    if (pickerWorkspaces.isNotEmpty()) {
+        TerminalPickerDialog(
+            workspaces = pickerWorkspaces,
+            onSelect = { surfaceId ->
+                pickerWorkspaces = emptyList()
+                onOpenTerminal(surfaceId)
+            },
+            onDismiss = { pickerWorkspaces = emptyList() },
+        )
     }
 }
 

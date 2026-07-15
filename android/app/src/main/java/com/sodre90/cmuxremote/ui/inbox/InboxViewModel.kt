@@ -8,6 +8,7 @@ import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
+import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import com.sodre90.cmuxremote.ui.sessions.pendingItemTarget
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -118,13 +119,15 @@ class InboxViewModel(
     }
 
     /**
-     * Resolves [item]'s originating terminal surface id for the inbox row's
-     * "open terminal" affordance, or null (with [actionError] set) if none is
-     * found. [PendingFeedItem] carries no workspace/surface id of its own (see
-     * [pendingItemTarget]'s doc comment), so this always does a fresh live
-     * lookup rather than reusing [state].
+     * Resolves [item]'s originating terminal for the inbox row's "open
+     * terminal" affordance -- either a single surface directly, several
+     * candidate workspaces for the caller to show a picker over (see
+     * [pendingItemTarget]'s doc comment on why cwd alone can be ambiguous),
+     * or null (with [actionError] set) if nothing matches at all.
+     * [PendingFeedItem] carries no workspace/surface id of its own, so this
+     * always does a fresh live lookup rather than reusing [state].
      */
-    suspend fun terminalTarget(item: PendingFeedItem): String? {
+    suspend fun terminalTarget(item: PendingFeedItem): TerminalMatch? {
         val c = client ?: run {
             _actionError.value = bridgeNotConfiguredMessage
             return null

@@ -27,24 +27,44 @@ fun singlePaneTarget(ws: Workspace): String? =
 fun notificationTarget(ws: Workspace): String? =
     singlePaneTarget(ws) ?: ws.terminals.singleOrNull { it.focused }?.id
 
+/** Result of resolving a [PendingFeedItem]'s originating terminal via
+ *  [pendingItemTarget]. */
+sealed interface TerminalMatch {
+    /** Exactly one workspace matched, and a single pane was resolved within it. */
+    data class Direct(val surfaceId: String) : TerminalMatch
+
+    /** More than one workspace shares the item's cwd -- e.g. several parallel
+     *  agent sessions in the same repo -- so the caller must let the user
+     *  pick which one the prompt actually came from. */
+    data class Ambiguous(val workspaces: List<Workspace>) : TerminalMatch
+}
+
 /**
- * The surface id to open for [item]'s originating terminal, resolved against
- * the live [workspaces] list, or null if none matches. [PendingFeedItem]
- * carries no workspace/surface id of its own -- its `workstream_id` is the
- * agent's own session id, a different id space than cmux's workspace id (see
- * bridge yolo.go's `resolvePendingPermission` doc comment) -- so [cwd] is the
- * only field it shares with a [Workspace]; matching on it mirrors the same
- * correlation the bridge already relies on server-side for YOLO auto-resolve.
- * Once a workspace is found, pane selection goes one step further than
- * [notificationTarget]: falling back to the first pane rather than giving up,
- * since -- unlike a notification tap, which can fall back to the whole
+ * Resolves [item]'s originating terminal against the live [workspaces] list,
+ * or null if none matches. [PendingFeedItem] carries no workspace/surface id
+ * of its own -- its `workstream_id` is the agent's own session id, a
+ * different id space than cmux's workspace id (see bridge yolo.go's
+ * `resolvePendingPermission` doc comment) -- so [cwd] is the only field it
+ * shares with a [Workspace]; matching on it mirrors the same correlation the
+ * bridge already relies on server-side for YOLO auto-resolve.
+ *
+ * cwd alone is not always unique: several parallel agent sessions commonly
+ * share the same repo cwd, in which case every matching workspace is
+ * returned as [TerminalMatch.Ambiguous] rather than guessing via
+ * `firstOrNull` (which could silently open the wrong session's terminal).
+ * With exactly one match, pane selection goes one step further than
+ * [notificationTarget]: falling back to the first pane rather than giving
+ * up, since -- unlike a notification tap, which can fall back to the whole
  * sessions list -- an inbox row's whole point is jumping straight to a
  * terminal.
  */
-fun pendingItemTarget(item: PendingFeedItem, workspaces: List<Workspace>): String? {
+fun pendingItemTarget(item: PendingFeedItem, workspaces: List<Workspace>): TerminalMatch? {
     if (item.cwd.isBlank()) return null
-    val ws = workspaces.firstOrNull { it.cwd.isNotBlank() && it.cwd == item.cwd } ?: return null
-    return notificationTarget(ws) ?: ws.terminals.firstOrNull()?.id
+    val matches = workspaces.filter { it.cwd.isNotBlank() && it.cwd == item.cwd }
+    if (matches.size > 1) return TerminalMatch.Ambiguous(matches)
+    val ws = matches.singleOrNull() ?: return null
+    val surfaceId = notificationTarget(ws) ?: ws.terminals.firstOrNull()?.id ?: return null
+    return TerminalMatch.Direct(surfaceId)
 }
 
 /** True when the workspace's agent is waiting on the user: blocked on a
