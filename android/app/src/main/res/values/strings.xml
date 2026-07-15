@@ -35,12 +35,6 @@
     <string name="status_waiting_input">waiting for input</string>
     <string name="status_unread">unread</string>
 
-    <!-- Autopilot summary banner. -->
-    <plurals name="autopilot_summary">
-        <item quantity="one">%1$d workspace on autopilot: %2$s</item>
-        <item quantity="other">%1$d workspaces on autopilot: %2$s</item>
-    </plurals>
-
     <!-- YOLO mode picker -->
     <string name="yolo_mode_dialog_title">YOLO mode</string>
     <string name="yolo_mode_menu_item">YOLO mode…</string>

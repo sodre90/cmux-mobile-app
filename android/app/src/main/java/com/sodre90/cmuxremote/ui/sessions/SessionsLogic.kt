@@ -3,7 +3,6 @@ package com.sodre90.cmuxremote.ui.sessions
 import com.sodre90.cmuxremote.model.Attention
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
-import com.sodre90.cmuxremote.ui.yoloModeLabel
 
 /**
  * The surface id to open directly when a workspace card is tapped, or null when
@@ -101,21 +100,6 @@ fun workspaceStatusDescription(
         if (ws.hasUnread) add(unreadLabel)
     }
     return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
-}
-
-/** Every workspace in an auto-reply YOLO mode (anything [yoloModeLabel] would
- *  badge on its card: Always/All tools/Bypass), summarized as a count plus
- *  the comma-joined workspace names, or null when none are on autopilot.
- *  Formatted into the "N workspaces on autopilot: foo, bar" banner text by
- *  the caller (see SessionsScreen), via the `autopilot_summary` plural
- *  resource -- this function stays plain/JVM-testable. */
-data class AutopilotSummary(val count: Int, val names: String)
-
-fun autopilotSummary(workspaces: List<Workspace>): AutopilotSummary? {
-    val autopilot = workspaces.filter { yoloModeLabel(it.yoloMode) != null }
-    if (autopilot.isEmpty()) return null
-    val names = autopilot.joinToString(", ") { it.title.ifBlank { it.preview.ifBlank { it.cwd } } }
-    return AutopilotSummary(autopilot.size, names)
 }
 
 /** Reorders [workspaces] by a phone-local, persisted custom id [order]: ids

@@ -3,7 +3,6 @@ package com.sodre90.cmuxremote.ui.sessions
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
-import com.sodre90.cmuxremote.model.YoloMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -184,39 +183,5 @@ class SessionsLogicTest {
             "needs permission, unread",
             statusDescription(Workspace(id = "w", attention = "permission", hasUnread = true)),
         )
-    }
-
-    @Test
-    fun autopilotSummaryIsNullWhenNoneAreOnAnAutoReplyMode() {
-        val workspaces = listOf(
-            Workspace(id = "a", title = "foo", yoloMode = YoloMode.OFF),
-            Workspace(id = "b", title = "bar"),
-        )
-        assertNull(autopilotSummary(workspaces))
-    }
-
-    @Test
-    fun autopilotSummaryListsOnlyAutoReplyWorkspaces() {
-        val workspaces = listOf(
-            Workspace(id = "a", title = "foo", yoloMode = YoloMode.ALWAYS),
-            Workspace(id = "b", title = "bar", yoloMode = YoloMode.OFF),
-        )
-        assertEquals(AutopilotSummary(count = 1, names = "foo"), autopilotSummary(workspaces))
-    }
-
-    @Test
-    fun autopilotSummaryListsAllAutoReplyWorkspaces() {
-        val workspaces = listOf(
-            Workspace(id = "a", title = "foo", yoloMode = YoloMode.ALWAYS),
-            Workspace(id = "b", title = "bar", yoloMode = YoloMode.BYPASS),
-            Workspace(id = "c", title = "baz", yoloMode = YoloMode.OFF),
-        )
-        assertEquals(AutopilotSummary(count = 2, names = "foo, bar"), autopilotSummary(workspaces))
-    }
-
-    @Test
-    fun autopilotSummaryFallsBackToPreviewThenCwdForAnUntitledWorkspace() {
-        val workspaces = listOf(Workspace(id = "a", cwd = "/repo", yoloMode = YoloMode.ALL_TOOLS))
-        assertEquals(AutopilotSummary(count = 1, names = "/repo"), autopilotSummary(workspaces))
     }
 }
