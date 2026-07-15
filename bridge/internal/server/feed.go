@@ -11,14 +11,15 @@ import (
 // the required request_id is injected, so the precise cmux param names live in
 // the client and need not be hardcoded here.
 //
-// NOTE: the exact reply param keys (beyond request_id) should be confirmed
-// against a live prompt; until then the client sends cmux-native params under
-// "params".
+// Confirmed live against `cmux rpc feed.permission.reply` (via its
+// invalid_params decode errors, with a fake request_id so nothing real was
+// ever affected): a "permissionRequest" reply's params is `mode`, one of
+// `once`, `always`, `all`, `bypass`, `deny` -- `once`/`deny` are a one-shot
+// manual reply, the other three are the recurring YOLO auto-modes (see
+// android's YoloMode). "question"'s `selections` was already confirmed live.
+// "exitPlan" is not yet confirmed against a real exit-plan prompt and may
+// need correcting the same way "permission" did.
 type FeedReply struct {
-	// Kind is cmux's own feed.list item kind. "permissionRequest" is confirmed
-	// live (cmux rpc feed.list); "exitPlan" is not yet confirmed against a
-	// real exit-plan prompt and may need correcting the same way
-	// "permission" did.
 	Kind      string         `json:"kind"`       // "permissionRequest" | "question" | "exitPlan"
 	RequestID string         `json:"request_id"` // required by cmux
 	Params    map[string]any `json:"params,omitempty"`

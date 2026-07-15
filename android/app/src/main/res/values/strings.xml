@@ -67,6 +67,9 @@
     <string name="inbox_empty">No pending prompts</string>
     <string name="inbox_open_terminal">Open terminal</string>
     <string name="inbox_send_reply">Send reply</string>
+    <string name="inbox_permission_wants_to_run">Wants to run %1$s</string>
+    <string name="inbox_permission_approve">Approve</string>
+    <string name="inbox_permission_deny">Deny</string>
 
     <!-- Pairing screen -->
     <string name="pairing_title_relay">Pair via relay</string>

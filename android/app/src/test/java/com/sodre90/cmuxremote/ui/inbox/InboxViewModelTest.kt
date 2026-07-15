@@ -115,17 +115,21 @@ class InboxViewModelTest {
     }
 
     @Test
-    fun nonQuestionKindItemsAreFilteredOut() {
+    fun questionAndPermissionRequestKindsAreKeptOtherKindsAreFilteredOut() {
         server.enqueue(
             MockResponse().setBody(
-                """{"items":[{"id":"i1","kind":"question"},{"id":"i2","kind":"permissionRequest"}]}""",
+                """{"items":[
+                    {"id":"i1","kind":"question"},
+                    {"id":"i2","kind":"permissionRequest"},
+                    {"id":"i3","kind":"exitPlan"}
+                ]}""",
             ),
         )
         val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
 
         waitUntil { vm.state.value is UiState.Ready }
 
-        assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })
+        assertEquals(listOf("i1", "i2"), (vm.state.value as UiState.Ready).data.map { it.id })
     }
 
     @Test
@@ -172,6 +176,41 @@ class InboxViewModelTest {
         val item = (vm.state.value as UiState.Ready).data.first()
 
         vm.reply(item, listOf("yes"))
+
+        waitUntil { vm.actionError.value != null }
+        assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })
+    }
+
+    @Test
+    fun replyPermissionApproveSuccessRemovesTheItemFromTheReadyList() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"id":"i1","kind":"permissionRequest","request_id":"r1"}]}""",
+            ),
+        )
+        server.enqueue(MockResponse()) // POST /feed/i1/reply
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+        val item = (vm.state.value as UiState.Ready).data.first()
+
+        vm.replyPermission(item, approve = true)
+
+        waitUntil { (vm.state.value as? UiState.Ready)?.data?.isEmpty() == true }
+    }
+
+    @Test
+    fun replyPermissionDenyFailureSetsActionErrorAndLeavesTheListUntouched() {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"items":[{"id":"i1","kind":"permissionRequest","request_id":"r1"}]}""",
+            ),
+        )
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")) // POST /feed/i1/reply
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+        val item = (vm.state.value as UiState.Ready).data.first()
+
+        vm.replyPermission(item, approve = false)
 
         waitUntil { vm.actionError.value != null }
         assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })

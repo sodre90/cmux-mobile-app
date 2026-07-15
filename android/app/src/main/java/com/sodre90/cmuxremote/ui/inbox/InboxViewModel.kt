@@ -15,8 +15,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 /**
@@ -84,9 +86,11 @@ class InboxViewModel(
         }
         viewModelScope.launch {
             try {
-                // "question" (AskUserQuestion) is the only replyable kind cmux
-                // currently surfaces as a pending feed item.
-                val items = c.pendingFeed().filter { it.kind == "question" }
+                // "question" (AskUserQuestion) and "permissionRequest" (a
+                // gated tool call) are the replyable kinds cmux currently
+                // surfaces as a pending feed item; "exitPlan" is not yet
+                // surfaced here (its reply schema isn't confirmed live).
+                val items = c.pendingFeed().filter { it.kind == "question" || it.kind == "permissionRequest" }
                 _state.value = UiState.Ready(items)
                 _actionError.value = null
             } catch (ex: Exception) {
@@ -99,16 +103,27 @@ class InboxViewModel(
 
     /** Answer a question item with the labels of the chosen options. */
     fun reply(item: PendingFeedItem, selections: List<String>) {
+        val params = buildJsonObject {
+            putJsonArray("selections") { selections.forEach { add(it) } }
+        }
+        sendReply(item, "question", params)
+    }
+
+    /** Approve or deny a permissionRequest item once -- not a recurring
+     *  YOLO auto-mode (see [com.sodre90.cmuxremote.model.YoloMode] for those). */
+    fun replyPermission(item: PendingFeedItem, approve: Boolean) {
+        val params = buildJsonObject { put("mode", if (approve) "once" else "deny") }
+        sendReply(item, "permissionRequest", params)
+    }
+
+    private fun sendReply(item: PendingFeedItem, kind: String, params: JsonObject) {
         val c = client ?: run {
             _actionError.value = bridgeNotConfiguredMessage
             return
         }
-        val params = buildJsonObject {
-            putJsonArray("selections") { selections.forEach { add(it) } }
-        }
         viewModelScope.launch {
             try {
-                c.replyFeed(item.id, FeedReply("question", item.requestId, params))
+                c.replyFeed(item.id, FeedReply(kind, item.requestId, params))
                 _state.update { cur ->
                     if (cur is UiState.Ready) UiState.Ready(cur.data.filterNot { it.id == item.id }) else cur
                 }

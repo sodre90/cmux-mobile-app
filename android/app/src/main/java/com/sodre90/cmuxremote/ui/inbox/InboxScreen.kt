@@ -96,6 +96,7 @@ fun InboxScreen(
                                 InboxRow(
                                     item = item,
                                     onSend = { labels -> vm.reply(item, labels) },
+                                    onApprovePermission = { approve -> vm.replyPermission(item, approve) },
                                     onOpenTerminal = {
                                         scope.launch {
                                             when (val match = vm.terminalTarget(item)) {
@@ -130,6 +131,7 @@ fun InboxScreen(
 private fun InboxRow(
     item: PendingFeedItem,
     onSend: (List<String>) -> Unit,
+    onApprovePermission: (Boolean) -> Unit,
     onOpenTerminal: () -> Unit,
 ) {
     // cmux usually populates questions[]; fall back to the flat question_options.
@@ -169,30 +171,63 @@ private fun InboxRow(
                 // making the user back out to Sessions and hunt for it.
                 TextButton(onClick = onOpenTerminal) { Text(stringResource(R.string.inbox_open_terminal)) }
             }
-            questions.forEach { q ->
-                val heading = q.prompt.ifBlank { q.header }
-                if (heading.isNotBlank()) {
-                    Text(
-                        text = heading,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
-                    )
-                }
-                q.options.forEach { o ->
-                    OptionRow(o, selected[key(q, o)] == true, q.multiSelect) { toggle(q, o) }
-                }
-            }
-            Button(
-                onClick = {
-                    val labels = questions.flatMap { q ->
-                        q.options.filter { selected[key(q, it)] == true }.map { it.label }
+            if (item.kind == "permissionRequest") {
+                PermissionRequestContent(item = item, onApprovePermission = onApprovePermission)
+            } else {
+                questions.forEach { q ->
+                    val heading = q.prompt.ifBlank { q.header }
+                    if (heading.isNotBlank()) {
+                        Text(
+                            text = heading,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                        )
                     }
-                    onSend(labels)
-                },
-                enabled = ready,
-                modifier = Modifier.padding(top = 10.dp),
-            ) { Text(stringResource(R.string.inbox_send_reply)) }
+                    q.options.forEach { o ->
+                        OptionRow(o, selected[key(q, o)] == true, q.multiSelect) { toggle(q, o) }
+                    }
+                }
+                Button(
+                    onClick = {
+                        val labels = questions.flatMap { q ->
+                            q.options.filter { selected[key(q, it)] == true }.map { it.label }
+                        }
+                        onSend(labels)
+                    },
+                    enabled = ready,
+                    modifier = Modifier.padding(top = 10.dp),
+                ) { Text(stringResource(R.string.inbox_send_reply)) }
+            }
         }
+    }
+}
+
+/**
+ * Content for a `kind == "permissionRequest"` item: the gated tool call
+ * ([PendingFeedItem.toolName]/[toolInput]) plus Approve/Deny. Unlike a
+ * question, there's no questions[]/options[] to choose from -- see
+ * [PendingFeedItem]'s doc comment for the confirmed live schema.
+ */
+@Composable
+private fun PermissionRequestContent(item: PendingFeedItem, onApprovePermission: (Boolean) -> Unit) {
+    Text(
+        text = stringResource(R.string.inbox_permission_wants_to_run, item.toolName.ifBlank { item.title }),
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+    )
+    parseToolInputEntries(item.toolInput).forEach { (fieldName, value) ->
+        Text(
+            text = "$fieldName: $value",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = 10.dp),
+    ) {
+        Button(onClick = { onApprovePermission(true) }) { Text(stringResource(R.string.inbox_permission_approve)) }
+        TextButton(onClick = { onApprovePermission(false) }) { Text(stringResource(R.string.inbox_permission_deny)) }
     }
 }
 
@@ -220,6 +255,7 @@ private fun InboxRowPreview() {
                 ),
             ),
             onSend = {},
+            onApprovePermission = {},
             onOpenTerminal = {},
         )
     }
@@ -250,6 +286,28 @@ private fun InboxRowMultiSelectPreview() {
                 ),
             ),
             onSend = {},
+            onApprovePermission = {},
+            onOpenTerminal = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Permission request")
+@Composable
+private fun InboxRowPermissionRequestPreview() {
+    CmuxTheme {
+        InboxRow(
+            item = PendingFeedItem(
+                id = "item-3",
+                requestId = "req-3",
+                kind = "permissionRequest",
+                title = "Bash",
+                cwd = "/Users/dev/projects/cmux-app",
+                toolName = "Bash",
+                toolInput = """{"command":"rm -f /Users/dev/projects/cmux-app/.git/index.lock","description":"Remove stale lock file"}""",
+            ),
+            onSend = {},
+            onApprovePermission = {},
             onOpenTerminal = {},
         )
     }

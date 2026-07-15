@@ -177,6 +177,12 @@ data class FeedQuestion(
  * A pending blocking prompt from `GET /feed/pending` (cmux `feed.list pending_only`).
  * [requestId] is what [FeedReply] must echo back — not the event feed id. For
  * `kind == "question"` the reply is `selections`: the chosen options' labels.
+ * For `kind == "permissionRequest"` there is no questions[]/options[] — instead
+ * [toolName]/[toolInput] describe the gated tool call, and the reply is a
+ * `mode` of `once` or `deny` (confirmed live against `feed.permission.reply`;
+ * `always`/`all`/`bypass` are the same enum's YOLO auto-modes, see [YoloMode]).
+ * [toolInput] is cmux's own JSON-encoded string of the tool's raw args (shape
+ * varies per tool), not a typed object.
  */
 @Serializable
 data class PendingFeedItem(
@@ -190,6 +196,8 @@ data class PendingFeedItem(
     @SerialName("question_multi_select") val questionMultiSelect: Boolean = false,
     @SerialName("question_options") val questionOptions: List<FeedOption> = emptyList(),
     val questions: List<FeedQuestion> = emptyList(),
+    @SerialName("tool_name") val toolName: String = "",
+    @SerialName("tool_input") val toolInput: String = "",
 )
 
 /** Envelope returned by `GET /feed/pending`. */
