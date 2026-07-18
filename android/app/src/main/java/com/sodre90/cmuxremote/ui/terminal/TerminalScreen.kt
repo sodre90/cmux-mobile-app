@@ -93,8 +93,11 @@ private const val FIT_MAX_SP = 22f
 private const val MAX_FONT_SP = 28f
 
 // Pinch range, multiplied onto the fit baseline: 1x = exact fit, up to 6x to read in.
-private const val MIN_ZOOM = 1f
-private const val MAX_ZOOM = 6f
+// Not private: also the bounds/step for the font-size stepper on
+// ConnectionSettingsScreen, which edits the same persisted zoom value.
+const val MIN_ZOOM = 1f
+const val MAX_ZOOM = 6f
+const val ZOOM_STEP = 0.25f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,7 +138,10 @@ fun TerminalScreen(
     }
 
     // Pinch-to-zoom factor over the fit-to-width baseline (1f = exact fit).
-    var userZoom by rememberSaveable { mutableFloatStateOf(1f) }
+    // Seeded from the persisted preference (see TerminalDisplayStore) so a
+    // size set here or on ConnectionSettingsScreen survives leaving and
+    // reopening a terminal, or restarting the app.
+    var userZoom by rememberSaveable { mutableFloatStateOf(vm.loadFontZoom()) }
     // Word-wrap: on → zooming in reflows long rows onto extra lines; off → it stays
     // one row per line with horizontal panning (keeps tables/TUI layouts aligned).
     var wrap by rememberSaveable { mutableStateOf(true) }
@@ -250,16 +256,23 @@ fun TerminalScreen(
                                         requireUnconsumed = false,
                                         pass = PointerEventPass.Initial,
                                     )
+                                    var zoomChanged = false
                                     do {
                                         val event = awaitPointerEvent(PointerEventPass.Initial)
                                         if (event.changes.count { it.pressed } >= 2) {
                                             val zoom = event.calculateZoom()
                                             if (zoom != 1f) {
                                                 userZoom = (userZoom * zoom).coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                                zoomChanged = true
                                                 event.changes.forEach { if (it.pressed) it.consume() }
                                             }
                                         }
                                     } while (event.changes.any { it.pressed })
+                                    // Persist once per completed pinch gesture rather than on
+                                    // every intermediate frame -- a pinch can fire dozens of
+                                    // zoom deltas a second, and a plain tap (the common case,
+                                    // used to focus the keyboard) never touches zoom at all.
+                                    if (zoomChanged) vm.saveFontZoom(userZoom)
                                 }
                             }
                             // Tapping the terminal is how you start typing -- there's no

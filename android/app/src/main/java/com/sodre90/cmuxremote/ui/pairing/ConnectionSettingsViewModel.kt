@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.pairing
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,12 +29,16 @@ sealed interface TestPushUiState {
  *  no @Composable context to call `stringResource()` itself. */
 class ConnectionSettingsViewModel(
     private val bridge: BridgeGateway,
+    private val terminalDisplay: TerminalDisplayGateway,
     private val bridgeNotConfiguredMessage: String,
     private val testPushFailedMessage: String,
 ) : ViewModel() {
 
     private val _testPushState = MutableStateFlow<TestPushUiState>(TestPushUiState.Idle)
     val testPushState: StateFlow<TestPushUiState> = _testPushState.asStateFlow()
+
+    fun loadFontZoom(): Float = terminalDisplay.loadFontZoom()
+    fun saveFontZoom(zoom: Float) = terminalDisplay.saveFontZoom(zoom)
 
     fun sendTestPush() {
         if (_testPushState.value is TestPushUiState.Sending) return

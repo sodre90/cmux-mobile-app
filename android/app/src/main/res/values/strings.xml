@@ -96,6 +96,11 @@
     <string name="forget_connection_dialog_title">Forget %1$s connection?</string>
     <string name="forget_connection_dialog_body">You\'ll need to pair this device again to use %1$s.</string>
 
+    <!-- Terminal font size (Connections/Settings screen) -->
+    <string name="terminal_font_size_title">Terminal font size</string>
+    <string name="terminal_font_size_decrease">Decrease terminal font size</string>
+    <string name="terminal_font_size_increase">Increase terminal font size</string>
+
     <!-- Test push -->
     <string name="test_push_title">Push notifications</string>
     <string name="test_push_description">Send a real test push to this device to confirm push setup works.</string>

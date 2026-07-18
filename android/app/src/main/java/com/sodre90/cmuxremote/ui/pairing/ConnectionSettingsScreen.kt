@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.ui.pairing
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,13 +23,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.ui.terminal.MAX_ZOOM
+import com.sodre90.cmuxremote.ui.terminal.MIN_ZOOM
+import com.sodre90.cmuxremote.ui.terminal.ZOOM_STEP
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
+import kotlin.math.roundToInt
 
 /** Replaces the old single-pairing Settings screen: shows both
  *  [ConnectionSlot]s' paired/unpaired status side by side, each with its
@@ -41,9 +50,11 @@ fun ConnectionSettingsScreen(
     relayConfigured: Boolean,
     directConfigured: Boolean,
     testPushState: TestPushUiState,
+    fontZoom: Float,
     onPair: (ConnectionSlot) -> Unit,
     onForget: (ConnectionSlot) -> Unit,
     onSendTestPush: () -> Unit,
+    onFontZoomChange: (Float) -> Unit,
     onDone: () -> Unit,
 ) {
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
@@ -68,6 +79,7 @@ fun ConnectionSettingsScreen(
                 onPair = { onPair(ConnectionSlot.DIRECT) },
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },
             )
+            FontSizeRow(zoom = fontZoom, onZoomChange = onFontZoomChange)
             if (relayConfigured || directConfigured) {
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
             }
@@ -141,6 +153,48 @@ private fun ConnectionRowPairedPreview() {
             onPair = {},
             onForget = {},
         )
+    }
+}
+
+/** Sets the same persisted zoom [TerminalScreen][com.sodre90.cmuxremote.ui.terminal.TerminalScreen]'s
+ *  pinch gesture reads/writes -- an explicit way to pick a starting size
+ *  without having to pinch inside a live terminal first. */
+@Composable
+private fun FontSizeRow(zoom: Float, onZoomChange: (Float) -> Unit) {
+    val decreaseDescription = stringResource(R.string.terminal_font_size_decrease)
+    val increaseDescription = stringResource(R.string.terminal_font_size_increase)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.terminal_font_size_title))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { onZoomChange((zoom - ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)) },
+                    enabled = zoom > MIN_ZOOM,
+                    modifier = Modifier.semantics { contentDescription = decreaseDescription },
+                ) { Text("-") }
+                Text(
+                    "${(zoom * 100).roundToInt()}%",
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(
+                    onClick = { onZoomChange((zoom + ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)) },
+                    enabled = zoom < MAX_ZOOM,
+                    modifier = Modifier.semantics { contentDescription = increaseDescription },
+                ) { Text("+") }
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun FontSizeRowPreview() {
+    CmuxTheme {
+        FontSizeRow(zoom = 1.5f, onZoomChange = {})
     }
 }
 

@@ -22,12 +22,13 @@ import java.util.concurrent.TimeUnit
  * constructible in a plain JVM test -- this class's init does
  * EncryptedSharedPreferences + Keystore I/O and can't be.
  */
-class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, PairingGateway {
+class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, PairingGateway, TerminalDisplayGateway {
 
     val settings = Settings(appContext)
     val identity = Identity(appContext)
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
     val workspaceOrderStore = WorkspaceOrderStore(appContext)
+    val terminalDisplayStore = TerminalDisplayStore(appContext)
 
     private val sessions: Map<ConnectionSlot, CryptoSession> =
         ConnectionSlot.entries.associateWith { CryptoSession(appContext, it) }
@@ -109,6 +110,10 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     override fun saveSortByAttention(sortByAttention: Boolean) =
         workspaceOrderStore.saveSortByAttention(sortByAttention)
+
+    override fun loadFontZoom(): Float = terminalDisplayStore.loadFontZoom()
+
+    override fun saveFontZoom(zoom: Float) = terminalDisplayStore.saveFontZoom(zoom)
 
     // Shared with fallbackBridge below and handed out via relayHealth() so
     // every reconnecting socket subscription and the REST fallback path

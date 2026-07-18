@@ -7,9 +7,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -160,20 +162,28 @@ fun CmuxNavHost(
             val testPushFailed = stringResource(R.string.error_test_push_failed)
             val testPushVm: ConnectionSettingsViewModel = viewModel(
                 factory = viewModelFactory {
-                    initializer { ConnectionSettingsViewModel(container, bridgeNotConfigured, testPushFailed) }
+                    initializer {
+                        ConnectionSettingsViewModel(container, container, bridgeNotConfigured, testPushFailed)
+                    }
                 },
             )
             val testPushState by testPushVm.testPushState.collectAsState()
+            var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
             ConnectionSettingsScreen(
                 relayConfigured = relayConfigured,
                 directConfigured = directConfigured,
                 testPushState = testPushState,
+                fontZoom = fontZoom,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
                 onForget = { slot ->
                     container.forgetSlot(slot)
                     forgetGeneration++
                 },
                 onSendTestPush = testPushVm::sendTestPush,
+                onFontZoomChange = {
+                    fontZoom = it
+                    testPushVm.saveFontZoom(it)
+                },
                 onDone = {
                     navController.navigate(Routes.SESSIONS) {
                         popUpTo(Routes.SETTINGS) { inclusive = true }
@@ -267,6 +277,7 @@ fun CmuxNavHost(
                 factory = viewModelFactory {
                     initializer {
                         TerminalViewModel(
+                            container,
                             container,
                             id,
                             bridgeNotConfigured,

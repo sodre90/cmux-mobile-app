@@ -6,10 +6,12 @@ import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.PairingGateway
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
 import com.sodre90.cmuxremote.data.pairing.PairingClient
 import com.sodre90.cmuxremote.ui.inbox.InboxViewModel
+import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsViewModel
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
@@ -24,10 +26,11 @@ import org.junit.Test
 /**
  * Proves the seam documented on [com.sodre90.cmuxremote.data.AppContainer]:
  * every ViewModel is constructible against a fake [BridgeGateway] /
- * [WorkspaceOrderGateway] / [PairingGateway], with no Android Context,
- * Keystore, or EncryptedSharedPreferences involved -- unlike the concrete
- * AppContainer, which needs all three in its init. Deeper behavior over
- * these gateways belongs to each ViewModel's own test suite, not here.
+ * [WorkspaceOrderGateway] / [PairingGateway] / [TerminalDisplayGateway], with
+ * no Android Context, Keystore, or EncryptedSharedPreferences involved --
+ * unlike the concrete AppContainer, which needs all four in its init. Deeper
+ * behavior over these gateways belongs to each ViewModel's own test suite,
+ * not here.
  */
 class ViewModelConstructionTest {
 
@@ -67,9 +70,22 @@ class ViewModelConstructionTest {
             error("not exercised by construction alone")
     }
 
+    private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
+        private var zoom = 1f
+        override fun loadFontZoom(): Float = zoom
+        override fun saveFontZoom(zoom: Float) {
+            this.zoom = zoom
+        }
+    }
+
     @Test
     fun terminalViewModelIsConstructibleWithAFakeGateway() {
-        TerminalViewModel(FakeBridgeGateway(), surfaceId = "surface-1", bridgeNotConfiguredMessage = "unused")
+        TerminalViewModel(
+            FakeBridgeGateway(),
+            FakeTerminalDisplayGateway(),
+            surfaceId = "surface-1",
+            bridgeNotConfiguredMessage = "unused",
+        )
     }
 
     @Test
@@ -93,6 +109,16 @@ class ViewModelConstructionTest {
             loadInboxFailedMessage = "unused",
             replyFailedMessage = "unused",
             terminalNotFoundMessage = "unused",
+        )
+    }
+
+    @Test
+    fun connectionSettingsViewModelIsConstructibleWithFakeGateways() {
+        ConnectionSettingsViewModel(
+            FakeBridgeGateway(),
+            FakeTerminalDisplayGateway(),
+            bridgeNotConfiguredMessage = "unused",
+            testPushFailedMessage = "unused",
         )
     }
 

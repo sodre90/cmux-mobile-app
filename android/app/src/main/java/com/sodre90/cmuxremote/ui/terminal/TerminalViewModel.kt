@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.BuildConfig
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.SocketReconnector
+import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
@@ -37,10 +38,14 @@ data class TerminalContent(
 // @Composable context to call `stringResource()` itself.
 class TerminalViewModel(
     private val bridge: BridgeGateway,
+    private val terminalDisplay: TerminalDisplayGateway,
     private val surfaceId: String,
     private val bridgeNotConfiguredMessage: String,
     private val cancelAttentionNotification: (workspaceId: String) -> Unit = {},
 ) : ViewModel() {
+
+    fun loadFontZoom(): Float = terminalDisplay.loadFontZoom()
+    fun saveFontZoom(zoom: Float) = terminalDisplay.saveFontZoom(zoom)
 
     private val _state = MutableStateFlow<UiState<TerminalContent>>(UiState.Loading)
     val state: StateFlow<UiState<TerminalContent>> = _state.asStateFlow()

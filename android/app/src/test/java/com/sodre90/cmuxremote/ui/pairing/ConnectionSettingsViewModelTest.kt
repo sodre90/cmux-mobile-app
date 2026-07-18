@@ -6,6 +6,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.resetMain
@@ -29,6 +30,13 @@ private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = null
     override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
     override fun relayHealth(): RelayHealth = RelayHealth()
+}
+
+/** These tests only exercise the test-push flow, never font zoom -- a fixed
+ *  stub is enough. */
+private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
+    override fun loadFontZoom(): Float = 1f
+    override fun saveFontZoom(zoom: Float) = Unit
 }
 
 class ConnectionSettingsViewModelTest {
@@ -66,6 +74,7 @@ class ConnectionSettingsViewModelTest {
     // literal message.
     private fun testPushViewModel(bridge: BridgeGateway) = ConnectionSettingsViewModel(
         bridge = bridge,
+        terminalDisplay = FakeTerminalDisplayGateway(),
         bridgeNotConfiguredMessage = "Bridge not configured",
         testPushFailedMessage = "Test push failed",
     )
