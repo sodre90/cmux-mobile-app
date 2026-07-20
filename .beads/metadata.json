@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "cmux_app",
+  "project_id": "8a4f09d4-5407-4f7c-a4b3-592e12972457"
+}
