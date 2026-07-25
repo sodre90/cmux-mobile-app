@@ -16,6 +16,19 @@ import kotlinx.serialization.json.contentOrNull
 fun isPendingInboxKind(kind: String): Boolean = kind == "question" || kind == "permissionRequest"
 
 /**
+ * Whether an event frame means the pending set may have changed, and the Inbox
+ * should refetch. Deliberately every `feed` frame, NOT just the ones with
+ * `needsAttention`: a prompt leaving the set is as much a reason to refetch as
+ * one arriving, and only arrivals carry that flag. cmux emits each item twice
+ * (phase "received" then "completed") and the bridge sets NeedsAttention only
+ * on "received", so gating on it here used to discard the very frame that says
+ * an item is resolved -- which left already-answered prompts on screen until a
+ * brand-new one happened to arrive. The resulting chattiness (cmux emits two
+ * feed frames per tool call) is handled by debouncing, not by filtering.
+ */
+fun isPendingSetChangeSignal(frameType: String): Boolean = frameType == "feed"
+
+/**
  * A `PendingFeedItem.toolInput` is cmux's own JSON-encoded string of the raw
  * tool args, shape varying per tool (Bash's `command`, Read's `file_path`,
  * ...) -- rendered as generic key/value lines rather than one UI per tool.

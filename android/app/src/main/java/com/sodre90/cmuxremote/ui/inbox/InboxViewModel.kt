@@ -11,9 +11,13 @@ import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import com.sodre90.cmuxremote.ui.sessions.pendingItemTarget
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -26,13 +30,15 @@ import kotlinx.serialization.json.putJsonArray
  * Backs the agent inbox. Pending blocking prompts come from `GET /feed/pending`
  * (cmux `feed.list`), which carries the real `request_id` and the choosable
  * options the user must pick from — the event stream has neither. The live
- * `/events` socket is used only as a trigger to re-fetch when a new prompt
- * appears; the prompt content always comes from a fresh pending-feed fetch.
+ * `/events` socket is used only as a trigger to re-fetch whenever the pending
+ * set may have changed; the prompt content always comes from a fresh
+ * pending-feed fetch.
  *
  * The error-message parameters are pre-resolved `strings.xml` text passed in
  * by the caller (see CmuxNavHost) rather than resolved here: a ViewModel has
  * no @Composable context to call `stringResource()` itself.
  */
+@OptIn(FlowPreview::class)
 class InboxViewModel(
     bridge: BridgeGateway,
     private val bridgeNotConfiguredMessage: String,
@@ -58,6 +64,11 @@ class InboxViewModel(
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
+    // Coalesces bursts of cmux feed events (two per tool call) into a single
+    // refetch instead of hammering feed.list -- same trick as SessionsViewModel.
+    private val refreshRequests =
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth(), monitor = bridge.connectionMonitor())
 
     /** Same process-wide transport status SessionsViewModel exposes -- replying
@@ -67,18 +78,21 @@ class InboxViewModel(
 
     init {
         refresh()
-        // Re-fetch when an agent newly needs attention. Telemetry feed events
-        // (PreToolUse, etc.) are ignored so we don't hammer feed.list. The
-        // socket is dropped when the app is backgrounded, so reconnect with
-        // backoff and re-sync pending items after each gap instead of dying on
-        // the first disconnect.
+        viewModelScope.launch {
+            refreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { refresh() }
+        }
+        // Re-fetch whenever the pending set may have changed -- see
+        // [isPendingSetChangeSignal] for why that is every feed frame and not
+        // just the attention-flagged ones. The socket is dropped when the app
+        // is backgrounded, so reconnect with backoff and re-sync pending items
+        // after each gap instead of dying on the first disconnect.
         if (bridge.anyBridgeConfigured()) {
             viewModelScope.launch {
                 reconnector.run(
                     openSocket = { slot -> bridge.eventsSocket(slot)?.connect() },
                     onBeforeReconnect = { refresh() },
                 ) { frame ->
-                    if (frame.type == "feed" && frame.needsAttention) refresh()
+                    if (isPendingSetChangeSignal(frame.type)) refreshRequests.tryEmit(Unit)
                     true
                 }
             }
@@ -152,5 +166,9 @@ class InboxViewModel(
         val target = runCatching { c.sessions() }.getOrNull()?.let { pendingItemTarget(item, it) }
         if (target == null) _actionError.value = terminalNotFoundMessage
         return target
+    }
+
+    private companion object {
+        const val EVENT_REFRESH_DEBOUNCE_MS = 800L
     }
 }
