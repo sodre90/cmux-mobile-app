@@ -44,74 +44,47 @@ func (s *Server) handleSetYoloMode(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// pendingFeedItem is the subset of a `feed.list --pending_only` item this
-// package needs. See android's Dtos.kt PendingFeedItem for the full shape.
-type pendingFeedItem struct {
-	RequestID string `json:"request_id"`
-	Kind      string `json:"kind"`
-	CWD       string `json:"cwd"`
-	Status    string `json:"status"`
-}
-
-// autoResolveYolo checks a NeedsAttention frame's workspace for a non-off
-// YOLO mode and, if set, synchronously resolves any matching pending
-// permission request before the caller broadcasts/pushes the frame -- a
-// permission prompt YOLO is about to silently approve must never also alert
-// the phone (that alert would fire on both the agent's own direct-mode push
-// and, since the relay's pushmon trusts NeedsAttention with no YOLO
-// visibility of its own, the relay-mode push too). Returns whether something
-// was actually resolved, so the caller can suppress NeedsAttention.
-//
-// The mode lookup itself is a cheap local read (no RPC cost at all when YOLO
-// is off, the common case); only a non-off mode makes the cmux RPC calls in
-// resolvePendingPermission, briefly blocking ingestEvents's single-goroutine
-// scan loop for that one frame -- an acceptable tradeoff since YOLO-on
-// workspaces are the deliberately opted-in minority.
-func (s *Server) autoResolveYolo(ctx context.Context, workspaceID string) bool {
+// yoloMode reads a workspace's configured YOLO mode ("" when off or when YOLO
+// isn't configured at all). A cheap local read with no RPC cost, so callers on
+// the event path can check it before deciding to spend any.
+func (s *Server) yoloMode(workspaceID string) string {
 	if s.yolo == nil || workspaceID == "" {
-		return false
+		return ""
 	}
-	mode := s.yolo.Mode(workspaceID)
-	if mode == "" {
-		return false
-	}
-	return s.resolvePendingPermission(ctx, workspaceID, mode)
+	return s.yolo.Mode(workspaceID)
 }
 
 // resolvePendingPermission finds any pending "permissionRequest" feed item
 // whose cwd matches workspaceID's live working directory and replies to it
 // with mode, unblocking the agent without a phone tap. Returns whether at
-// least one item was found and successfully replied to.
-//
-// Pending items are keyed by workstream_id -- the agent's own session ID
-// (e.g. "claude-<uuid>"), confirmed live to be a different ID space than
-// cmux's workspace ID -- so correlation is done on cwd instead, the one field
-// both a pending item and a workspace carry in common.
-//
-// mobile.workspace.list's current_directory and feed.list's cwd disagree on
-// symlinks -- confirmed live, e.g. workspace.list reports "/tmp/foo" while
-// the same workspace's pending item reports "/private/tmp/foo" (macOS
-// resolves /tmp -> /private/tmp). Comparing raw strings would silently drop
-// every match for a workspace under /tmp, /var, /etc, or any other
-// symlinked path, so both sides are canonicalized before comparing.
+// least one item was found and successfully replied to. Used by the
+// yolo-mode endpoint, which has no lookups of its own to share; the event path
+// calls replyPendingPermissions directly with the state it already fetched.
 func (s *Server) resolvePendingPermission(ctx context.Context, workspaceID, mode string) bool {
 	ws, ok := s.findWorkspace(ctx, workspaceID)
 	if !ok || ws.CWD == "" {
 		return false
 	}
-	wantCWD := canonicalPath(ws.CWD)
-	raw, err := s.cmux.Rpc(ctx, "feed.list", map[string]any{"pending_only": true})
-	if err != nil {
-		return false
-	}
-	var resp struct {
-		Items []pendingFeedItem `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	return s.replyPendingPermissions(ctx, s.listPendingItems(ctx), canonicalPath(ws.CWD), mode)
+}
+
+// replyPendingPermissions answers every pending permission request running in
+// wantCWD with mode.
+//
+// Pending items are keyed by workstream_id -- the agent's own session ID
+// (e.g. "claude-<uuid>"), confirmed live to be a different ID space than
+// cmux's workspace ID -- so correlation is done on cwd instead, the one field
+// both a pending item and a workspace carry in common. Callers must pass a
+// canonicalized wantCWD: mobile.workspace.list's current_directory and
+// feed.list's cwd disagree on symlinks (confirmed live, e.g. "/tmp/foo" vs
+// "/private/tmp/foo"), so comparing raw strings would silently drop every
+// match for a workspace under /tmp, /var, /etc, or any other symlinked path.
+func (s *Server) replyPendingPermissions(ctx context.Context, items []pendingFeedItem, wantCWD, mode string) bool {
+	if wantCWD == "" {
 		return false
 	}
 	resolvedAny := false
-	for _, item := range resp.Items {
+	for _, item := range items {
 		if item.Kind != "permissionRequest" || item.Status != "pending" || canonicalPath(item.CWD) != wantCWD {
 			continue
 		}

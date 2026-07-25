@@ -14,10 +14,14 @@ type EventFrame struct {
 	WorkspaceID    string `json:"workspace_id,omitempty"`
 	SurfaceID      string `json:"surface_id,omitempty"`
 	Title          string `json:"title,omitempty"`
-	// Preview is the workspace's live status preview (e.g. "Claude needs your
-	// permission"), set by enrichTitle -- kept separate from Title so a push
-	// notification can put the workspace name in the title and this in the
-	// body, instead of one combined string in both.
+	// Preview is what the agent is asking for, set by resolveAttention: the
+	// pending prompt's own text where cmux has one, else the workspace's
+	// agent-status line (e.g. "Claude needs your permission"). Kept separate
+	// from Title so a push notification can put the workspace name in the
+	// title and this in the body, instead of one combined string in both.
+	// The Android EventFrame deliberately has no mirror of this field -- it
+	// reaches the app only as push-notification body text, encrypted per
+	// device (see PushBody and server.buildEncryptedPush).
 	Preview string `json:"preview,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 	// EncryptedPush holds, per paired deviceID, an e2e-encrypted {title,body}
@@ -30,8 +34,8 @@ type EventFrame struct {
 }
 
 // PushTitle returns a NeedsAttention frame's notification title: the
-// workspace's own live title (set by enrichTitle), so the notification shows
-// which workspace at a glance, or a generic fallback when the workspace
+// workspace's own live title (set by resolveAttention), so the notification
+// shows which workspace at a glance, or a generic fallback when the workspace
 // couldn't be resolved.
 func (f EventFrame) PushTitle() string {
 	if f.Title != "" {
@@ -40,10 +44,9 @@ func (f EventFrame) PushTitle() string {
 	return "Agent needs your attention"
 }
 
-// PushBody returns a NeedsAttention frame's notification body: the
-// workspace's live status preview (set by enrichTitle) when known, else a
-// phrase derived from the underlying Claude Code hook event, else a generic
-// fallback.
+// PushBody returns a NeedsAttention frame's notification body: what the agent
+// is asking (set by resolveAttention) when cmux could tell us, else a phrase
+// derived from the underlying Claude Code hook event, else a generic fallback.
 func (f EventFrame) PushBody() string {
 	if f.Preview != "" {
 		return f.Preview

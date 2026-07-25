@@ -1,0 +1,64 @@
+{
+  "items": [
+    {
+      "created_at": "2026-07-25T19:57:48Z",
+      "cwd": "/tmp/proj",
+      "id": "F0718C97-8195-4403-8979-202446C7B4B1",
+      "kind": "question",
+      "question_multi_select": false,
+      "question_options": [
+        {
+          "description": "Look up the pending feed item and use the actual question / tool request. Costs one extra feed.list RPC per attention event — the same call YOLO already makes on this path. Falls back to the status line, then a generic phrase. Body stays e2e-encrypted, so the relay learns nothing new.",
+          "id": "opt0",
+          "label": "Real prompt text (Recommended)"
+        },
+        {
+          "description": "Only use cmux's preview when it is a recognized agent-status line; otherwise fall back to the hook-derived phrase. Smallest possible change, no extra RPC, but the body stays generic.",
+          "id": "opt1",
+          "label": "Just stop the wrong text"
+        }
+      ],
+      "question_prompt": "What should the push notification body say when an agent needs you?",
+      "questions": [
+        {
+          "header": "Push body",
+          "id": "q0",
+          "multi_select": false,
+          "options": [
+            {
+              "description": "Look up the pending feed item and use the actual question / tool request. Costs one extra feed.list RPC per attention event — the same call YOLO already makes on this path. Falls back to the status line, then a generic phrase. Body stays e2e-encrypted, so the relay learns nothing new.",
+              "id": "opt0",
+              "label": "Real prompt text (Recommended)"
+            },
+            {
+              "description": "Only use cmux's preview when it is a recognized agent-status line; otherwise fall back to the hook-derived phrase. Smallest possible change, no extra RPC, but the body stays generic.",
+              "id": "opt1",
+              "label": "Just stop the wrong text"
+            }
+          ],
+          "prompt": "What should the push notification body say when an agent needs you?"
+        }
+      ],
+      "request_id": "claude-8a52772d-115d-4c18-8628-c13e3feec984-PermissionRequest-AskUserQuestion-1785009468387",
+      "source": "claude",
+      "status": "pending",
+      "title": "AskUserQuestion",
+      "updated_at": "2026-07-25T19:59:48Z",
+      "workstream_id": "claude-8a52772d-115d-4c18-8628-c13e3feec984"
+    },
+    {
+      "created_at": "2026-07-24T20:59:27Z",
+      "cwd": "/tmp/proj",
+      "id": "89111F85-C097-4DDA-A22A-72A419601974",
+      "kind": "permissionRequest",
+      "request_id": "claude-25313041-24fa-4bd4-828e-1673ab959c9c-PermissionRequest-Edit-1784926767362",
+      "source": "claude",
+      "status": "pending",
+      "title": "Edit",
+      "tool_input": "{\"file_path\": \"\\/Users\\/u\\/scripts\\/list-watchers.sh\", \"new_string\": \"      field3=$(echo \\\"$full_cmd\\\" | awk -v i=\\\"$argstart\\\" '{print $i}')\\n      if [ \\\"$field3\\\" = \\\"--no-cmux-resume\\\" ]; then\\n        cmux_resume=\\\"no\\\"; base=$((argstart + 1))\\n      else\\n        cmux_resume=\\\"yes\\\"; base=$argstart\\n      fi\", \"old_string\": \"      field3=$(echo \\\"$full_cmd\\\" | awk '{print $3}')\\n      if [ \\\"$field3\\\" = \\\"--no-cmux-resume\\\" ]; then\\n        cmux_resume=\\\"no\\\"; base=4\\n      else\\n        cmux_resume=\\\"yes\\\"; base=3\\n      fi\", \"replace_all\": false}",
+      "tool_name": "Edit",
+      "updated_at": "2026-07-24T21:01:27Z",
+      "workstream_id": "claude-25313041-24fa-4bd4-828e-1673ab959c9c"
+    }
+  ]
+}

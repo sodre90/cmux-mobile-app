@@ -243,8 +243,105 @@ func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
 	if got.Title != "Build options" {
 		t.Fatalf("title not enriched: got %q want %q", got.Title, "Build options")
 	}
-	if got.Preview != "Build options trading system" {
-		t.Fatalf("preview not enriched: got %q want %q", got.Preview, "Build options trading system")
+	// The fixture's preview ("Build options trading system") is ordinary
+	// last-activity text, not one of cmux's agent-status lines, so it says
+	// nothing about why the agent needs the user and must not become the
+	// notification body -- see agentStatusLine.
+	if got.Preview != "" {
+		t.Fatalf("preview should drop a non-status workspace preview, got %q", got.Preview)
+	}
+}
+
+// promptScript answers the two RPCs resolveAttention makes for workspace WS1 at
+// /tmp/proj. Its workspace preview is the real cmux system banner that shipped
+// as a push notification body on a workspace that was in fact waiting for the
+// user -- the bug this file's next few tests pin down.
+func promptScript(pendingItems string) string {
+	return `#!/bin/sh
+case "$2" in
+  mobile.workspace.list)
+    echo '{"workspaces":[{"id":"WS1","current_directory":"/tmp/proj","title":"✳ Optimize llama.cpp for Laguna-S","preview":"macOS is reporting sustained critical memory pressure. cmux has shed hidden resources; close idle workspaces or restart cmux if pressure co…","terminals":[]}]}'
+    ;;
+  feed.list)
+    echo '{"items":[` + pendingItems + `]}'
+    ;;
+  *)
+    echo '{"ok":true}'
+    ;;
+esac
+`
+}
+
+func enrichedPreview(t *testing.T, script string) wire.EventFrame {
+	t.Helper()
+	s, _ := newTestServer(t, script)
+	f := wire.EventFrame{Type: "feed", Kind: "Notification", NeedsAttention: true, WorkspaceID: "WS1"}
+	s.resolveAttention(context.Background(), &f)
+	return f
+}
+
+// TestResolveAttentionPrefersPendingQuestionText is the regression for the
+// reported bug: a workspace whose live preview held an unrelated cmux system
+// banner pushed that banner as the notification body. The pending item's own
+// question text is what the user needs to see instead.
+func TestResolveAttentionPrefersPendingQuestionText(t *testing.T) {
+	item := `{"request_id":"REQ1","kind":"question","status":"pending","cwd":"/tmp/proj","created_at":"2026-07-25T13:14:16Z","question_prompt":"Should the phone be able to write in the torrent folder?"}`
+	got := enrichedPreview(t, promptScript(item))
+
+	if got.Title != "Optimize llama.cpp for Laguna-S" {
+		t.Fatalf("title not enriched: got %q", got.Title)
+	}
+	want := "Should the phone be able to write in the torrent folder?"
+	if got.Preview != want {
+		t.Fatalf("preview = %q, want the pending question text %q", got.Preview, want)
+	}
+}
+
+func TestResolveAttentionDescribesPendingPermission(t *testing.T) {
+	item := `{"request_id":"REQ1","kind":"permissionRequest","status":"pending","cwd":"/tmp/proj","created_at":"2026-07-25T13:14:16Z","tool_name":"Bash","tool_input":"{\"command\":\"./gradlew :app:assembleDebug\",\"description\":\"Build\"}"}`
+	got := enrichedPreview(t, promptScript(item))
+
+	want := "Wants to run Bash: ./gradlew :app:assembleDebug"
+	if got.Preview != want {
+		t.Fatalf("preview = %q, want %q", got.Preview, want)
+	}
+}
+
+// An idle "Claude is waiting for your input" Notification has no pending feed
+// item at all -- that status line is then the best thing we have, and unlike
+// the system banner it does answer "why does this need me?".
+func TestResolveAttentionFallsBackToAgentStatusLine(t *testing.T) {
+	script := strings.Replace(promptScript(""),
+		"macOS is reporting sustained critical memory pressure. cmux has shed hidden resources; close idle workspaces or restart cmux if pressure co…",
+		"Claude is waiting for your input", 1)
+	got := enrichedPreview(t, script)
+
+	if got.Preview != "Claude is waiting for your input" {
+		t.Fatalf("preview = %q, want the agent status line", got.Preview)
+	}
+}
+
+// With neither a pending item nor a recognizable status line there is nothing
+// truthful to say, so Preview stays empty and PushBody falls back to its
+// hook-derived phrase rather than showing whatever cmux last displayed.
+func TestResolveAttentionLeavesPreviewEmptyWhenNothingIsKnown(t *testing.T) {
+	got := enrichedPreview(t, promptScript(""))
+
+	if got.Preview != "" {
+		t.Fatalf("preview = %q, want empty", got.Preview)
+	}
+	if body := got.PushBody(); body != "Needs your attention" {
+		t.Fatalf("PushBody() = %q, want the hook-derived fallback", body)
+	}
+}
+
+// A pending item in another workspace's cwd must never describe this one.
+func TestResolveAttentionIgnoresPendingItemFromAnotherCWD(t *testing.T) {
+	item := `{"request_id":"REQ1","kind":"question","status":"pending","cwd":"/tmp/other","created_at":"2026-07-25T13:14:16Z","question_prompt":"Someone else's question?"}`
+	got := enrichedPreview(t, promptScript(item))
+
+	if got.Preview != "" {
+		t.Fatalf("preview = %q, want empty for a non-matching cwd", got.Preview)
 	}
 }
 
@@ -298,10 +395,10 @@ func TestIngestEventsAutoResolvesWhenYoloEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// autoResolveYolo runs synchronously before broadcast (see events.go), so
-	// by the time the frame arrives the reply has already happened and
-	// NeedsAttention has been cleared -- neither this agent's own push nor
-	// the relay's pushmon (which trusts this flag alone) should fire.
+	// resolveAttention answers the prompt synchronously before broadcast (see
+	// events.go), so by the time the frame arrives the reply has already
+	// happened and NeedsAttention has been cleared -- neither this agent's own
+	// push nor the relay's pushmon (which trusts this flag alone) should fire.
 	if got.NeedsAttention {
 		t.Fatal("NeedsAttention should be cleared once YOLO auto-resolves the pending permission")
 	}
@@ -335,5 +432,36 @@ func TestIngestEventsDoesNotAutoResolveWhenYoloOff(t *testing.T) {
 	data, _ := os.ReadFile(logPath)
 	if strings.Contains(string(data), "feed.permission.reply") {
 		t.Fatalf("must not auto-reply when yolo mode is off; log:\n%s", data)
+	}
+}
+
+// TestResolveAttentionMakesOneLookupPerRPC pins the shared-lookup structure:
+// notification content and YOLO's auto-approve both need the frame's workspace
+// and the prompts pending in its cwd, and each doing its own pair of calls
+// blocked ingestEvents's single-goroutine scan loop for twice as long as
+// necessary. YOLO on is the worst case -- it is the path that used to make the
+// second pair.
+func TestResolveAttentionMakesOneLookupPerRPC(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, _ := newTestServer(t, fakeYoloScript)
+	if err := s.yolo.SetMode("WS1", "bypass"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := wire.EventFrame{Type: "feed", Kind: "Notification", NeedsAttention: true, WorkspaceID: "WS1"}
+	if s.resolveAttention(context.Background(), &f) {
+		t.Fatal("YOLO should have answered the pending permission")
+	}
+
+	data, _ := os.ReadFile(logPath)
+	log := string(data)
+	for _, method := range []string{"mobile.workspace.list", "feed.list"} {
+		if got := strings.Count(log, method); got != 1 {
+			t.Fatalf("%s called %d times, want exactly 1; log:\n%s", method, got, log)
+		}
+	}
+	if !strings.Contains(log, "feed.permission.reply") {
+		t.Fatalf("the shared lookup must still reach the auto-reply; log:\n%s", log)
 	}
 }

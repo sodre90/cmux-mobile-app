@@ -188,3 +188,147 @@ func TestFeedUnknownKind400(t *testing.T) {
 		t.Fatalf("want 400 for unknown kind, got %d", resp.StatusCode)
 	}
 }
+
+func TestPromptBodyRendersEachKind(t *testing.T) {
+	cases := []struct {
+		name string
+		item pendingFeedItem
+		want string
+	}{
+		{"question uses its own text",
+			pendingFeedItem{Kind: "question", QuestionPrompt: "Read-only or writable?"},
+			"Read-only or writable?"},
+		{"permission names the tool and what it acts on",
+			pendingFeedItem{Kind: "permissionRequest", ToolName: "Edit", ToolInput: json.RawMessage(`{"file_path":"/tmp/x.sh","new_string":"..."}`)},
+			"Wants to run Edit: /tmp/x.sh"},
+		{"permission survives cmux dropping its double encoding of tool_input",
+			pendingFeedItem{Kind: "permissionRequest", ToolName: "Bash", ToolInput: json.RawMessage(`"{\"command\":\"ls -la\"}"`)},
+			"Wants to run Bash: ls -la"},
+		{"permission with unrecognized args still names the tool",
+			pendingFeedItem{Kind: "permissionRequest", ToolName: "Frobnicate", ToolInput: json.RawMessage(`{"whatsit":7}`)},
+			"Wants to run Frobnicate"},
+		{"permission with unparseable args still names the tool",
+			pendingFeedItem{Kind: "permissionRequest", ToolName: "Bash", ToolInput: json.RawMessage("not json")},
+			"Wants to run Bash"},
+		{"permission with absent args still names the tool",
+			pendingFeedItem{Kind: "permissionRequest", ToolName: "Bash"},
+			"Wants to run Bash"},
+		{"a kind with no text worth showing defers to the caller's fallback",
+			pendingFeedItem{Kind: "exitPlan"}, ""},
+		{"an empty question defers to the caller's fallback",
+			pendingFeedItem{Kind: "question"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := promptBody(tc.item); got != tc.want {
+				t.Fatalf("promptBody() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A notification body is rendered on one or two phone lines, so multi-line
+// prompt text has to collapse and long text has to stop somewhere.
+func TestTruncateForNotificationCollapsesAndCaps(t *testing.T) {
+	if got := truncateForNotification("run  this\nthen\tthat\n"); got != "run this then that" {
+		t.Fatalf("whitespace not collapsed: %q", got)
+	}
+	long := strings.Repeat("é", maxNotificationBody+50)
+	got := truncateForNotification(long)
+	if r := []rune(got); len(r) != maxNotificationBody+1 || r[len(r)-1] != '…' {
+		t.Fatalf("want %d runes ending in an ellipsis, got %d runes: %q", maxNotificationBody+1, len(r), got)
+	}
+	exact := strings.Repeat("a", maxNotificationBody)
+	if got := truncateForNotification(exact); got != exact {
+		t.Fatalf("text at exactly the cap must not be truncated, got %q", got)
+	}
+}
+
+func TestAgentStatusLineKeepsOnlyRecognizedStatuses(t *testing.T) {
+	for _, keep := range []string{"Claude is waiting for your input", "Codex needs your permission"} {
+		if got := agentStatusLine(keep); got != keep {
+			t.Fatalf("agentStatusLine(%q) = %q, want it kept", keep, got)
+		}
+	}
+	// The live-observed banner behind this whole fix, plus ordinary preview text.
+	for _, drop := range []string{
+		"macOS is reporting sustained critical memory pressure. cmux has shed hidden resources",
+		"Build options trading system",
+		"",
+	} {
+		if got := agentStatusLine(drop); got != "" {
+			t.Fatalf("agentStatusLine(%q) = %q, want it dropped", drop, got)
+		}
+	}
+}
+
+func TestNewestPendingForCWDPicksTheLatestMatch(t *testing.T) {
+	items := []pendingFeedItem{
+		{RequestID: "OLD", Status: "pending", CWD: "/tmp/proj", CreatedAt: "2026-07-25T13:00:00Z"},
+		{RequestID: "OTHER", Status: "pending", CWD: "/tmp/elsewhere", CreatedAt: "2026-07-25T15:00:00Z"},
+		{RequestID: "NEW", Status: "pending", CWD: "/tmp/proj", CreatedAt: "2026-07-25T14:00:00Z"},
+		{RequestID: "RESOLVED", Status: "expired", CWD: "/tmp/proj", CreatedAt: "2026-07-25T16:00:00Z"},
+	}
+	got, ok := newestPendingForCWD(items, "/tmp/proj")
+	if !ok || got.RequestID != "NEW" {
+		t.Fatalf("got %+v (ok=%v), want the newest still-pending item in that cwd", got, ok)
+	}
+	if _, ok := newestPendingForCWD(items, ""); ok {
+		t.Fatal("an unknown workspace cwd must not match every pending item")
+	}
+	if _, ok := newestPendingForCWD(nil, "/tmp/proj"); ok {
+		t.Fatal("no pending items must not match")
+	}
+}
+
+// TestPendingFeedItemDecodesRealCmuxPayload parses bytes captured from a live
+// `cmux rpc feed.list` (testdata/feed_list_pending.json). Only cwd and status
+// were rewritten, so both items look pending in one workspace, and a home
+// directory inside tool_input was anonymized -- the double-encoding and
+// escaping that the parser actually has to cope with are untouched.
+//
+// This package has shipped a plausible-looking schema that cmux never emits
+// before, with unit tests that asserted the same fiction and stayed green --
+// see resolvePendingPermission's `kind == "permission"` bug. Hand-written
+// fixtures cannot catch that class of error; real captured bytes can.
+func TestPendingFeedItemDecodesRealCmuxPayload(t *testing.T) {
+	raw, err := os.ReadFile("testdata/feed_list_pending.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp struct {
+		Items []pendingFeedItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("real feed.list payload must decode: %v", err)
+	}
+
+	byKind := map[string]pendingFeedItem{}
+	for _, item := range resp.Items {
+		byKind[item.Kind] = item
+	}
+	question, ok := byKind["question"]
+	if !ok {
+		t.Fatal("fixture should carry a question item")
+	}
+	if question.RequestID == "" || question.CreatedAt == "" {
+		t.Fatalf("reply/ordering fields did not decode: %+v", question)
+	}
+	if got := promptBody(question); got != "What should the push notification body say when an agent needs you?" {
+		t.Fatalf("question body = %q", got)
+	}
+
+	permission, ok := byKind["permissionRequest"]
+	if !ok {
+		t.Fatal("fixture should carry a permissionRequest item")
+	}
+	if got := promptBody(permission); got != "Wants to run Edit: /Users/u/scripts/list-watchers.sh" {
+		t.Fatalf("permission body = %q", got)
+	}
+
+	// The same decode feeds YOLO's auto-approve, so a drift that breaks
+	// unblocking an agent fails here too, not just the notification text.
+	if _, ok := newestPendingForCWD(resp.Items, "/tmp/proj"); !ok {
+		t.Fatal("real pending items must match their workspace by cwd")
+	}
+}

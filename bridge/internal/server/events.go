@@ -79,7 +79,7 @@ func needsAttention(hookEvent, phase string) bool {
 // attentionLabel returns the best human label for a feed item. cmux redacts the
 // prompt text, so the cwd basename ("cmux-app") tells the user which agent is
 // waiting; a real payload title is preferred if cmux ever provides one. This is
-// only the cheap, synchronous fallback used before enrichTitle's workspace
+// only the cheap, synchronous fallback used before resolveAttention's workspace
 // lookup runs (or if that lookup fails).
 func attentionLabel(payload map[string]any) string {
 	if t := str(payload, "title"); t != "" {
@@ -91,29 +91,75 @@ func attentionLabel(payload map[string]any) string {
 	return ""
 }
 
-// enrichTitle upgrades an attention frame's Title with the workspace's live
-// title, and sets Preview to its live status preview (e.g. "Claude is
-// waiting for your input") — the richest context cmux exposes for a prompt
-// whose actual text it redacts. On any lookup failure the cheap cwd-basename
-// Title classify already set is left as-is, and Preview stays empty.
-func (s *Server) enrichTitle(ctx context.Context, f *wire.EventFrame) {
+// resolveAttention works out what an attention frame should say and whether it
+// should be raised at all, and reports whether anyone still needs alerting.
+//
+// Title becomes the workspace's live title and Preview the pending prompt's
+// own text — the actual question, or the tool a permission gate is holding.
+// The event stream redacts that text but feed.list carries it verbatim, so
+// this lookup is the only way a notification can say *what* the agent is
+// asking rather than merely that it is asking.
+//
+// The notification content and YOLO's auto-approve both need the same two
+// answers from cmux — the frame's workspace and the prompts pending in its cwd
+// — so they share one pair of RPCs here rather than each making their own.
+// That briefly blocks ingestEvents's single-goroutine scan loop, which is why
+// it is worth not doing twice; a workspace with YOLO off spends nothing beyond
+// these two calls.
+//
+// Returning false means YOLO silently approved the prompt, so the caller must
+// clear NeedsAttention: something already answered must not alert the phone,
+// on this agent's own push or on the relay's pushmon (which trusts that flag
+// with no YOLO visibility of its own).
+//
+// Each step degrades independently: a failed workspace lookup leaves the cheap
+// cwd-basename Title classify already set, and a prompt with no text worth
+// showing (or no pending item at all, which is the normal case for an idle
+// "waiting for your input" Notification) falls back to the workspace's status
+// line and then to PushBody's hook-derived phrase.
+func (s *Server) resolveAttention(ctx context.Context, f *wire.EventFrame) bool {
 	if f.WorkspaceID == "" {
-		return
+		return true
 	}
 	ws, ok := s.findWorkspace(ctx, f.WorkspaceID)
 	if !ok {
-		return
+		return true
 	}
 	if ws.Title != "" {
 		f.Title = ws.Title
 	}
-	f.Preview = ws.Preview
+	cwd := canonicalPath(ws.CWD)
+	pending := s.listPendingItems(ctx)
+	if mode := s.yoloMode(f.WorkspaceID); mode != "" && s.replyPendingPermissions(ctx, pending, cwd, mode) {
+		return false
+	}
+	f.Preview = agentStatusLine(ws.Preview)
+	if item, ok := newestPendingForCWD(pending, cwd); ok {
+		if body := promptBody(item); body != "" {
+			f.Preview = body
+		}
+	}
+	return true
+}
+
+// agentStatusLine returns preview only when it is one of cmux's agent-status
+// strings. cmux's workspace preview is a general last-activity line, not a
+// status field: it also carries cmux's own system banners (observed live on a
+// workspace that was in fact waiting for input: "macOS is reporting sustained
+// critical memory pressure. cmux has shed hidden resources; close idle
+// workspaces…"), which as a notification body reads as the reason the agent
+// needs you. Anything unrecognized is dropped in favour of a generic phrase.
+func agentStatusLine(preview string) string {
+	if classifyAttention(preview) == "" {
+		return ""
+	}
+	return preview
 }
 
 // ingestEvents reads NDJSON cmux event frames from r, classifies each, and
 // broadcasts the ones the app should see. Relay-side push (internal/relay's
 // pushmon) subscribes to this same /events stream over a plaintext internal
-// connection (see writeEventFrame) -- enrichTitle's real Title/Preview never
+// connection (see writeEventFrame) -- resolveAttention's real Title/Preview never
 // reach it directly; buildEncryptedPush turns them into per-device
 // ciphertexts first, which is the only form of this content the relay (or
 // this agent's own direct-mode push) ever forwards to FCM.
@@ -131,16 +177,11 @@ func (s *Server) ingestEvents(ctx context.Context, r io.Reader) {
 		if f, ok := classify(m); ok {
 			s.lastEventAt.Store(time.Now().UnixNano())
 			if f.NeedsAttention {
-				s.enrichTitle(ctx, &f)
-				// Give YOLO a chance to silently resolve this before anyone is
-				// alerted: if it does, clear NeedsAttention so neither this
-				// agent's own push nor the relay's pushmon (which trusts this
-				// flag with no YOLO visibility of its own) ever fires for it.
-				if s.autoResolveYolo(ctx, f.WorkspaceID) {
-					f.NeedsAttention = false
-				} else {
+				if s.resolveAttention(ctx, &f) {
 					f.EncryptedPush = s.buildEncryptedPush(f)
 					s.maybeSendPush(ctx, f)
+				} else {
+					f.NeedsAttention = false // YOLO already answered it
 				}
 			}
 			s.hub.broadcast(f)
