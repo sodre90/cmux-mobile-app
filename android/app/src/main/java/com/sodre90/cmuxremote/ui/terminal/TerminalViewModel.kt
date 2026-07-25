@@ -59,7 +59,10 @@ class TerminalViewModel(
     // flipping to DIRECT on a benign disconnect would stall the UI for that
     // full timeout with an unreachable Tailscale host instead of using the
     // still-healthy relay.
-    private val reconnector = SocketReconnector<TerminalDown>(bridge.relayHealth())
+    private val reconnector = SocketReconnector<TerminalDown>(
+        bridge.relayHealth(),
+        monitor = bridge.connectionMonitor(),
+    )
 
     @Volatile
     private var activeSocket: TerminalSocket? = null

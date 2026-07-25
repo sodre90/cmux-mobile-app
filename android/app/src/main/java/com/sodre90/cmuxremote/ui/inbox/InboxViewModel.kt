@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.inbox
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionStatus
 import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
@@ -57,7 +58,12 @@ class InboxViewModel(
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
-    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth())
+    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth(), monitor = bridge.connectionMonitor())
+
+    /** Same process-wide transport status SessionsViewModel exposes -- replying
+     *  to a prompt is the one action where knowing the connection is mid-
+     *  failover actually changes what the user does. */
+    val connectionStatus: StateFlow<ConnectionStatus> = bridge.connectionMonitor().status
 
     init {
         refresh()

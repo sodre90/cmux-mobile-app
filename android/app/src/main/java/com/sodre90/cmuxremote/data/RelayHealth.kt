@@ -23,6 +23,16 @@ class RelayHealth(private val penaltyMs: Long = DEFAULT_PENALTY_MS) {
     companion object {
         // Once RELAY has proven unreachable, don't retry it on every single
         // call/reconnect for this long.
-        const val DEFAULT_PENALTY_MS = 30_000L
+        //
+        // Deliberately short. RELAY is the preferred transport (it works from
+        // anywhere; DIRECT needs Tailscale up on the phone), and the failure
+        // that trips this is usually transient -- the Mac agent's tunnel
+        // redialing after an IPv6 "no route to host" blip takes well under a
+        // second, but any window longer than the blip pins the phone to
+        // DIRECT for the rest of it. The original 30s was long enough to be
+        // noticeable as "why is it on Tailscale when the relay is fine?".
+        // A dead relay still costs only one ~3s probe per window, not one per
+        // call, which is the whole point of having a window at all.
+        const val DEFAULT_PENALTY_MS = 5_000L
     }
 }

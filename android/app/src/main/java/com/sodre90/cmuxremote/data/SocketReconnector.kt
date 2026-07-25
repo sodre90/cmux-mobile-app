@@ -5,6 +5,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
+import java.io.IOException
 
 // A RELAY connect that drops again within this long of its first frame is
 // treated as a framing failure, not a benign disconnect.
@@ -33,6 +34,7 @@ class SocketReconnector<T>(
     private val now: () -> Long = System::currentTimeMillis,
     private val initialBackoffMs: Long = INITIAL_BACKOFF_MS,
     private val maxBackoffMs: Long = MAX_BACKOFF_MS,
+    private val monitor: ConnectionMonitor = ConnectionMonitor(),
 ) {
     private var consecutiveRelayDrops = 0
 
@@ -57,8 +59,11 @@ class SocketReconnector<T>(
     ) {
         var backoff = initialBackoffMs
         while (currentCoroutineContext().isActive) {
-            val primarySlot = if (relayHealth.isDown(now())) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-            val socket = openSocket(primarySlot) ?: openSocket(primarySlot.other())
+            val relayPenalized = relayHealth.isDown(now())
+            val primarySlot = if (relayPenalized) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
+            if (relayPenalized) monitor.fallingBack(null) else monitor.connecting(ConnectionSlot.RELAY)
+            var slot = primarySlot
+            val socket = openSocket(primarySlot) ?: openSocket(primarySlot.other())?.also { slot = primarySlot.other() }
             if (socket == null) {
                 delay(backoff)
                 continue
@@ -70,13 +75,15 @@ class SocketReconnector<T>(
                     if (!gotFrame) {
                         gotFrame = true
                         connectedAtMs = now()
+                        monitor.connected(slot)
                         onConnected()
                     }
                     if (onFrame(frame)) backoff = initialBackoffMs
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                monitor.failed(if (e is IOException) e.describeForUser() else e.message.orEmpty())
                 if (primarySlot == ConnectionSlot.RELAY) {
                     if (!gotFrame) {
                         relayHealth.markDown(now())

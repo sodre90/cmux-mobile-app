@@ -38,6 +38,7 @@ import com.sodre90.cmuxremote.model.FeedOption
 import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
+import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
@@ -72,41 +73,46 @@ fun InboxScreen(
             )
         },
     ) { inner ->
+        val connectionStatus by vm.connectionStatus.collectAsState()
         Box(modifier = Modifier.fillMaxSize().padding(inner)) {
-            Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-                actionError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
-                }
-                // Loading/Error deliberately render exactly like an empty Ready
-                // list (see InboxViewModel's [_state] doc comment): this
-                // preserves the pre-unification look (a plain "No pending
-                // prompts" with the actionError banner above it, if any) --
-                // InboxViewModel never actually reaches UiState.Error today.
-                when (val s = state) {
-                    is UiState.Loading, is UiState.Error -> Box(Modifier.fillMaxSize()) {
-                        Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
+            Column(modifier = Modifier.fillMaxSize()) {
+                ConnectionStatusStrip(connectionStatus)
+                Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                    actionError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                     }
-                    is UiState.Ready -> if (s.data.isEmpty()) {
-                        Box(Modifier.fillMaxSize()) {
+                    // Loading/Error deliberately render exactly like an empty Ready
+                    // list (see InboxViewModel's [_state] doc comment): this
+                    // preserves the pre-unification look (a plain "No pending
+                    // prompts" with the actionError banner above it, if any) --
+                    // InboxViewModel never actually reaches UiState.Error today.
+                    when (val s = state) {
+                        is UiState.Loading, is UiState.Error -> Box(Modifier.fillMaxSize()) {
                             Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
                         }
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(s.data, key = { it.id }) { item ->
-                                InboxRow(
-                                    item = item,
-                                    onSend = { labels -> vm.reply(item, labels) },
-                                    onApprovePermission = { approve -> vm.replyPermission(item, approve) },
-                                    onOpenTerminal = {
-                                        scope.launch {
-                                            when (val match = vm.terminalTarget(item)) {
-                                                is TerminalMatch.Direct -> onOpenTerminal(match.surfaceId)
-                                                is TerminalMatch.Ambiguous -> pickerWorkspaces = match.workspaces
-                                                null -> Unit // actionError already set by the ViewModel
+                        is UiState.Ready -> if (s.data.isEmpty()) {
+                            Box(Modifier.fillMaxSize()) {
+                                Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
+                            }
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(s.data, key = { it.id }) { item ->
+                                    InboxRow(
+                                        item = item,
+                                        onSend = { labels -> vm.reply(item, labels) },
+                                        onApprovePermission = { approve -> vm.replyPermission(item, approve) },
+                                        onOpenTerminal = {
+                                            scope.launch {
+                                                when (val match = vm.terminalTarget(item)) {
+                                                    is TerminalMatch.Direct -> onOpenTerminal(match.surfaceId)
+                                                    is TerminalMatch.Ambiguous ->
+                                                        pickerWorkspaces = match.workspaces
+                                                    null -> Unit // actionError already set by the ViewModel
+                                                }
                                             }
-                                        }
-                                    },
-                                )
+                                        },
+                                    )
+                                }
                             }
                         }
                     }

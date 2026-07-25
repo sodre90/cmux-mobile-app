@@ -139,6 +139,17 @@
     <string name="key_desc_page_up">Page up</string>
     <string name="key_desc_page_down">Page down</string>
 
+    <!-- Connection status strip (see ConnectionStatusStrip.kt): names which of the two
+         transports is serving the app, and why, so relay->Tailscale failover stops being
+         invisible. "Direct" is the Tailscale listener on the Mac, with no relay involved. -->
+    <string name="connection_connecting_relay">Connecting via relay…</string>
+    <string name="connection_connecting_direct">Connecting via Tailscale…</string>
+    <string name="connection_connected_relay">Relay</string>
+    <string name="connection_connected_direct">Tailscale (direct)</string>
+    <string name="connection_falling_back">Relay failed — trying Tailscale…</string>
+    <string name="connection_relay_skipped">Relay recently unreachable — using Tailscale</string>
+    <string name="connection_failed">No connection</string>
+
     <!-- ViewModel-owned error/status fallback strings: injected into each ViewModel's
          constructor pre-resolved (see e.g. SessionsViewModel), since a ViewModel has no
          @Composable context to call stringResource() itself. Wired up in CmuxNavHost. -->

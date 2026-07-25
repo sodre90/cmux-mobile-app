@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.data
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -7,6 +8,9 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -83,8 +87,97 @@ class FallbackBridgeClientTest {
             runBlocking { fb.sessions() }
             fail("expected an exception when both primary and fallback fail")
         } catch (e: IOException) {
-            // expected
+            // Relay and direct fail for unrelated reasons, so reporting only
+            // the last one hides which half is actually broken.
+            val both = e as? BothTransportsFailedException
+                ?: fail("want BothTransportsFailedException, got $e") as Nothing
+            assertNotNull("relay cause must be kept", both.relayError)
+            assertTrue("message must name relay: ${both.message}", both.message!!.contains("Relay:"))
+            assertTrue("message must name direct: ${both.message}", both.message!!.contains("Direct:"))
         }
+    }
+
+    /** The failover has to be visible, not just correct -- the UI strip
+     *  (ConnectionStatusStrip) renders straight off these transitions. */
+    @Test
+    fun failoverIsReportedToTheMonitor() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))
+        val monitor = ConnectionMonitor()
+        val seen = mutableListOf<ConnectionStatus>()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer) },
+            monitor = monitor,
+        )
+
+        runBlocking {
+            val watcher = launch { monitor.status.collect { seen += it } }
+            fb.sessions()
+            watcher.cancel()
+        }
+
+        // Asserted as an ordered subsequence, not by index: status is a
+        // conflated StateFlow, and whether the collector starts before or
+        // after the initial Unknown is a scheduling detail.
+        val relayFirst = seen.indexOf(ConnectionStatus.Connecting(ConnectionSlot.RELAY))
+        val fallingBack = seen.indexOfFirst { it is ConnectionStatus.FallingBack }
+        assertTrue("relay must be attempted first, saw $seen", relayFirst >= 0)
+        assertTrue("fallback must be reported after relay, saw $seen", fallingBack > relayFirst)
+        assertNotNull(
+            "the relay's own error is why we fell back",
+            (seen[fallingBack] as ConnectionStatus.FallingBack).reason,
+        )
+        // Read off the flow, not [seen]: the final emission lands after the
+        // last suspension point, so a conflated collector may never see it.
+        assertEquals(ConnectionStatus.Connected(ConnectionSlot.DIRECT), monitor.status.value)
+    }
+
+    @Test
+    fun bothFailingIsReportedToTheMonitorWithBothCauses() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val monitor = ConnectionMonitor()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer, connectTimeoutMs = 300) },
+            monitor = monitor,
+        )
+
+        runCatching { runBlocking { fb.sessions() } }
+
+        val failed = monitor.status.value as ConnectionStatus.Failed
+        assertTrue("must name relay: ${failed.detail}", failed.detail.contains("Relay:"))
+        assertTrue("must name direct: ${failed.detail}", failed.detail.contains("Direct:"))
+    }
+
+    /** Inside the penalty window the relay is never dialled, so a direct-only
+     *  failure must still say so rather than implying the relay was fine. */
+    @Test
+    fun bothFailReportsRelayAsSkippedInsidePenaltyWindow() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse().setBody("""{"workspaces":[]}"""))
+        fallbackServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        var clock = 1_000_000L
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer, connectTimeoutMs = 300) },
+            now = { clock },
+        )
+
+        runBlocking { fb.sessions() } // relay times out, falls back, sets the penalty
+        clock += RelayHealth.DEFAULT_PENALTY_MS / 2 // still inside the window
+
+        try {
+            runBlocking { fb.sessions() }
+            fail("expected an exception when the only attempted transport fails")
+        } catch (e: IOException) {
+            val both = e as? BothTransportsFailedException
+                ?: fail("want BothTransportsFailedException, got $e") as Nothing
+            assertNull("relay was never attempted this call", both.relayError)
+            assertTrue("message must say relay was skipped: ${both.message}", both.message!!.contains("skipped"))
+        }
+        assertEquals("relay must not be dialled inside the window", 1, primaryServer.requestCount)
     }
 
     @Test
@@ -138,8 +231,8 @@ class FallbackBridgeClientTest {
             now = { clock },
         )
 
-        runBlocking { fb.sessions() } // primary times out, falls back, sets 30s penalty
-        clock += 10_000L // still inside the window
+        runBlocking { fb.sessions() } // primary times out, falls back, sets the penalty
+        clock += RelayHealth.DEFAULT_PENALTY_MS / 2 // still inside the window
         runBlocking { fb.sessions() } // must skip primary entirely
 
         assertEquals(1, primaryServer.requestCount)
@@ -255,8 +348,8 @@ class FallbackBridgeClientTest {
             now = { clock },
         )
 
-        runBlocking { fb.sessions() } // primary 503s, falls back, sets 30s penalty
-        clock += 10_000L // still inside the window
+        runBlocking { fb.sessions() } // primary 503s, falls back, sets the penalty
+        clock += RelayHealth.DEFAULT_PENALTY_MS / 2 // still inside the window
         runBlocking { fb.sessions() } // must skip primary entirely
 
         assertEquals(1, primaryServer.requestCount)
@@ -275,8 +368,8 @@ class FallbackBridgeClientTest {
             now = { clock },
         )
 
-        runBlocking { fb.sessions() } // primary times out, falls back, sets 30s penalty
-        clock += 31_000L // past the window
+        runBlocking { fb.sessions() } // primary times out, falls back, sets the penalty
+        clock += RelayHealth.DEFAULT_PENALTY_MS + 1_000L // past the window
 
         runBlocking { fb.sessions() } // must retry primary, which now succeeds
 

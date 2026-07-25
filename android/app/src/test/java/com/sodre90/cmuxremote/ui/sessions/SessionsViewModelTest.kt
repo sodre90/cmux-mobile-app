@@ -4,6 +4,7 @@ import com.goterl.lazysodium.LazySodiumJava
 import com.goterl.lazysodium.SodiumJava
 import com.sodre90.cmuxremote.data.BridgeClient
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
@@ -75,11 +76,13 @@ private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {
 private class FakeSessionsBridgeGateway : BridgeGateway {
     var bridge: FallbackBridgeClient? = null
     var events: EventsSocket? = null
+    val monitor = ConnectionMonitor()
     override fun activeBridge(): FallbackBridgeClient? = bridge
     override fun anyBridgeConfigured(): Boolean = bridge != null
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = if (slot == ConnectionSlot.RELAY) events else null
     override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
     override fun relayHealth(): RelayHealth = RelayHealth()
+    override fun connectionMonitor(): ConnectionMonitor = monitor
 }
 
 /**

@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui
 
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
@@ -45,11 +46,13 @@ class ViewModelConstructionTest {
     }
 
     private class FakeBridgeGateway : BridgeGateway {
+        val monitor = ConnectionMonitor()
         override fun activeBridge(): FallbackBridgeClient? = null
         override fun anyBridgeConfigured(): Boolean = false
         override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = null
         override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
         override fun relayHealth(): RelayHealth = RelayHealth()
+        override fun connectionMonitor(): ConnectionMonitor = monitor
     }
 
     private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {

@@ -122,10 +122,17 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     override fun relayHealth(): RelayHealth = sharedRelayHealth
 
+    // Shared for the same reason as sharedRelayHealth: the REST path and every
+    // socket subscription are all reporting on the same two transports.
+    private val sharedConnectionMonitor = ConnectionMonitor()
+
+    override fun connectionMonitor(): ConnectionMonitor = sharedConnectionMonitor
+
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },
         fallback = { bridgeClient(ConnectionSlot.DIRECT) },
         relayHealth = sharedRelayHealth,
+        monitor = sharedConnectionMonitor,
     )
 
     /** The fallback-aware entry point most read/write call sites should use

@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.ui.pairing
 
 import com.sodre90.cmuxremote.data.BridgeClient
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
@@ -25,11 +26,13 @@ import java.util.concurrent.TimeUnit
  *  everything else -- these tests only exercise [ConnectionSettingsViewModel],
  *  which only ever calls [BridgeGateway.activeBridge]. */
 private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient?) : BridgeGateway {
+    val monitor = ConnectionMonitor()
     override fun activeBridge(): FallbackBridgeClient? = bridge
     override fun anyBridgeConfigured(): Boolean = bridge != null
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = null
     override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? = null
     override fun relayHealth(): RelayHealth = RelayHealth()
+    override fun connectionMonitor(): ConnectionMonitor = monitor
 }
 
 /** These tests only exercise the test-push flow, never font zoom -- a fixed

@@ -70,6 +70,7 @@ import com.sodre90.cmuxremote.model.Attention
 import com.sodre90.cmuxremote.model.TerminalPane
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.YoloMode
+import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.theme.AppColors
@@ -106,20 +107,24 @@ fun SessionsScreen(
         },
     ) { inner ->
         val isRefreshing by vm.isRefreshing.collectAsState()
-        Box(modifier = Modifier.fillMaxSize().padding(inner)) {
-            when (val s = state) {
-                is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                is UiState.Error -> Text(
-                    text = s.message,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                )
-                is UiState.Ready -> PullToRefreshBox(
-                    isRefreshing = isRefreshing,
-                    onRefresh = { vm.userRefresh() },
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    WorkspaceList(vm, s.data, onOpenTerminal)
+        val connectionStatus by vm.connectionStatus.collectAsState()
+        Column(modifier = Modifier.fillMaxSize().padding(inner)) {
+            ConnectionStatusStrip(connectionStatus)
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (val s = state) {
+                    is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                    is UiState.Error -> Text(
+                        text = s.message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                    )
+                    is UiState.Ready -> PullToRefreshBox(
+                        isRefreshing = isRefreshing,
+                        onRefresh = { vm.userRefresh() },
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        WorkspaceList(vm, s.data, onOpenTerminal)
+                    }
                 }
             }
         }

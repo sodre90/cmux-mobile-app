@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeGateway
+import com.sodre90.cmuxremote.data.ConnectionStatus
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
@@ -66,7 +67,13 @@ class SessionsViewModel(
     private val refreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth())
+    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth(), monitor = bridge.connectionMonitor())
+
+    /** Which transport the app is on right now, and whether it is mid-failover
+     *  -- rendered by [ConnectionStatusStrip]. Read straight off the shared
+     *  process-wide monitor rather than mirrored into local state, so it
+     *  reflects the REST path and every socket, not just this screen's. */
+    val connectionStatus: StateFlow<ConnectionStatus> = bridge.connectionMonitor().status
 
     init {
         refresh()

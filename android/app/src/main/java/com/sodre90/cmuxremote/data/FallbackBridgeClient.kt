@@ -37,6 +37,7 @@ class FallbackBridgeClient(
     private val now: () -> Long = System::currentTimeMillis,
     private val relayHealth: RelayHealth = RelayHealth(),
     private val pairingRetryDelayMs: Long = NOT_PAIRED_RETRY_DELAY_MS,
+    private val monitor: ConnectionMonitor = ConnectionMonitor(),
 ) {
     private suspend fun <T> call(block: suspend (BridgeClient) -> T): T {
         val primaryClient = primary()
@@ -46,16 +47,36 @@ class FallbackBridgeClient(
         // we recently confirmed it's down (still inside the penalty window).
         val skipPrimary = primaryClient == null || relayHealth.isDown(now())
         if (skipPrimary) {
-            return block(fallbackClient ?: primaryClient ?: throw BridgeException(0, "not configured"))
+            val only = fallbackClient ?: primaryClient ?: throw BridgeException(0, "not configured")
+            val slot = if (only === primaryClient) ConnectionSlot.RELAY else ConnectionSlot.DIRECT
+            if (slot == ConnectionSlot.DIRECT && primaryClient != null) monitor.fallingBack(null)
+            return try {
+                block(only).also { monitor.connected(slot) }
+            } catch (e: IOException) {
+                // Report the skip: "direct failed" alone reads as though relay
+                // was fine, when in fact it was never tried this time round.
+                if (primaryClient != null && only !== primaryClient) {
+                    throw BothTransportsFailedException(relayError = null, directError = e)
+                        .also { monitor.failed(it.message.orEmpty()) }
+                }
+                throw e
+            }
         }
 
+        monitor.connecting(ConnectionSlot.RELAY)
         return try {
-            block(primaryClient)
+            block(primaryClient).also { monitor.connected(ConnectionSlot.RELAY) }
         } catch (e: IOException) {
             if (fallbackClient == null) throw e
             if (e is BridgeException && e.code in 400..499) throw e
             relayHealth.markDown(now())
-            block(fallbackClient)
+            monitor.fallingBack(e.describeForUser())
+            try {
+                block(fallbackClient).also { monitor.connected(ConnectionSlot.DIRECT) }
+            } catch (fallbackError: IOException) {
+                throw BothTransportsFailedException(relayError = e, directError = fallbackError)
+                    .also { monitor.failed(it.message.orEmpty()) }
+            }
         }
     }
 
@@ -99,3 +120,27 @@ class FallbackBridgeClient(
         const val NOT_PAIRED_RETRY_DELAY_MS = 500L
     }
 }
+
+/**
+ * Raised when neither transport could serve a call. Both causes are kept and
+ * both appear in [message], because they usually fail for unrelated reasons --
+ * the relay being unreachable (or its tunnel to the Mac being down) says
+ * nothing about whether Tailscale is up on this phone, and collapsing them
+ * into one "connection failed" hides which half to go and fix. ViewModels
+ * surface [message] verbatim, so no call site needs to know this type exists.
+ *
+ * [relayError] is null when the relay was inside [RelayHealth]'s penalty
+ * window and so was never attempted for this call.
+ */
+class BothTransportsFailedException(
+    val relayError: IOException?,
+    val directError: IOException,
+) : IOException(
+    "Relay: ${relayError?.describeForUser() ?: "skipped (recently unreachable)"} • " +
+        "Direct: ${directError.describeForUser()}",
+)
+
+internal fun IOException.describeForUser(): String =
+    (message ?: this::class.simpleName ?: "unreachable").take(MAX_CAUSE_CHARS)
+
+private const val MAX_CAUSE_CHARS = 120

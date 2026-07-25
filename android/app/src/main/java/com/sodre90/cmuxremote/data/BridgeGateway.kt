@@ -16,4 +16,9 @@ interface BridgeGateway {
      *  (see [SocketReconnector]) and the REST fallback path learn "relay is
      *  down" from the same source. */
     fun relayHealth(): RelayHealth
+
+    /** The process-wide [ConnectionMonitor] the REST path and every socket
+     *  subscription report into, so the UI can show which transport is in
+     *  use and when it is falling back. */
+    fun connectionMonitor(): ConnectionMonitor
 }
