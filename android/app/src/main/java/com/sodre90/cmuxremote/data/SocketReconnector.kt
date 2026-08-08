@@ -1,10 +1,14 @@
 package com.sodre90.cmuxremote.data
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
 
 // A RELAY connect that drops again within this long of its first frame is
@@ -23,6 +27,14 @@ private const val RELAY_DROP_THRESHOLD = 3
  * exponential backoff with a cap between attempts, and the consecutive-
  * framing-failure escalation that promotes a flaky RELAY to a full penalty
  * (originally TerminalViewModel-only; every caller gets it now).
+ *
+ * A socket that had to settle for DIRECT does not stay there once RELAY is
+ * working again. Slot choice happens per connect attempt, and a healthy
+ * socket never disconnects, so without this a single relay blip would pin a
+ * long-lived subscription to DIRECT indefinitely -- far past
+ * [RelayHealth]'s penalty window. Such a socket watches
+ * [RelayHealth.recoveries] and ends itself when RELAY is proven healthy
+ * again, letting the next iteration re-pick it.
  *
  * All bookkeeping ([consecutiveRelayDrops], the loop's backoff) is instance
  * state with no synchronization, because -- like the ViewModels that own one
@@ -59,6 +71,9 @@ class SocketReconnector<T>(
     ) {
         var backoff = initialBackoffMs
         while (currentCoroutineContext().isActive) {
+            // Read before the slot decision: any recovery from here on must
+            // wake us, including one landing while we're still connecting.
+            val recoveriesAtPick = relayHealth.recoveries.value
             val relayPenalized = relayHealth.isDown(now())
             val primarySlot = if (relayPenalized) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
             if (relayPenalized) monitor.fallingBack(null) else monitor.connecting(ConnectionSlot.RELAY)
@@ -70,18 +85,46 @@ class SocketReconnector<T>(
             }
             var gotFrame = false
             var connectedAtMs = 0L
+            // Only when parked on DIRECT *because* RELAY was penalized. A
+            // DIRECT socket that is simply the configured one has nothing to
+            // come back to.
+            val parkedOnDirect = relayPenalized && slot == ConnectionSlot.DIRECT
+            var relayRecovered = false
             try {
-                socket.collect { frame ->
-                    if (!gotFrame) {
-                        gotFrame = true
-                        connectedAtMs = now()
-                        monitor.connected(slot)
-                        onConnected()
+                coroutineScope {
+                    val connection = this
+                    val watcher = if (parkedOnDirect) {
+                        launch {
+                            relayHealth.recoveries.first { it != recoveriesAtPick }
+                            relayRecovered = true
+                            // Cancels the collect below, closing the socket
+                            // via its awaitClose so the loop re-picks RELAY.
+                            connection.cancel()
+                        }
+                    } else {
+                        null
                     }
-                    if (onFrame(frame)) backoff = initialBackoffMs
+                    // Collected in this coroutine rather than a child: a
+                    // CancellationException raised by the flow itself has to
+                    // reach the caller, and a child job would absorb it as
+                    // ordinary cancellation.
+                    socket.collect { frame ->
+                        if (!gotFrame) {
+                            gotFrame = true
+                            connectedAtMs = now()
+                            monitor.connected(slot)
+                            onConnected()
+                        }
+                        if (onFrame(frame)) backoff = initialBackoffMs
+                    }
+                    watcher?.cancel()
                 }
             } catch (e: CancellationException) {
-                throw e
+                // Our own voluntary stop cancels only the inner scope, so the
+                // enclosing coroutine is still active; anything else -- the
+                // caller being cancelled, or the flow cancelling itself --
+                // must propagate.
+                if (!(relayRecovered && currentCoroutineContext().isActive)) throw e
             } catch (e: Exception) {
                 monitor.failed(if (e is IOException) e.describeForUser() else e.message.orEmpty())
                 if (primarySlot == ConnectionSlot.RELAY) {
@@ -101,8 +144,14 @@ class SocketReconnector<T>(
             }
             onDisconnected()
             if (!currentCoroutineContext().isActive) break
-            delay(backoff)
-            backoff = (backoff * 2).coerceAtMost(maxBackoffMs)
+            if (relayRecovered) {
+                // Deliberate switch back, not a failure: reconnect straight
+                // away rather than serving out a backoff nothing earned.
+                backoff = initialBackoffMs
+            } else {
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(maxBackoffMs)
+            }
             onBeforeReconnect()
         }
     }

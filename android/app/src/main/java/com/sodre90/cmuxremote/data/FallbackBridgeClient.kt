@@ -51,7 +51,10 @@ class FallbackBridgeClient(
             val slot = if (only === primaryClient) ConnectionSlot.RELAY else ConnectionSlot.DIRECT
             if (slot == ConnectionSlot.DIRECT && primaryClient != null) monitor.fallingBack(null)
             return try {
-                block(only).also { monitor.connected(slot) }
+                block(only).also {
+                    if (slot == ConnectionSlot.RELAY) relayHealth.markUp()
+                    monitor.connected(slot)
+                }
             } catch (e: IOException) {
                 // Report the skip: "direct failed" alone reads as though relay
                 // was fine, when in fact it was never tried this time round.
@@ -65,7 +68,12 @@ class FallbackBridgeClient(
 
         monitor.connecting(ConnectionSlot.RELAY)
         return try {
-            block(primaryClient).also { monitor.connected(ConnectionSlot.RELAY) }
+            block(primaryClient).also {
+                // Proof the relay works, which is what wakes a socket
+                // subscription still parked on DIRECT -- see RelayHealth.recoveries.
+                relayHealth.markUp()
+                monitor.connected(ConnectionSlot.RELAY)
+            }
         } catch (e: IOException) {
             if (fallbackClient == null) throw e
             if (e is BridgeException && e.code in 400..499) throw e

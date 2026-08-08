@@ -1,5 +1,9 @@
 package com.sodre90.cmuxremote.data
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 /**
  * Tracks whether RELAY has recently proven unreachable, so that knowledge is
  * learned once and shared by every caller instead of being rediscovered
@@ -13,11 +17,48 @@ class RelayHealth(private val penaltyMs: Long = DEFAULT_PENALTY_MS) {
 
     @Volatile private var downUntil: Long = 0L
 
+    private val _recoveries = MutableStateFlow(0L)
+
+    /**
+     * Increments each time RELAY goes from known-down back to proven-working.
+     *
+     * Long-lived socket subscriptions pick their slot once per connect and
+     * only re-pick when the socket drops, so a healthy DIRECT socket opened
+     * during a penalty window would otherwise stay on DIRECT forever (see
+     * [SocketReconnector]). This is the signal to come back.
+     *
+     * It advances on *proven* recovery -- a real call the relay actually
+     * served -- not on the penalty window merely lapsing. Expiry alone means
+     * only "worth retrying"; acting on it would drop a working DIRECT socket
+     * every [DEFAULT_PENALTY_MS] for as long as the relay stayed down.
+     *
+     * A counter rather than an event stream so consumers can read it *before*
+     * committing to DIRECT and then wait for it to differ. An edge-triggered
+     * signal would be lost in the gap between picking the slot and
+     * subscribing, parking that socket on DIRECT until the next recovery --
+     * which, since [markUp] only reports the down-to-up edge, may never come.
+     */
+    val recoveries: StateFlow<Long> = _recoveries.asStateFlow()
+
     fun isDown(now: Long): Boolean = now < downUntil
 
     /** Records that the primary (RELAY) just proved unreachable at [now]. */
+    @Synchronized
     fun markDown(now: Long) {
         downUntil = now + penaltyMs
+    }
+
+    /**
+     * Records that RELAY just served a call successfully: clears any penalty
+     * and, if one was outstanding, advances [recoveries]. Idempotent -- a
+     * steady stream of successful relay calls advances nothing, because only
+     * the down-to-up edge is interesting.
+     */
+    @Synchronized
+    fun markUp() {
+        if (downUntil == 0L) return
+        downUntil = 0L
+        _recoveries.value += 1
     }
 
     companion object {

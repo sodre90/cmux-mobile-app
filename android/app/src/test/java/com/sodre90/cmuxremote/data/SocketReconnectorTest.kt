@@ -303,4 +303,91 @@ class SocketReconnectorTest {
         delay(5_000)
         assertEquals(1, attempts)
     }
+
+    /**
+     * cmux-app-424: a healthy DIRECT socket never disconnects, so without a
+     * recovery watch it would never re-pick a slot and would stay on DIRECT
+     * long after a momentary relay blip.
+     */
+    @Test
+    fun socketParkedOnDirectReturnsToRelayOnProvenRecovery() = runTest {
+        val health = RelayHealth()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime })
+        val attempts = mutableListOf<Attempt>()
+        health.markDown(currentTime)
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                attempts.add(Attempt(slot, currentTime))
+                flow { awaitCancellation() } // healthy socket: never drops
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.DIRECT, attempts.single().slot)
+
+        // The window lapsing is NOT proof: a socket must not churn every
+        // penalty window while the relay is genuinely still down.
+        delay(RelayHealth.DEFAULT_PENALTY_MS * 10)
+        assertEquals(1, attempts.size)
+
+        // The REST path reaches the relay again and reports it.
+        health.markUp()
+        delay(1)
+        assertEquals(ConnectionSlot.RELAY, attempts[1].slot)
+        job.cancelAndJoin()
+    }
+
+    /**
+     * The recovery signal is a counter read before the slot is chosen, so a
+     * recovery landing while the socket is still opening still wakes it. An
+     * edge-triggered signal would be lost in that gap -- and since only the
+     * down-to-up edge reports, no later success would report it again.
+     */
+    @Test
+    fun recoveryLandingDuringConnectIsNotMissed() = runTest {
+        val health = RelayHealth()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime })
+        val attempts = mutableListOf<Attempt>()
+        health.markDown(currentTime)
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                attempts.add(Attempt(slot, currentTime))
+                if (attempts.size == 1) health.markUp()
+                flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.DIRECT, attempts[0].slot)
+        assertEquals(ConnectionSlot.RELAY, attempts[1].slot)
+        job.cancelAndJoin()
+    }
+
+    /** A socket on DIRECT because RELAY isn't configured has nothing to
+     *  return to, and must not be torn down when RELAY recovers. */
+    @Test
+    fun directOnlySocketIsNotDisturbedByRelayRecovery() = runTest {
+        val health = RelayHealth()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime })
+        val attempts = mutableListOf<Attempt>()
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                if (slot == ConnectionSlot.RELAY) {
+                    null
+                } else {
+                    attempts.add(Attempt(slot, currentTime))
+                    flow { awaitCancellation() }
+                }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.DIRECT, attempts.single().slot)
+
+        health.markDown(currentTime)
+        health.markUp()
+        delay(1)
+        assertEquals(1, attempts.size)
+        job.cancelAndJoin()
+    }
 }
