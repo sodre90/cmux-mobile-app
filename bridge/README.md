@@ -92,16 +92,22 @@ go test ./...        # all tests run with no network and no real cmux
    # enable the site + add the `map $http_upgrade $connection_upgrade` block, reload nginx
    ```
 
+   The vhost also needs a `map $http_upgrade $connection_upgrade` block and a
+   `limit_req_zone ... zone=cmux_device_pair` block in the `http` context —
+   both are documented in the conf's header comment.
+
    If a new Mac agent will self-register (see [Agent client
    certificate](#agent-client-certificate) below), also install the no-mTLS
    bootstrap vhost — `deploy/nginx-cmux-relay-bootstrap.conf` proxies only
    `POST /tenants/register`, on a separate port (8444 in the example). The
-   main vhost above keeps `ssl_verify_client on`, unchanged, for the agent
-   tunnel and all device traffic.
+   main vhost above keeps `ssl_verify_client optional`, unchanged, for the
+   agent tunnel and all device traffic.
 
 The relay binds `127.0.0.1:8765`; nginx is the only public surface. nginx must
-**set** `X-Client-Cert-CN $ssl_client_s_dn` (never trust an inbound value) so
-the relay can route by CN.
+**set** both `X-Client-Cert-CN $ssl_client_s_dn` and `X-Client-Cert-Verify
+$ssl_client_verify` (never trust inbound values) — the relay refuses to trust
+a CN unless the verify header is `SUCCESS`, so an agent tunnel behind a vhost
+that sets only the CN is rejected every time.
 
 ### Run in a container (podman)
 
@@ -183,9 +189,11 @@ first time *it* starts:
 ## Pair a device
 
 Pairing is self-service now — no operator step, and no hand-rolled `.p12`
-client certificate. On the **home server**, once the Mac agent has
-registered (see [Agent client certificate](#agent-client-certificate)
-above):
+client certificate. Run this on the **Mac**, once the agent has registered
+(see [Agent client certificate](#agent-client-certificate) above) — it uses
+the agent's own e2e identity and session store, so running it anywhere else
+mints a second identity on the wrong host and the phone's traffic will never
+decrypt:
 
 ```bash
 cmux-bridge pair-device --config ~/.config/cmux-bridge/agent.toml
@@ -243,10 +251,13 @@ phone that scanned the QR code ever sees it. List/revoke devices and tenants
 exactly as before:
 
 ```bash
-cmux-relay devices                # list devices (tokens redacted)
-cmux-relay devices revoke <token>
-cmux-relay tenants list            # created/revoked per tenant
-cmux-relay tenants revoke <id>     # devices stop authenticating immediately;
+# --config must match the running relay's; without it these default to
+# ~/.config/cmux-relay/config.toml and silently operate on an empty store.
+cmux-relay devices --config /etc/cmux-relay/config.toml            # list devices (tokens redacted)
+cmux-relay devices revoke <token> --config /etc/cmux-relay/config.toml
+cmux-relay tenants list --config /etc/cmux-relay/config.toml       # created/revoked per tenant
+cmux-relay tenants revoke <id> --config /etc/cmux-relay/config.toml
+                                   # devices stop authenticating immediately;
                                    # the agent is refused on its next reconnect
 ```
 
@@ -258,8 +269,9 @@ connection ends on its own (a network blip, the agent process restarting, or
 the relay itself restarting).
 
 There is no manual-pairing fallback: `auth.Issue` always requires a device
-public key, so a phone paired under the old `cmux-relay pair` flow loses
-relay access the moment this ships and must be re-paired via `pair-device`.
+public key, and the old `cmux-relay pair` subcommand is gone. Any phone still
+paired under that flow lost relay access and must be re-paired via
+`pair-device`.
 
 ## Direct (Tailscale) mode
 
@@ -267,7 +279,10 @@ An optional, additive alternative to the relay above: if your Mac and phone
 are both on the same [Tailscale](https://tailscale.com) tailnet, the phone
 can talk straight to the Mac agent with no relay and no home server in the
 path. The relay keeps working exactly as before — this is a second listener,
-not a replacement, and push notifications still require the relay.
+not a replacement. Direct mode has its own optional push, configured with
+`fcm_project_id` + `fcm_credentials` in `agent.toml` (same Firebase project as
+the relay's, but set separately because the agent keeps its own device store);
+leave them empty to disable it.
 
 1. Install Tailscale on the Mac (Mac App Store, or `brew install --cask
    tailscale`) and run `tailscale up`.
@@ -285,8 +300,11 @@ not a replacement, and push notifications still require the relay.
    URL and code manually) using the printed
    `https://<mac>.<tailnet>.ts.net:8443` URL and code.
 
-Switching between relay and direct mode is a manual re-pair (Settings screen
-→ enter the other URL/code) — there's no automatic fallback in v1.
+Relay and direct are two independent pairing slots on the app's Connections
+screen, and you can fill both. With both paired the app tries the relay first
+and transparently fails over to direct when it's unreachable (remembering
+relay health so it stops re-trying a dead relay on every call), so pairing
+both is the recommended setup rather than switching between them.
 
 ## Edge: nginx mutual TLS
 
@@ -312,13 +330,18 @@ To get "agent needs you" notifications:
 cmux redacts the actual prompt text in its event stream, so push triggers on
 the Claude Code hook name (`Notification` covers permission prompts and idle
 "waiting for input"; `AskUserQuestion` is an explicit blocking choice) rather
-than on structured feed content. The notification body is enriched with the
-workspace's live title + status preview (e.g. "Check ticket CB-33546: Claude
-is waiting for your input") — the richest context cmux exposes for a prompt
-whose text it hides. Tapping the notification deep-links to that workspace's
-terminal (its one pane directly, or the sessions list when it has several) —
-cmux never reports which pane raised the prompt, so pane-exact linking isn't
-possible.
+than on structured feed content. The body, however, comes from `feed.list`,
+which does carry the real prompt text: the newest pending item for that
+workspace's cwd, either the question prompt verbatim or "Wants to run
+<tool>: <command>" for a permission request. It falls back to a recognized
+agent-status line and then to a generic phrase — an unrecognized cmux preview
+is dropped rather than shown, so cmux's own system banners can't masquerade
+as the reason an agent needs you. The payload is e2e-encrypted per device;
+the relay fans it out without being able to read it.
+
+Tapping the notification deep-links to that workspace's terminal (its one
+pane directly, or the sessions list when it has several) — cmux never reports
+which pane raised the prompt, so pane-exact linking isn't possible.
 
 ## API
 
@@ -336,8 +359,10 @@ routes require `Authorization: Bearer <device-token>`. A `503 {"error":
 | POST | `/sessions/{id}/rename` | set a workspace's title in cmux: `{title}` |
 | POST | `/sessions/{id}/yolo-mode` | set a workspace's auto-reply mode for permission prompts: `{mode}` (`""` \| `always` \| `all` \| `bypass`) |
 | POST | `/devices/register` | store this device's FCM token: `{fcm_token}` |
+| POST | `/devices/test-push` | send a test notification to this device |
 | POST | `/devices/pair` | redeem a pairing code (no bearer token yet): `{code, name, device_pubkey}` |
 | GET  | `/devices/pair-info/{code}` | resolve a pairing code's agent pubkey for manual entry (no auth) |
+| GET  | `/healthz` | relay liveness check (no auth) |
 
 Terminal frames carry cmux's `render_grid` (`format: "cmux.render-grid.v1"`)
 verbatim; the client renders it as a styled cell grid.
@@ -360,8 +385,9 @@ never touch the real socket.
 
 **YOLO mode** is an opt-in, per-workspace auto-reply for permission prompts,
 enabled via `POST /sessions/{id}/yolo-mode`. The mode (`always`/`all`/
-`bypass`) is persisted locally on the Mac agent (`~/.config/cmux-bridge/yolo.json`,
-keyed by workspace ID — never sent to cmux itself). When a workspace with a
+`bypass`) is persisted locally on the Mac agent (a SQLite store at
+`~/.config/cmux-bridge/yolo.db`, overridable with `yolo_store`, keyed by
+workspace ID — never sent to cmux itself). When a workspace with a
 mode set gets a pending `permissionRequest`-kind feed item, the agent replies to it
 with that mode automatically, with no phone round-trip. `bypass` mirrors
 Claude Code's own `--dangerously-skip-permissions`: cmux's wrapper already

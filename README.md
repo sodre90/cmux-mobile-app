@@ -53,8 +53,9 @@ launchd plist, nginx vhosts, container files, example configs) are in
 ## How it fits together
 
 1. **`cmux-relay`** runs on your home server behind nginx with `ssl_verify_client
-   on`. It's its own certificate authority — it mints and signs every agent and
-   device cert itself — and serves many independent tenants (Mac agents) at
+   optional` (the agent presents a client cert; devices don't). It's its own
+   certificate authority — it mints and signs every agent and device cert
+   itself — and serves many independent tenants (Mac agents) at
    once: it owns device pairing/tokens, routes requests by client-cert CN, and
    (optionally) sends FCM push. It binds loopback only — nginx is the sole public
    surface.
@@ -118,6 +119,10 @@ Defense in depth, all the way to the cmux socket:
   WebSocket frame after that is AEAD-encrypted with a replay-protected
   counter, so the relay (and anyone who compromises the relay host) can route
   traffic by tenant but never read its contents.
+- **Fingerprint confirmation at pairing** — the phone and the Mac each display
+  a short fingerprint of the exchanged public keys, and pairing only completes
+  once a human confirms they match. Without this the relay, which brokers the
+  key exchange, could substitute its own key and read everything.
 - **`X-Relay-Token` shared secret** — injected by the relay so the agent only
   honors relay-originated requests.
 - The relay binds loopback only; **the Mac agent has no listening port at all.**
@@ -129,8 +134,9 @@ Defense in depth, all the way to the cmux socket:
   colors, cursor, and scrollback; fit-to-width sizing, pinch-to-zoom, a word-wrap
   toggle, text selection, a compact `←↑↓→` D-pad, an Enter key, and DECCKM-aware
   cursor keys. Input/paste/resize go upstream; replay + live output come down.
-- **Agent inbox** — answer blocking prompts (permission requests, plan approvals,
-  questions) via `POST /feed/{id}/reply`.
+- **Agent inbox** — answer blocking prompts (permission requests and questions)
+  via `POST /feed/{id}/reply`. Plan-approval (`exitPlan`) prompts aren't wired
+  into the Inbox yet — their reply schema isn't confirmed live.
 - **Rename a workspace** — long-press a workspace on the phone to set its
   persistent display title in cmux, via `POST /sessions/{id}/rename`.
 - **YOLO mode** — long-press a workspace to set a per-workspace auto-reply

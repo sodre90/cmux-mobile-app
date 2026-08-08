@@ -12,3 +12,7 @@ cmux_bin    = "cmux"
 # this requires.
 # direct_listen     = ":8443"
 # direct_auth_store = "~/.config/cmux-bridge/direct-auth.db"
+# Direct-mode push. Same Firebase project as the relay's, but set here too
+# because the agent keeps its own device store. Empty disables direct push.
+# fcm_project_id  = "your-firebase-project-id"
+# fcm_credentials = "~/.config/cmux-bridge/fcm-service-account.json"

@@ -15,8 +15,11 @@ pairing), so the relay can route traffic but not read it.
 
 ## Requirements
 
-- Android Studio (Ladybug or newer) with the Android SDK (compileSdk 35).
-- JDK 17 (the Gradle toolchain targets 17).
+- Android Studio (Narwhal 2025.1 or newer — the project builds with AGP 8.13)
+  with the Android SDK (compileSdk 36, minSdk 26).
+- JDK 21+. App code targets JVM 17, but a test-only dependency
+  (`lazysodium-java`) ships Java 21 class files, so `testDebugUnitTest` needs a
+  21+ runtime.
 - A running `cmux-bridge` reachable through your nginx mTLS edge — see
   [`bridge/README.md`](../bridge/README.md). The phone must be able to reach that
   DNS name (over the internet or your LAN).
@@ -70,10 +73,26 @@ The app resolves the agent's public key via the relay's `GET
 /devices/pair-info/{code}` and completes the exact same handshake as the QR
 path from there.
 
+### Confirm the fingerprint (both paths)
+
+Before either path completes, the phone shows a short fingerprint and waits
+for you to confirm it, while `pair-device` prints the same fingerprint on the
+Mac and asks `Confirm? [y/N]:`. **Compare the two and only accept if they
+match** — this is what stops the relay from swapping in its own key and
+reading your traffic. Anything other than `y` on the Mac aborts the pairing.
+
 Either way, once pairing succeeds the app moves to the sessions list; the
 start screen on subsequent launches is the sessions list whenever a bridge
 config is already present. A pairing code is single-use and expires (10
 minutes) — if it's stale, generate a fresh one with `pair-device` and retry.
+
+### Direct (Tailscale) mode and dual pairing
+
+The Connections screen holds two independent slots — a relay pairing and a
+direct (Tailscale) pairing — and you can fill both. When both are paired the
+app tries the relay first and transparently fails over to direct, so pairing
+both is the recommended setup. See
+[`bridge/README.md`](../bridge/README.md) for the agent side.
 
 ## Push notifications (optional)
 
@@ -94,21 +113,6 @@ posts a high-priority notification that deep-links into the exact workspace
 that needs attention — opening its terminal directly when it has a single
 pane, or the sessions list (with that workspace's attention stripe visible)
 when it has several.
-
-## Known gaps / assumptions
-
-This point could not be confirmed against a live cmux prompt while building;
-verify it once connected and adjust if needed:
-
-- **Feed reply `request_id`.** The bridge reads `request_id` from the reply body.
-  cmux's exact reply param names are unconfirmed, so the inbox currently sends the
-  feed id as `request_id` and params `{"decision":"approve"|"deny"}` for
-  permission/exit-plan prompts and `{"answer": <text>}` for questions.
-
-(Two earlier open questions are now resolved: workspace id and terminal
-surface id are deliberately distinct — see the workspace→panes model in
-`GET /sessions`'s `terminals[]` — and render-grid colors are confirmed
-`#rrggbb`/`#aarrggbb` hex strings, verified live.)
 
 ## Out of scope (for now)
 
