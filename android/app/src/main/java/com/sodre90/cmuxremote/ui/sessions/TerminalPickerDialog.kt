@@ -85,12 +85,26 @@ private fun TerminalPickerDialogMultiWorkspacePreview() {
                 Workspace(
                     id = "w1",
                     title = "Review PR comments",
-                    terminals = listOf(TerminalPane(id = "t-1", title = "Review PR comments", ready = true, kind = "claude")),
+                    terminals = listOf(
+                        TerminalPane(
+                            id = "t-1",
+                            title = "Review PR comments",
+                            ready = true,
+                            kind = "claude",
+                        ),
+                    ),
                 ),
                 Workspace(
                     id = "w2",
                     title = "OpenStack security group",
-                    terminals = listOf(TerminalPane(id = "t-2", title = "OpenStack security group", ready = true, kind = "claude")),
+                    terminals = listOf(
+                        TerminalPane(
+                            id = "t-2",
+                            title = "OpenStack security group",
+                            ready = true,
+                            kind = "claude",
+                        ),
+                    ),
                 ),
             ),
             onSelect = {},

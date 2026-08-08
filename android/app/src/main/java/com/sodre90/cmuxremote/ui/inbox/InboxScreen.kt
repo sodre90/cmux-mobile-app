@@ -310,7 +310,8 @@ private fun InboxRowPermissionRequestPreview() {
                 title = "Bash",
                 cwd = "/Users/dev/projects/cmux-app",
                 toolName = "Bash",
-                toolInput = """{"command":"rm -f /Users/dev/projects/cmux-app/.git/index.lock","description":"Remove stale lock file"}""",
+                toolInput = """{"command":"rm -f /Users/dev/projects/cmux-app/.git/index.lock",""" +
+                    """"description":"Remove stale lock file"}""",
             ),
             onSend = {},
             onApprovePermission = {},
