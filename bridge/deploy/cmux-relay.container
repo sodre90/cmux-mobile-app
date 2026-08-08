@@ -1,0 +1,59 @@
+# Podman Quadlet unit for cmux-relay — systemd manages the container directly,
+# with no long-running compose process and no separate restart policy.
+#
+# Requires podman 4.4+ (quadlet). On older podman, or on Docker, use
+# docker-compose.yml instead — both deployment paths are supported and produce
+# the same container from deploy/Containerfile.
+#
+# Install as a rootless USER unit (recommended — the relay needs no root):
+#
+#   podman build -t localhost/cmux-relay:latest -f deploy/Containerfile .
+#   mkdir -p ~/.config/containers/systemd
+#   cp deploy/cmux-relay.container ~/.config/containers/systemd/
+#   # edit the config.toml path below to point at your own copy
+#   systemctl --user daemon-reload
+#   systemctl --user start cmux-relay
+#   loginctl enable-linger $USER      # so it survives logout / starts at boot
+#
+# For a system-wide unit instead, drop this in /etc/containers/systemd/ and use
+# systemctl without --user. Quadlet generates the .service; never edit or enable
+# the generated unit directly — edit this file and re-run daemon-reload.
+
+[Unit]
+Description=cmux-relay - rendezvous relay for remote cmux access
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/cmux-relay:latest
+ContainerName=cmux-relay
+# The image is built locally, not pulled from a registry — build it on the host
+# that runs it (see Containerfile: do not ship it across architectures).
+Pull=never
+
+# SECURITY: loopback only by default. Publish on 0.0.0.0 ONLY when the nginx
+# mTLS edge runs on a different host, and ONLY together with edge_token set in
+# config.toml plus a firewall restricting this port to that host. Never
+# port-forward it on the router.
+PublishPort=127.0.0.1:8765:8765
+
+# Point the first path at your own 0600 config.toml (from relay.example.toml).
+Volume=/home/YOUR_USER/cmux-relay/config.toml:/etc/cmux-relay/config.toml:ro,Z
+# Named volume holding the device/token store. Migrating from docker-compose?
+# Use the volume compose already created — cmux-relay_relay-data — instead of
+# this name, or the relay comes up with no paired devices.
+Volume=cmux-relay-data:/data
+
+# Liveness probe (mirrors the compose healthcheck).
+HealthCmd=/usr/bin/wget -qO- http://127.0.0.1:8765/healthz
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthOnFailure=kill
+
+[Service]
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

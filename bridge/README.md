@@ -111,23 +111,59 @@ that sets only the CN is rejected every time.
 
 ### Run in a container (podman)
 
-`docker-compose.yml` + `deploy/Containerfile` build and run the relay in a
-rootless container. Copy this tree to the host, drop a `config.toml` beside the
-compose file (from `deploy/relay.example.toml`, with a real `relay_token`,
+Two supported ways to run the same container image, both built from
+`deploy/Containerfile`. Pick by what your host's podman supports:
+
+- **Quadlet** (`deploy/cmux-relay.container`) — systemd manages the container
+  directly, no long-running compose process. Needs **podman 4.4+**.
+- **Compose** (`docker-compose.yml`) — works on older podman and on Docker.
+
+Either way, first drop a `config.toml` on the host (from
+`deploy/relay.example.toml`, with a real `relay_token`,
 `token_store = "/data/store.db"`, and `ca_cert`/`ca_key` under `/data/` too —
-the example file's `/var/lib/cmux-relay/` paths are for the systemd unit and
-aren't part of this container's persisted `relay-data` volume), then:
+the example file's `/var/lib/cmux-relay/` paths are for the native systemd
+unit and aren't part of the container's persisted data volume). The image
+builds on the host; don't ship it across architectures.
+
+#### Quadlet
+
+```bash
+podman build -t localhost/cmux-relay:latest -f deploy/Containerfile .
+mkdir -p ~/.config/containers/systemd
+cp deploy/cmux-relay.container ~/.config/containers/systemd/
+# edit the config.toml path in that file to point at your copy
+systemctl --user daemon-reload
+systemctl --user start cmux-relay
+loginctl enable-linger $USER    # survive logout, start at boot
+```
+
+Quadlet generates the `.service` unit from the `.container` file — edit the
+`.container` and re-run `daemon-reload`; never edit or `enable` the generated
+unit. Drop the file in `/etc/containers/systemd/` and omit `--user` for a
+system-wide unit instead.
+
+#### Compose
 
 ```bash
 podman-compose up -d --build
+```
+
+Drop `config.toml` beside the compose file for this path.
+
+#### Either way
+
+```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8765/healthz   # 200
 ```
 
-The image builds on the host (don't ship it across architectures). The port is
-published on loopback only; the device store persists in the `relay-data`
-volume. Pair devices by running `cmux-bridge pair-device` on the Mac agent
-(see [Pair a device](#pair-a-device) below) — the relay side needs no manual
-step.
+The port is published on loopback only; the device store persists in a named
+volume. Note the two paths use **different volume names** — compose creates
+`cmux-relay_relay-data`, the quadlet template uses `cmux-relay-data` — so when
+migrating from compose to quadlet, point the quadlet's `Volume=` at the
+existing compose volume or the relay starts up with no paired devices.
+
+Pair devices by running `cmux-bridge pair-device` on the Mac agent (see [Pair
+a device](#pair-a-device) below) — the relay side needs no manual step.
 
 ## Agent (Mac)
 

@@ -47,8 +47,8 @@ reconnects (automatic, backoff-capped), everything resumes.
 | [`bridge/`](bridge/) | Two Go binaries: **`cmux-relay`** (home-server rendezvous, auth, push) and **`cmux-bridge agent`** (runs on the Mac, dials the relay) | Go 1.26 | [bridge/README.md](bridge/README.md) |
 
 Both bridge binaries live in `bridge/cmd/`; deployment templates (systemd unit,
-launchd plist, nginx vhosts, container files, example configs) are in
-`bridge/deploy/`.
+podman quadlet, launchd plist, nginx vhosts, container files, example configs)
+are in `bridge/deploy/`.
 
 ## How it fits together
 
@@ -165,9 +165,14 @@ bridge/               Go module: github.com/sodre90/cmux-bridge
   cmd/cmux-relay/       home-server rendezvous daemon
   cmd/cmux-bridge/      Mac agent (dials the relay)
   internal/             server, cmux CLI client, relay, tunnel, auth, push, …
-  deploy/               systemd, launchd, nginx, container, example configs
+  deploy/               systemd, quadlet, launchd, nginx, container, example configs
 docs/                 design specs and implementation plans
+articles/             longer-form write-ups of features and components
+research/             exploratory notes, not authoritative
+.beads/               bd issue tracker state
 THIRD_PARTY_LICENSES/ bundled-asset licenses (e.g. JetBrains Mono)
+CHANGELOG.md          notable changes since the repo went public
+CLAUDE.md, AGENTS.md  operating instructions for coding agents
 ```
 
 ## Relationship to cmux & licensing
