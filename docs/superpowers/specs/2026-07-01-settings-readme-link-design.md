@@ -3,6 +3,9 @@
 **Date:** 2026-07-01
 **Component:** Android app — Settings screen
 **File:** `android/app/src/main/java/com/sodre90/cmuxremote/ui/settings/SettingsScreen.kt`
+**Status:** not implemented. URLs below were updated 2026-08-08 for the repo
+rename (`sodre90/cmux-app` → `sodre90/cmux-mobile-app`); the design itself is
+unchanged from 2026-07-01.
 
 ## Overview
 
@@ -22,7 +25,7 @@ Surfacing a link to this document from the Settings screen gives new users a pat
 
 **Behavior:** Tapping it launches an implicit `Intent(Intent.ACTION_VIEW, Uri.parse(url))` pointing to:
 ```
-https://github.com/sodre90/cmux-app
+https://github.com/sodre90/cmux-mobile-app
 ```
 This opens in the device's default browser. No new Android permissions are required (the app already declares `INTERNET`; browser launch via implicit intent doesn't need it anyway).
 
@@ -52,7 +55,7 @@ import androidx.compose.material3.TextButton
 TextButton(
     onClick = {
         context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/sodre90/cmux-app")),
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/sodre90/cmux-mobile-app")),
         )
     },
 ) {
@@ -65,7 +68,7 @@ TextButton(
 ## Success Criteria
 
 - [ ] "Setup guide" link/button appears at the top of the Settings screen, above the Bridge base URL field
-- [ ] Tapping it opens `https://github.com/sodre90/cmux-app` in the device's browser
+- [ ] Tapping it opens `https://github.com/sodre90/cmux-mobile-app` in the device's browser
 - [ ] No new Android permissions required
 - [ ] No changes to `SettingsViewModel` or persisted settings data
 - [ ] Existing Settings screen functionality (all fields, save button) unaffected

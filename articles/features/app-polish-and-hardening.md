@@ -34,7 +34,7 @@ Four unrelated small-scope items grouped only by being minor app-polish or harde
 
 **Key design decisions:** link out to GitHub rather than render Markdown in-app; a secondary-weight `TextButton`, not a filled button; no changes to `SettingsViewModel` or persisted settings; no deep link to a specific section; requires no new Android permissions.
 
-**Status:** design spec only (no accompanying implementation plan among these docs); its own success-criteria checklist is entirely unchecked. The spec's target URL, `github.com/sodre90/cmux-app`, predates the later repo rename to `sodre90/cmux-mobile-app` — if this was ever implemented, the link would need updating, but nothing in the spec confirms implementation happened.
+**Status:** design spec only (no accompanying implementation plan among these docs); its own success-criteria checklist is entirely unchecked. The spec's target URL predated the later repo rename to `sodre90/cmux-mobile-app`; it was corrected in the spec on 2026-08-08. Confirmed unimplemented — no GitHub URL appears anywhere in `android/app/src/main/`.
 
 ### API versioning policy
 
