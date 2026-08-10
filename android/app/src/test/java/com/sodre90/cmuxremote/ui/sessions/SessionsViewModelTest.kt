@@ -14,6 +14,7 @@ import com.sodre90.cmuxremote.data.WorkspaceOrderGateway
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
 import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
 import com.sodre90.cmuxremote.data.e2e.ReplayWindow
 import com.sodre90.cmuxremote.data.e2e.nonce
 import com.sodre90.cmuxremote.ui.UiState
@@ -48,9 +49,9 @@ private class RecordingSession(private val secret: ByteArray) : PairedSession {
     private var window = ReplayWindow()
     override fun sharedSecret(): ByteArray = secret
     override fun nextSendCounter(): Long = error("not used by these tests")
-    override fun canAcceptRecvCounter(n: Long): Boolean = window.canAccept(n)
-    override fun commitRecvCounter(n: Long) {
-        window = window.commit(n)
+    override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T {
+        if (!window.canAccept(n)) throw ReplayRejectedException(n, window.highestSeen)
+        return decrypt(secret).also { window = window.commit(n) }
     }
 }
 

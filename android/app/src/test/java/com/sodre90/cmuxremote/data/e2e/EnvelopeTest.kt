@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
 import org.junit.Test
 import java.util.Base64
@@ -17,8 +18,15 @@ class FakeSession(private var secret: ByteArray?) : PairedSession {
 
     override fun sharedSecret(): ByteArray? = secret
     override fun nextSendCounter(): Long = sendCounter++
-    override fun canAcceptRecvCounter(n: Long): Boolean = window.canAccept(n)
-    override fun commitRecvCounter(n: Long) { window = window.commit(n) }
+    override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T {
+        val key = secret ?: throw NotPairedException()
+        if (!window.canAccept(n)) throw ReplayRejectedException(n, window.highestSeen)
+        return decrypt(key).also { window = window.commit(n) }
+    }
+
+    /** Fast-forwards the receive window, standing in for the state a
+     *  now-superseded pairing left behind (see cmux-app-a3g). */
+    fun advanceRecvWindowTo(n: Long) { window = window.commit(n) }
 }
 
 class EnvelopeTest {
@@ -89,6 +97,26 @@ class EnvelopeTest {
             fail("expected DecryptFailedException on replay")
         } catch (e: DecryptFailedException) {
             // expected
+        }
+    }
+
+    @Test
+    fun decryptBodyNamesTheCounterAndWindowWhenAStaleWindowRefusesAFrame() {
+        // decryptBody has its own counter gate independent of decryptFrame's,
+        // so the same stale-window diagnosis has to hold on the HTTP path too
+        // (cmux-app-a3g) -- the REST calls fail exactly as the sockets do.
+        val secret = ByteArray(32) { it.toByte() }
+        val receiver = FakeSession(secret)
+        receiver.advanceRecvWindowTo(500_878L)
+
+        val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, 3L), "x".toByteArray())
+        val envelope = """{"v":1,"n":3,"ct":"${Base64.getEncoder().encodeToString(ct)}"}"""
+
+        try {
+            decryptBody(receiver, cipher, envelope.toByteArray(Charsets.UTF_8))
+            fail("expected the stale window to reject this body")
+        } catch (e: ReplayRejectedException) {
+            assertEquals("replay_rejected: counter=3 highest_seen=500878", e.message)
         }
     }
 

@@ -114,7 +114,9 @@ fun pairingFingerprint(pubkeyA: ByteArray, pubkeyB: ByteArray): String {
     )
 }
 
-class DecryptFailedException : Exception("decrypt_failed")
+/** Open, and with a settable message, so a rejection that happens before any
+ *  AEAD work can name itself -- see [ReplayRejectedException]. */
+open class DecryptFailedException(message: String = "decrypt_failed") : Exception(message)
 
 /**
  * XChaCha20-Poly1305 AEAD via lazysodium (BouncyCastle has no XChaCha

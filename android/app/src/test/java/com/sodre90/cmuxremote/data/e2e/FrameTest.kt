@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.data.e2e
 import com.goterl.lazysodium.LazySodiumJava
 import com.goterl.lazysodium.SodiumJava
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -104,6 +105,98 @@ class FrameTest {
         live.copyInto(liveFrame, 8)
 
         assertArrayEquals("live".toByteArray(), decryptFrame(session, cipher, liveFrame))
+    }
+
+    @Test
+    fun aStaleReplayWindowReportsTheCounterAndTheWindowRatherThanACryptoFailure() {
+        // cmux-app-a3g. A window left far ahead by a superseded pairing
+        // refuses every frame of the new one. The bytes are perfectly valid,
+        // so reporting this as "decrypt_failed" points the reader at crypto
+        // when the cause is stale local counter state -- the error must name
+        // both numbers so the gap between them is visible at a glance.
+        val secret = ByteArray(32) { it.toByte() }
+        val session = FakeSession(secret)
+        session.advanceRecvWindowTo(246_410L)
+
+        val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, 0L), "x".toByteArray())
+        val frame = ByteArray(8 + ct.size)
+        ByteBuffer.wrap(frame, 0, 8).putLong(0L)
+        ct.copyInto(frame, 8)
+
+        try {
+            decryptFrame(session, cipher, frame)
+            fail("expected the stale window to reject this frame")
+        } catch (e: ReplayRejectedException) {
+            assertEquals("replay_rejected: counter=0 highest_seen=246410", e.message)
+        }
+    }
+
+    @Test
+    fun anAeadFailureIsNotReportedAsAReplayRejection() {
+        // The other half of the distinction: a genuinely bad frame must stay
+        // a plain DecryptFailedException. Without this, widening the parent
+        // type could quietly let every AEAD failure read as "replay_rejected"
+        // and move the diagnostic dead end rather than remove it.
+        val session = FakeSession(ByteArray(32) { it.toByte() })
+        val ct = cipher.seal(ByteArray(32) { (it + 1).toByte() }, nonce(DIR_AGENT_TO_DEVICE, 0L), "x".toByteArray())
+        val frame = ByteArray(8 + ct.size)
+        ByteBuffer.wrap(frame, 0, 8).putLong(0L)
+        ct.copyInto(frame, 8)
+
+        try {
+            decryptFrame(session, cipher, frame)
+            fail("expected the forged frame to fail the AEAD")
+        } catch (e: ReplayRejectedException) {
+            fail("an AEAD failure must not masquerade as a replay rejection: ${e.message}")
+        } catch (e: DecryptFailedException) {
+            assertEquals("decrypt_failed", e.message)
+        }
+    }
+
+    @Test
+    fun decryptFrameOpensWithTheKeyHandedToItUnderTheLockNotOneItReadForItself() {
+        // Holding the lock across check/decrypt/commit only helps if the key
+        // is read inside it too. A caller that grabs sharedSecret() first can
+        // still open a superseded pairing's frame -- it authenticates under
+        // the key that caller captured -- and commit its far-ahead counter
+        // into the window a re-pairing had just reset, which is precisely
+        // cmux-app-a3g. Model that split: sharedSecret() reports the stale
+        // key while the guarded callback is handed the live one, so only a
+        // decrypt that uses the callback's key can succeed.
+        val liveKey = ByteArray(32) { it.toByte() }
+        val supersededKey = ByteArray(32) { (it + 1).toByte() }
+        val session = object : PairedSession {
+            override fun sharedSecret(): ByteArray = supersededKey
+            override fun nextSendCounter(): Long = error("not used by this test")
+            override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T = decrypt(liveKey)
+        }
+
+        val ct = cipher.seal(liveKey, nonce(DIR_AGENT_TO_DEVICE, 0L), "live".toByteArray())
+        val frame = ByteArray(8 + ct.size)
+        ByteBuffer.wrap(frame, 0, 8).putLong(0L)
+        ct.copyInto(frame, 8)
+
+        assertArrayEquals("live".toByteArray(), decryptFrame(session, cipher, frame))
+    }
+
+    @Test
+    fun decryptFrameNeverRunsTheCipherForACounterTheWindowRefused() {
+        // The commit-side guarantee's mirror: a forged counter must not reach
+        // the AEAD at all, so it can't burn a counter the real sender has yet
+        // to use.
+        val session = object : PairedSession {
+            override fun sharedSecret(): ByteArray = ByteArray(32)
+            override fun nextSendCounter(): Long = error("not used by this test")
+            override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T =
+                throw ReplayRejectedException(n, 246_410L)
+        }
+
+        try {
+            decryptFrame(session, cipher, ByteArray(40))
+            fail("expected the refused counter to propagate")
+        } catch (e: ReplayRejectedException) {
+            assertEquals("replay_rejected: counter=0 highest_seen=246410", e.message)
+        }
     }
 
     @Test(expected = DecryptFailedException::class)

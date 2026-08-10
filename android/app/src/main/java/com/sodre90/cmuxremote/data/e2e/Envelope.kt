@@ -38,14 +38,15 @@ fun decryptBody(session: PairedSession, cipher: Cipher, envelopeBytes: ByteArray
         throw DecryptFailedException()
     }
     if (envelope.v != 1) throw DecryptFailedException()
-    val secret = session.sharedSecret() ?: throw NotPairedException()
-    if (!session.canAcceptRecvCounter(envelope.n)) throw DecryptFailedException()
+    // Decoded before the window is consulted: a malformed base64 body is a
+    // bad envelope, not a counter problem, and it must not be reported as
+    // one now that the two are told apart.
     val ct = try {
         Base64.getDecoder().decode(envelope.ct)
     } catch (e: Exception) {
         throw DecryptFailedException()
     }
-    val pt = cipher.open(secret, nonce(DIR_AGENT_TO_DEVICE, envelope.n), ct)
-    session.commitRecvCounter(envelope.n)
-    return pt
+    return session.validateAndCommitRecvCounter(envelope.n) { secret ->
+        cipher.open(secret, nonce(DIR_AGENT_TO_DEVICE, envelope.n), ct)
+    }
 }

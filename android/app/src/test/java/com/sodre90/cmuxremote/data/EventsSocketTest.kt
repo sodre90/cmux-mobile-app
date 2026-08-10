@@ -5,6 +5,7 @@ import com.goterl.lazysodium.SodiumJava
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
 import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
 import com.sodre90.cmuxremote.data.e2e.ReplayWindow
 import com.sodre90.cmuxremote.data.e2e.nonce
 import kotlinx.coroutines.flow.take
@@ -30,8 +31,10 @@ private class SendOnlySession(private val secret: ByteArray) : PairedSession {
     private val window = ReplayWindow()
     override fun sharedSecret(): ByteArray = secret
     override fun nextSendCounter(): Long = counter++
-    override fun canAcceptRecvCounter(n: Long): Boolean = window.canAccept(n)
-    override fun commitRecvCounter(n: Long) {}
+    override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T {
+        if (!window.canAccept(n)) throw ReplayRejectedException(n, window.highestSeen)
+        return decrypt(secret)
+    }
 }
 
 class EventsSocketTest {

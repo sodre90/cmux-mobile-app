@@ -19,15 +19,15 @@ fun encryptFrame(session: PairedSession, cipher: Cipher, plaintext: ByteArray): 
 
 /**
  * Decrypts an incoming WS message. Phone's incoming direction is
- * DIR_AGENT_TO_DEVICE. Two-phase counter check, same as [decryptBody] --
- * mirrors bridge/internal/e2e/frame.go's DecodeFrame/DecryptFrame.
+ * DIR_AGENT_TO_DEVICE. The window check, the AEAD attempt and the commit run
+ * as one atomic step -- mirrors bridge/internal/e2e/frame.go's
+ * DecodeFrame/DecryptFrame, which wraps the same three in the agent's
+ * ValidateAndCommitRecvCounter.
  */
 fun decryptFrame(session: PairedSession, cipher: Cipher, frame: ByteArray): ByteArray {
     if (frame.size < 8) throw DecryptFailedException()
     val n = ByteBuffer.wrap(frame, 0, 8).long
-    val secret = session.sharedSecret() ?: throw NotPairedException()
-    if (!session.canAcceptRecvCounter(n)) throw DecryptFailedException()
-    val pt = cipher.open(secret, nonce(DIR_AGENT_TO_DEVICE, n), frame.copyOfRange(8, frame.size))
-    session.commitRecvCounter(n)
-    return pt
+    return session.validateAndCommitRecvCounter(n) { secret ->
+        cipher.open(secret, nonce(DIR_AGENT_TO_DEVICE, n), frame.copyOfRange(8, frame.size))
+    }
 }

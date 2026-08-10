@@ -17,8 +17,38 @@ import kotlinx.coroutines.runBlocking
 interface PairedSession {
     fun sharedSecret(): ByteArray?
     fun nextSendCounter(): Long
-    fun canAcceptRecvCounter(n: Long): Boolean
-    fun commitRecvCounter(n: Long)
+
+    /**
+     * Runs [decrypt] only once [n] has passed the replay window, and records
+     * [n] as seen only once [decrypt] has returned normally -- all three
+     * steps under one lock. Mirrors the agent's ValidateAndCommitRecvCounter
+     * (bridge/internal/e2e/store.go); holding the two sides to the same shape
+     * is what keeps the invariant checkable on both.
+     *
+     * One call rather than a check followed by a commit, because the gap
+     * between them was exploitable (cmux-app-uvh): a single session backs the
+     * events socket, the terminal socket, the HTTP interceptor and the push
+     * decoder at once, so two of them could both clear the window for the
+     * same counter before either committed it -- and a frame the untrusted
+     * relay duplicated would then be processed twice. Closing the gap also
+     * means a re-pairing can no longer land mid-sequence and be overwritten
+     * by an in-flight commit (cmux-app-a3g), since setPairing takes this
+     * same lock.
+     *
+     * [decrypt] is handed the shared secret rather than reading it itself,
+     * because that read has to happen under this same lock. A caller that
+     * captured the secret first could otherwise decrypt a superseded
+     * pairing's frame -- which still authenticates under the secret it
+     * captured -- and commit its far-ahead counter into the window a
+     * re-pairing had just reset, stranding the new pairing exactly as
+     * cmux-app-a3g did.
+     *
+     * @throws ReplayRejectedException if the window refuses [n]; [decrypt] is
+     *   then never invoked, so a forged counter cannot burn a counter the
+     *   legitimate sender has yet to use.
+     * @throws NotPairedException if no shared secret is on file.
+     */
+    fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (sharedSecret: ByteArray) -> T): T
 }
 
 /**
@@ -47,24 +77,27 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
     // path (once per outbound keystroke / inbound frame) never re-decrypts
     // these from EncryptedSharedPreferences. Every method that touches
     // either field -- including setPairing/clear/absorbLegacyIfTarget, not
-    // just the hot-path nextSendCounter/commitRecvCounter -- synchronizes on
-    // `this` and routes its prefs write through writeScope (persist() or the
-    // blocking persistDurably()), so (a) callers on different threads
-    // (Compose's main thread for sends, an OkHttp callback thread for
-    // recvs, the pairing/forget flows) never see a torn read, and (b) the
-    // on-disk value always converges to match whichever write was most
-    // recently applied in memory -- a queued write from before a reset
+    // just the hot-path nextSendCounter/validateAndCommitRecvCounter --
+    // synchronizes on `this` and routes its prefs write through writeScope
+    // (persist() or the blocking persistDurably()), so (a) callers on
+    // different threads (Compose's main thread for sends, an OkHttp callback
+    // thread for recvs, the pairing/forget flows) never see a torn read, and
+    // (b) the on-disk value always converges to match whichever write was
+    // most recently applied in memory -- a queued write from before a reset
     // can't land after it and resurrect stale counters, since writeScope is
     // single-threaded FIFO regardless of which of the two helpers enqueued
-    // it. nextSendCounter/commitRecvCounter use persistDurably specifically
-    // because their value is handed out (as an AEAD nonce input) before
-    // this class can know it was ever durably written; setPairing/clear
-    // reset both fields to fixed constants, so a lost write there just
-    // reappears identically on the next mutation, not as a reusable nonce.
-    // peer_pubkey/shared_secret are deliberately NOT part of this cache:
-    // isPaired()/sharedSecret() read them straight from prefs and need
-    // read-after-write consistency, so their writes stay synchronous
-    // exactly as before.
+    // it. nextSendCounter/validateAndCommitRecvCounter use persistDurably
+    // specifically because their value is handed out (as an AEAD nonce
+    // input) before this class can know it was ever durably written;
+    // setPairing/clear reset both fields to fixed constants, so a lost write
+    // there just reappears identically on the next mutation, not as a
+    // reusable nonce.
+    //
+    // peer_pubkey/shared_secret are not cached in memory -- sharedSecret()
+    // reads straight from prefs -- but their writes DO take this same lock,
+    // because the secret and the replay window have to change together: a
+    // decrypt that paired one pairing's window with another's key is what
+    // cmux-app-a3g was.
     private var sendCounter: Long = prefs.getLong(key(KEY_SEND_COUNTER), 0L)
     private var replayWindow: ReplayWindow =
         ReplayWindow(prefs.getLong(key(KEY_RECV_HIGHEST), -1L), prefs.getLong(key(KEY_RECV_WINDOW_BITS), 0L))
@@ -162,11 +195,15 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
      *  a fresh pairing means a fresh shared secret, so old counter state is
      *  meaningless (and reusing it would incorrectly reject the first messages). */
     fun setPairing(peerPublicKey: ByteArray, sharedSecret: ByteArray) {
-        prefs.edit()
-            .putString(key(KEY_PEER_PUBLIC_KEY), Base64.encodeToString(peerPublicKey, Base64.NO_WRAP))
-            .putString(key(KEY_SHARED_SECRET), Base64.encodeToString(sharedSecret, Base64.NO_WRAP))
-            .apply()
+        // Secret and window move together under the one lock
+        // validateAndCommitRecvCounter holds, so an in-flight decrypt can
+        // never pair this pairing's fresh window with the previous one's
+        // secret (cmux-app-a3g).
         synchronized(this) {
+            prefs.edit()
+                .putString(key(KEY_PEER_PUBLIC_KEY), Base64.encodeToString(peerPublicKey, Base64.NO_WRAP))
+                .putString(key(KEY_SHARED_SECRET), Base64.encodeToString(sharedSecret, Base64.NO_WRAP))
+                .apply()
             sendCounter = 0L
             replayWindow = ReplayWindow()
         }
@@ -190,32 +227,34 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
         return n
     }
 
-    /** Read-only check -- call before attempting to decrypt. */
-    override fun canAcceptRecvCounter(n: Long): Boolean = synchronized(this) { replayWindow.canAccept(n) }
-
-    /** Mutating -- call only after the corresponding ciphertext has verified.
-     *  Durable before returning, so a crash/kill can't re-widen the replay
-     *  window back to a point that would re-accept an already-processed
-     *  (captured) frame. */
-    override fun commitRecvCounter(n: Long) {
-        val updated = synchronized(this) {
-            replayWindow = replayWindow.commit(n)
-            replayWindow
-        }
+    /** The write is durable before this returns, so a crash/kill can't
+     *  re-widen the window back to a point that would re-accept an
+     *  already-processed (captured) frame. It happens under the lock rather
+     *  than after it so two commits cannot land on disk in the opposite
+     *  order they were applied in memory, which would regress the window to
+     *  the older of the two -- the agent holds s.mu across its own UPDATE for
+     *  the same reason. [decrypt] must not call back into this session. */
+    override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T = synchronized(this) {
+        val secret = sharedSecret() ?: throw NotPairedException()
+        if (!replayWindow.canAccept(n)) throw ReplayRejectedException(n, replayWindow.highestSeen)
+        val plaintext = decrypt(secret)
+        val updated = replayWindow.commit(n)
+        replayWindow = updated
         persistDurably {
             putLong(key(KEY_RECV_HIGHEST), updated.highestSeen)
             putLong(key(KEY_RECV_WINDOW_BITS), updated.windowBits)
         }
+        plaintext
     }
 
     /** Wipes this slot's session only -- used when re-pairing this slot. The
      *  other slot's session (sharing the same prefs file) is untouched. */
     fun clear() {
-        prefs.edit()
-            .remove(key(KEY_PEER_PUBLIC_KEY))
-            .remove(key(KEY_SHARED_SECRET))
-            .apply()
         synchronized(this) {
+            prefs.edit()
+                .remove(key(KEY_PEER_PUBLIC_KEY))
+                .remove(key(KEY_SHARED_SECRET))
+                .apply()
             sendCounter = 0L
             replayWindow = ReplayWindow()
         }

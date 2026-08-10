@@ -30,8 +30,7 @@ import java.util.concurrent.TimeUnit
 private class NoFrameSession : PairedSession {
     override fun sharedSecret(): ByteArray = ByteArray(32)
     override fun nextSendCounter(): Long = 0L
-    override fun canAcceptRecvCounter(n: Long): Boolean = true
-    override fun commitRecvCounter(n: Long) {}
+    override fun <T> validateAndCommitRecvCounter(n: Long, decrypt: (ByteArray) -> T): T = decrypt(ByteArray(32))
 }
 
 /**

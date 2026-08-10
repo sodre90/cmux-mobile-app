@@ -3,6 +3,25 @@ package com.sodre90.cmuxremote.data.e2e
 private const val WINDOW_SIZE = 64
 
 /**
+ * The replay window refused [counter] before any AEAD work happened, so
+ * nothing has been learned about whether the frame was authentic.
+ *
+ * A subtype of [DecryptFailedException] so existing handlers keep dropping
+ * the frame exactly as before, but carrying its own message because the two
+ * causes call for opposite responses: an AEAD failure means the bytes are
+ * wrong, while a rejection here means this device's own counter state is
+ * stale. Conflating them is what made cmux-app-a3g a long hunt instead of a
+ * one-line diagnosis. [highestSeen] is included because the giveaway is the
+ * gap -- counters near zero refused by a window sitting far ahead means the
+ * window outlived a re-pairing.
+ *
+ * Counters carry no key material, so this is safe to log.
+ */
+class ReplayRejectedException(counter: Long, highestSeen: Long) : DecryptFailedException(
+    "replay_rejected: counter=$counter highest_seen=$highestSeen",
+)
+
+/**
  * RFC 6479-style anti-replay bitmap: tolerates out-of-order delivery within
  * the last [WINDOW_SIZE] counters while still rejecting exact replays and
  * anything older than the window. Immutable -- [commit] returns a new

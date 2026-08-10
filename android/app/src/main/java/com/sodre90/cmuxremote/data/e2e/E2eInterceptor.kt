@@ -72,7 +72,10 @@ class E2eInterceptor(
         } catch (e: NotPairedException) {
             throw IOException("not_paired", e)
         } catch (e: DecryptFailedException) {
-            throw IOException("decrypt_failed", e)
+            // e.message, not a literal: a ReplayRejectedException names the
+            // counter and the window it was refused against, and that detail
+            // is the whole point of raising it separately.
+            throw IOException(e.message, e)
         }
         return response.newBuilder()
             .body(plaintext.toResponseBody(responseBody.contentType()))
