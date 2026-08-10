@@ -62,6 +62,7 @@ class TerminalViewModel(
     private val reconnector = SocketReconnector<TerminalDown>(
         bridge.relayHealth(),
         monitor = bridge.connectionMonitor(),
+        slotCredentials = bridge.slotCredentials(),
     )
 
     @Volatile

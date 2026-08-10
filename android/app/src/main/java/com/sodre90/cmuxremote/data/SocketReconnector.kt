@@ -6,6 +6,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -36,6 +37,12 @@ private const val RELAY_DROP_THRESHOLD = 3
  * [RelayHealth.recoveries] and ends itself when RELAY is proven healthy
  * again, letting the next iteration re-pick it.
  *
+ * That same "a healthy socket never disconnects" property is why every
+ * connection also watches [SlotCredentials] for its own slot: Forget and
+ * re-pair replace the credentials in storage, but the connection already
+ * open goes on using the old ones until something ends it (cmux-app-2zn,
+ * cmux-app-smu).
+ *
  * All bookkeeping ([consecutiveRelayDrops], the loop's backoff) is instance
  * state with no synchronization, because -- like the ViewModels that own one
  * of these -- it is only ever driven from a single coroutine (Compose's Main
@@ -47,6 +54,7 @@ class SocketReconnector<T>(
     private val initialBackoffMs: Long = INITIAL_BACKOFF_MS,
     private val maxBackoffMs: Long = MAX_BACKOFF_MS,
     private val monitor: ConnectionMonitor = ConnectionMonitor(),
+    private val slotCredentials: SlotCredentials = SlotCredentials(),
 ) {
     private var consecutiveRelayDrops = 0
 
@@ -71,9 +79,12 @@ class SocketReconnector<T>(
     ) {
         var backoff = initialBackoffMs
         while (currentCoroutineContext().isActive) {
-            // Read before the slot decision: any recovery from here on must
-            // wake us, including one landing while we're still connecting.
+            // Read before the slot decision: any recovery or credential
+            // change from here on must wake us, including one landing while
+            // we're still connecting. Both slots are sampled because the one
+            // we end up on isn't known until openSocket's fallback resolves.
             val recoveriesAtPick = relayHealth.recoveries.value
+            val credentialsAtPick = ConnectionSlot.entries.associateWith { slotCredentials.generation(it).value }
             val relayPenalized = relayHealth.isDown(now())
             val primarySlot = if (relayPenalized) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
             if (relayPenalized) monitor.fallingBack(null) else monitor.connecting(ConnectionSlot.RELAY)
@@ -90,19 +101,24 @@ class SocketReconnector<T>(
             // come back to.
             val parkedOnDirect = relayPenalized && slot == ConnectionSlot.DIRECT
             var relayRecovered = false
+            var credentialsReplaced = false
             try {
                 coroutineScope {
                     val connection = this
-                    val watcher = if (parkedOnDirect) {
-                        launch {
+                    // Cancelling the scope cancels the collect below, closing
+                    // the socket via its awaitClose so the loop re-picks.
+                    val watchers = mutableListOf<Job>()
+                    if (parkedOnDirect) {
+                        watchers += launch {
                             relayHealth.recoveries.first { it != recoveriesAtPick }
                             relayRecovered = true
-                            // Cancels the collect below, closing the socket
-                            // via its awaitClose so the loop re-picks RELAY.
                             connection.cancel()
                         }
-                    } else {
-                        null
+                    }
+                    watchers += launch {
+                        slotCredentials.generation(slot).first { it != credentialsAtPick.getValue(slot) }
+                        credentialsReplaced = true
+                        connection.cancel()
                     }
                     // Collected in this coroutine rather than a child: a
                     // CancellationException raised by the flow itself has to
@@ -117,14 +133,14 @@ class SocketReconnector<T>(
                         }
                         if (onFrame(frame)) backoff = initialBackoffMs
                     }
-                    watcher?.cancel()
+                    watchers.forEach { it.cancel() }
                 }
             } catch (e: CancellationException) {
                 // Our own voluntary stop cancels only the inner scope, so the
                 // enclosing coroutine is still active; anything else -- the
                 // caller being cancelled, or the flow cancelling itself --
                 // must propagate.
-                if (!(relayRecovered && currentCoroutineContext().isActive)) throw e
+                if (!((relayRecovered || credentialsReplaced) && currentCoroutineContext().isActive)) throw e
             } catch (e: Exception) {
                 monitor.failed(if (e is IOException) e.describeForUser() else e.message.orEmpty())
                 if (primarySlot == ConnectionSlot.RELAY) {
@@ -144,9 +160,9 @@ class SocketReconnector<T>(
             }
             onDisconnected()
             if (!currentCoroutineContext().isActive) break
-            if (relayRecovered) {
-                // Deliberate switch back, not a failure: reconnect straight
-                // away rather than serving out a backoff nothing earned.
+            if (relayRecovered || credentialsReplaced) {
+                // A deliberate switch, not a failure: reconnect straight away
+                // rather than serving out a backoff nothing earned.
                 backoff = initialBackoffMs
             } else {
                 delay(backoff)

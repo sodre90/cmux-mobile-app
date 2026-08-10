@@ -69,7 +69,11 @@ class InboxViewModel(
     private val refreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth(), monitor = bridge.connectionMonitor())
+    private val reconnector = SocketReconnector<EventFrame>(
+        bridge.relayHealth(),
+        monitor = bridge.connectionMonitor(),
+        slotCredentials = bridge.slotCredentials(),
+    )
 
     /** Same process-wide transport status SessionsViewModel exposes -- replying
      *  to a prompt is the one action where knowing the connection is mid-

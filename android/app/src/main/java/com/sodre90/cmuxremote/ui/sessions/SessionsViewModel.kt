@@ -67,7 +67,11 @@ class SessionsViewModel(
     private val refreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
-    private val reconnector = SocketReconnector<EventFrame>(bridge.relayHealth(), monitor = bridge.connectionMonitor())
+    private val reconnector = SocketReconnector<EventFrame>(
+        bridge.relayHealth(),
+        monitor = bridge.connectionMonitor(),
+        slotCredentials = bridge.slotCredentials(),
+    )
 
     /** Which transport the app is on right now, and whether it is mid-failover
      *  -- rendered by [ConnectionStatusStrip]. Read straight off the shared

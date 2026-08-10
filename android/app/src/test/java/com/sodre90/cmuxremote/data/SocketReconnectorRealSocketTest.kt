@@ -119,4 +119,64 @@ class SocketReconnectorRealSocketTest {
 
         job.cancelAndJoin()
     }
+
+    /**
+     * cmux-app-2zn / cmux-app-smu, and the same gap this file exists for:
+     * [SocketReconnectorTest]'s fake flows show the reconnector *intends* to
+     * end the connection, but only a real socket shows it actually does.
+     * Forget and re-pair both rewrite storage while a live socket goes on
+     * authenticating with the credentials they replaced, so a regression
+     * that left it open would keep streaming over a forgotten slot -- and,
+     * after a re-pair, drop every frame as decrypt_failed until restart.
+     * Asserted from the *server* side, which is the only place the close is
+     * observable.
+     */
+    @Test
+    fun invalidatingASlotsCredentialsClosesItsLiveWebSocketAndReconnects() = runBlocking {
+        val relayClosed = CountDownLatch(1)
+        relayServer.enqueue(
+            MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        relayClosed.countDown()
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        relayClosed.countDown()
+                    }
+                },
+            ),
+        )
+        relayServer.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+
+        val credentials = SlotCredentials()
+        val reconnector = SocketReconnector<EventFrame>(
+            RelayHealth(),
+            initialBackoffMs = 1L,
+            maxBackoffMs = 1L,
+            slotCredentials = credentials,
+        )
+        val http = OkHttpClient()
+        val job = launch(Dispatchers.IO) {
+            reconnector.run(openSocket = { slot ->
+                val base = if (slot == ConnectionSlot.RELAY) relayServer.url("/") else directServer.url("/")
+                EventsSocket(http, base.toString(), NoFrameSession(), cipher).connect()
+            }) { true }
+        }
+
+        assertEquals("/events", relayServer.takeRequest(10, TimeUnit.SECONDS)?.path)
+
+        credentials.invalidate(ConnectionSlot.RELAY)
+
+        assertTrue(
+            "the socket on the replaced credentials was never closed",
+            relayClosed.await(10, TimeUnit.SECONDS),
+        )
+        assertNotNull(
+            "no reconnect after invalidation; the subscription was left dead",
+            relayServer.takeRequest(10, TimeUnit.SECONDS),
+        )
+
+        job.cancelAndJoin()
+    }
 }

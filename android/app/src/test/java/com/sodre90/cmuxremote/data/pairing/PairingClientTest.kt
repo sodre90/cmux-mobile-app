@@ -13,6 +13,7 @@ import okhttp3.tls.HeldCertificate
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -95,6 +96,78 @@ class PairingClientTest {
         assertEquals("/devices/pair", recorded.path)
         assertTrue(recorded.body.readUtf8().contains("\"code\":\"CODE1\""))
     }
+
+    /**
+     * cmux-app-smu. A commit that only rewrites storage leaves the sockets
+     * opened on the previous token connected, still mapped to the agent's
+     * old device row -- which now encrypts under a key this session no
+     * longer holds, so every frame is dropped until the app is restarted.
+     * The signal has to fire, and fire after the token is stored, or a
+     * socket woken by it reconnects on the credentials it was meant to
+     * replace.
+     */
+    @Test
+    fun pairSuccessSignalsThatTheSlotsCredentialsWereReplacedOnceTheyArePersisted() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-new","tenant_id":"t1"}"""))
+
+        var tokenWhenSignalled: String? = null
+        var storedToken: String? = null
+        var signalCount = 0
+
+        val client = TestablePairingClient(
+            http = http,
+            phonePrivateKey = phonePriv,
+            phonePublicKey = phonePub,
+            onSetPairing = { _, _ -> },
+            onSetBaseUrl = {},
+            onSetToken = { storedToken = it },
+            onCredentialsReplaced = {
+                signalCount++
+                tokenWhenSignalled = storedToken
+            },
+        )
+
+        runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
+
+        assertEquals(1, signalCount)
+        assertEquals("signalled before the new token was stored", "tok-new", tokenWhenSignalled)
+    }
+
+    /** A pairing that never completed replaced nothing, so waking the live
+     *  sockets would drop a working connection for no reason. */
+    @Test
+    fun aFailedPairDoesNotSignalThatCredentialsWereReplaced() {
+        server.enqueue(MockResponse().setResponseCode(410).setBody("""{"error":"pairing_code_invalid"}"""))
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        var signalled = false
+        val client = TestablePairingClient(
+            http = http,
+            phonePrivateKey = phonePriv,
+            phonePublicKey = phonePub,
+            onSetPairing = { _, _ -> },
+            onSetBaseUrl = {},
+            onSetToken = {},
+            onCredentialsReplaced = { signalled = true },
+        )
+
+        try {
+            runBlocking { client.commit(qrFor(ByteArray(32), code = "X")) }
+            fail("expected PairingCodeInvalidException")
+        } catch (e: PairingCodeInvalidException) {
+            // expected
+        }
+        assertFalse("a refused pairing replaced nothing", signalled)
+    }
+
+    private fun qrFor(agentPub: ByteArray, code: String) = PairingQr(
+        pairUrl = server.url("/devices/pair").toString(),
+        code = code,
+        agentPubkey = Base64.getEncoder().encodeToString(agentPub),
+        expiresAt = "2099-01-01T00:00:00Z",
+        tenantId = "t1",
+    )
 
     @Test
     fun pairThrowsPairingCodeInvalidOn410() {
@@ -247,8 +320,8 @@ class PairingClientTest {
 }
 
 /** Test seam: same logic as PairingClient.prepare/commit, but with
- *  persistence as three callbacks instead of real
- *  CryptoSession/Settings instances. */
+ *  persistence and the credential-invalidation signal as callbacks instead
+ *  of real CryptoSession/Settings/SlotCredentials instances. */
 private class TestablePairingClient(
     private val http: OkHttpClient,
     private val phonePrivateKey: ByteArray,
@@ -256,6 +329,7 @@ private class TestablePairingClient(
     private val onSetPairing: (peerPublicKey: ByteArray, sharedSecret: ByteArray) -> Unit,
     private val onSetBaseUrl: (String) -> Unit,
     private val onSetToken: (String) -> Unit,
+    private val onCredentialsReplaced: () -> Unit = {},
 ) {
     fun prepare(qr: PairingQr): String = prepareInternal(qr, phonePublicKey)
 
@@ -267,5 +341,6 @@ private class TestablePairingClient(
         onSetPairing,
         onSetBaseUrl,
         onSetToken,
+        onCredentialsReplaced,
     )
 }

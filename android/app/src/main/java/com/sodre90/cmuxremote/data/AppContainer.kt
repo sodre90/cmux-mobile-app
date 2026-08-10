@@ -89,6 +89,9 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         // Drops any keypair a half-finished pairing left pending, so the next
         // attempt cannot commit a key whose fingerprint predates the Forget.
         pairingClients.remove(slot)
+        // Storage alone doesn't reach a socket that is already connected on
+        // the credentials just cleared -- see [SlotCredentials].
+        sharedSlotCredentials.invalidate(slot)
     }
 
     fun bridgeClient(slot: ConnectionSlot): BridgeClient? =
@@ -109,7 +112,7 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     @Synchronized
     override fun pairingClient(slot: ConnectionSlot): PairingClient =
         pairingClients.getOrPut(slot) {
-            PairingClient(OkHttpClient(), sessions.getValue(slot), settings, slot)
+            PairingClient(OkHttpClient(), sessions.getValue(slot), settings, slot, sharedSlotCredentials)
         }
 
     override fun loadOrder(): List<String> = workspaceOrderStore.load()
@@ -137,6 +140,13 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     private val sharedConnectionMonitor = ConnectionMonitor()
 
     override fun connectionMonitor(): ConnectionMonitor = sharedConnectionMonitor
+
+    // Shared for the same reason again: forgetting or re-pairing a slot has
+    // to reach every socket subscription running on it, wherever it was
+    // started from.
+    private val sharedSlotCredentials = SlotCredentials()
+
+    override fun slotCredentials(): SlotCredentials = sharedSlotCredentials
 
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },

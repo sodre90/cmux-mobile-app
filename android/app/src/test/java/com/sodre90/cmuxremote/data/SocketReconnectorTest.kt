@@ -390,4 +390,123 @@ class SocketReconnectorTest {
         assertEquals(1, attempts.size)
         job.cancelAndJoin()
     }
+
+    /**
+     * cmux-app-2zn. Forgetting a slot only rewrites storage; the socket
+     * already open keeps streaming over the slot the user just forgot,
+     * because a healthy socket never disconnects and the loop re-picks only
+     * between connections. Invalidating the slot has to end it.
+     */
+    @Test
+    fun forgettingTheConnectedSlotEndsItsSocketAndMovesToTheOtherOne() = runTest {
+        val health = RelayHealth()
+        val credentials = SlotCredentials()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime }, slotCredentials = credentials)
+        val attempts = mutableListOf<Attempt>()
+        var relayForgotten = false
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                if (slot == ConnectionSlot.RELAY && relayForgotten) {
+                    null // exactly what eventsSocket() returns once the config is cleared
+                } else {
+                    attempts.add(Attempt(slot, currentTime))
+                    flow { awaitCancellation() } // healthy socket: never drops on its own
+                }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.RELAY, attempts.single().slot)
+
+        relayForgotten = true
+        credentials.invalidate(ConnectionSlot.RELAY)
+        delay(1)
+
+        assertEquals("the forgotten slot's socket must not survive", 2, attempts.size)
+        assertEquals(ConnectionSlot.DIRECT, attempts[1].slot)
+        job.cancelAndJoin()
+    }
+
+    /**
+     * cmux-app-smu. Re-pairing keeps the slot configured but replaces its
+     * token, so the still-open socket stays mapped to the agent's previous
+     * device row and every frame it carries fails to decrypt. It has to
+     * reconnect on the new credentials rather than wait for a restart.
+     */
+    @Test
+    fun rePairingTheConnectedSlotReconnectsOnTheSameSlot() = runTest {
+        val health = RelayHealth()
+        val credentials = SlotCredentials()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime }, slotCredentials = credentials)
+        val attempts = mutableListOf<Attempt>()
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                attempts.add(Attempt(slot, currentTime))
+                flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.RELAY, attempts.single().slot)
+
+        val invalidatedAtMs = currentTime
+        credentials.invalidate(ConnectionSlot.RELAY)
+        delay(1)
+
+        assertEquals(2, attempts.size)
+        assertEquals(ConnectionSlot.RELAY, attempts[1].slot)
+        // A deliberate reconnect, not a failure: it must not serve out a
+        // backoff, and it must not have taught RelayHealth anything.
+        assertEquals("reconnect must not wait out a backoff", invalidatedAtMs, attempts[1].atMs)
+        assertFalse("re-pairing says nothing about relay reachability", health.isDown(currentTime))
+        job.cancelAndJoin()
+    }
+
+    /** The other slot's credentials changing is none of this socket's
+     *  business -- forgetting direct must not disturb a live relay socket. */
+    @Test
+    fun invalidatingTheOtherSlotLeavesTheLiveSocketAlone() = runTest {
+        val credentials = SlotCredentials()
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, slotCredentials = credentials)
+        val attempts = mutableListOf<Attempt>()
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                attempts.add(Attempt(slot, currentTime))
+                flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionSlot.RELAY, attempts.single().slot)
+
+        credentials.invalidate(ConnectionSlot.DIRECT)
+        delay(1)
+
+        assertEquals(1, attempts.size)
+        job.cancelAndJoin()
+    }
+
+    /**
+     * Same hazard [recoveryLandingDuringConnectIsNotMissed] covers, for the
+     * other signal: a Forget landing while the socket is still opening must
+     * not be swallowed, or the socket it raced would run on until it
+     * happened to drop -- exactly the symptom cmux-app-2zn describes.
+     */
+    @Test
+    fun invalidationLandingDuringConnectIsNotMissed() = runTest {
+        val credentials = SlotCredentials()
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, slotCredentials = credentials)
+        val attempts = mutableListOf<Attempt>()
+        val job = launch {
+            reconnector.run(openSocket = { slot ->
+                attempts.add(Attempt(slot, currentTime))
+                if (attempts.size == 1) credentials.invalidate(slot)
+                flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(2, attempts.size)
+        job.cancelAndJoin()
+    }
 }

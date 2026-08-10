@@ -21,4 +21,9 @@ interface BridgeGateway {
      *  subscription report into, so the UI can show which transport is in
      *  use and when it is falling back. */
     fun connectionMonitor(): ConnectionMonitor
+
+    /** The process-wide [SlotCredentials] every socket subscription watches,
+     *  so a slot that is forgotten or re-paired drops the connections still
+     *  running on its previous credentials. */
+    fun slotCredentials(): SlotCredentials
 }

@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.data.pairing
 
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
+import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
@@ -118,6 +119,7 @@ class PairingClient(
     private val session: CryptoSession,
     private val settings: Settings,
     private val slot: ConnectionSlot,
+    private val slotCredentials: SlotCredentials,
 ) : PairingSession {
     private val keys = PairingKeys()
 
@@ -133,6 +135,10 @@ class PairingClient(
             onSetPairing = session::setPairing,
             onSetBaseUrl = { settings.setBaseUrl(slot, it) },
             onSetToken = { settings.setDeviceToken(slot, it) },
+            // Sockets still running on the old token map to the agent's
+            // previous device row, whose key no longer matches this
+            // session, so every frame they carry is dropped (cmux-app-smu).
+            onCredentialsReplaced = { slotCredentials.invalidate(slot) },
         )
     }
 
@@ -191,6 +197,7 @@ internal suspend fun commitInternal(
     onSetPairing: (peerPublicKey: ByteArray, sharedSecret: ByteArray) -> Unit,
     onSetBaseUrl: (String) -> Unit,
     onSetToken: (String) -> Unit,
+    onCredentialsReplaced: () -> Unit,
 ): Unit = withContext(Dispatchers.IO) {
     // The manual-entry path (resolvePairingCode) builds its own PairingQr
     // from a locally-constructed URL and never goes through
@@ -221,6 +228,10 @@ internal suspend fun commitInternal(
         onSetPairing(agentPublicKey, sharedSecret)
         onSetBaseUrl(baseUrlFromPairUrl(qr.pairUrl))
         onSetToken(body.token)
+        // Last, and only on a pairing that got this far: sockets woken by
+        // this have to find the new credentials already stored, and a
+        // pairing that failed replaced nothing to wake them for.
+        onCredentialsReplaced()
     }
 }
 
