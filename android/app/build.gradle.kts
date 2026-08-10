@@ -51,6 +51,11 @@ android {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 kotlin {
@@ -110,6 +115,7 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.lazysodium.java)
     testImplementation(libs.jna)
+    testImplementation(libs.robolectric)
 }
 
 val lazysodiumNativeLibDir = layout.buildDirectory.dir("native-libs/lazysodium")

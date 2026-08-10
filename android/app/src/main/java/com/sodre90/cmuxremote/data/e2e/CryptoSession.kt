@@ -58,20 +58,12 @@ interface PairedSession {
  * overwrites its own record, but the other slot's session is untouched
  * (both slots' keys share one prefs file, distinguished only by prefix).
  */
-class CryptoSession(context: Context, private val slot: ConnectionSlot) : PairedSession {
+class CryptoSession internal constructor(
+    private val prefs: SharedPreferences,
+    private val slot: ConnectionSlot,
+) : PairedSession {
 
-    private val prefs: SharedPreferences = run {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
-    }
+    constructor(context: Context, slot: ConnectionSlot) : this(encryptedPrefs(context), slot)
 
     // In-memory mirror of the send counter and replay window, so the hot
     // path (once per outbound keystroke / inbound frame) never re-decrypts
@@ -268,13 +260,34 @@ class CryptoSession(context: Context, private val slot: ConnectionSlot) : Paired
     private fun key(base: String) = "${slot.name.lowercase()}_$base"
 
     private companion object {
-        const val PREFS_NAME = "cmux_e2e_session"
         const val KEY_PEER_PUBLIC_KEY = "device_public_key_b64"
         const val KEY_SHARED_SECRET = "shared_secret_b64"
         const val KEY_SEND_COUNTER = "send_counter"
         const val KEY_RECV_HIGHEST = "recv_highest"
         const val KEY_RECV_WINDOW_BITS = "recv_window_bits"
     }
+}
+
+/**
+ * The keystore-backed store [CryptoSession] uses in the app. It is built here
+ * rather than inline in the constructor so that a test can hand [CryptoSession]
+ * a plain SharedPreferences instead: the counters and replay window are the
+ * part worth testing, and there is no AndroidKeyStore off-device to build a
+ * MasterKey against (cmux-app-fdl).
+ */
+private const val PREFS_NAME = "cmux_e2e_session"
+
+private fun encryptedPrefs(context: Context): SharedPreferences {
+    val masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+    return EncryptedSharedPreferences.create(
+        context,
+        PREFS_NAME,
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
 }
 
 /** The legacy pre-dual-pairing e2e session fields [absorbLegacyIfTargetInternal]
