@@ -136,7 +136,9 @@ class TerminalViewModel(
         // on screen — no jarring error page — while reconnection runs.
         job = viewModelScope.launch {
             reconnector.run(
-                openSocket = { slot -> bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect() },
+                openSocket = { slot, onOpen ->
+                    bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect(onOpen)
+                },
                 onConnected = tracker::onConnected,
                 onDisconnected = tracker::onDisconnected,
                 onFrame = onFrame@{ frame ->

@@ -69,15 +69,23 @@ class SocketReconnector<T>(
      * connection arrives; [onDisconnected] fires once the socket ends
      * (gracefully or not); [onBeforeReconnect] fires right before the next
      * connect attempt, after the backoff delay.
+     *
+     * [openSocket] is handed a callback to invoke when its socket actually
+     * opens, which is what promotes [monitor] from connecting to connected.
+     * It has to come from the socket rather than from the first frame: a peer
+     * that opens and then says nothing is a working transport, and reporting
+     * it as still connecting hid a live DIRECT connection behind
+     * "connecting via relay" for as long as no frame decoded (cmux-app-um4).
      */
     suspend fun run(
-        openSocket: (ConnectionSlot) -> Flow<T>?,
+        openSocket: (ConnectionSlot, onOpen: () -> Unit) -> Flow<T>?,
         onConnected: () -> Unit = {},
         onDisconnected: () -> Unit = {},
         onBeforeReconnect: () -> Unit = {},
         onFrame: suspend (T) -> Boolean,
     ) {
         var backoff = initialBackoffMs
+        fun open(slot: ConnectionSlot) = openSocket(slot) { monitor.connected(slot) }
         while (currentCoroutineContext().isActive) {
             // Read before the slot decision: any recovery or credential
             // change from here on must wake us, including one landing while
@@ -87,9 +95,8 @@ class SocketReconnector<T>(
             val credentialsAtPick = ConnectionSlot.entries.associateWith { slotCredentials.generation(it).value }
             val relayPenalized = relayHealth.isDown(now())
             val primarySlot = if (relayPenalized) ConnectionSlot.DIRECT else ConnectionSlot.RELAY
-            if (relayPenalized) monitor.fallingBack(null) else monitor.connecting(ConnectionSlot.RELAY)
             var slot = primarySlot
-            val socket = openSocket(primarySlot) ?: openSocket(primarySlot.other())?.also { slot = primarySlot.other() }
+            val socket = open(primarySlot) ?: open(primarySlot.other())?.also { slot = primarySlot.other() }
             if (socket == null) {
                 delay(backoff)
                 continue
@@ -100,6 +107,10 @@ class SocketReconnector<T>(
             // DIRECT socket that is simply the configured one has nothing to
             // come back to.
             val parkedOnDirect = relayPenalized && slot == ConnectionSlot.DIRECT
+            // Reported after the fallback resolves, never before: the
+            // preferred slot is not the one being dialled whenever it turns
+            // out to be unconfigured (cmux-app-um4).
+            if (parkedOnDirect) monitor.fallingBack(null) else monitor.connecting(slot)
             var relayRecovered = false
             var credentialsReplaced = false
             try {
@@ -128,7 +139,6 @@ class SocketReconnector<T>(
                         if (!gotFrame) {
                             gotFrame = true
                             connectedAtMs = now()
-                            monitor.connected(slot)
                             onConnected()
                         }
                         if (onFrame(frame)) backoff = initialBackoffMs

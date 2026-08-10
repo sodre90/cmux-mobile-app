@@ -29,7 +29,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (attempts.size == 1) health.markDown(currentTime)
                 flow { awaitCancellation() }
@@ -44,7 +44,7 @@ class SocketReconnectorTest {
         // RelayHealth): the next attempt must prefer DIRECT.
         job.cancelAndJoin()
         val secondJob = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { awaitCancellation() }
             }) { true }
@@ -56,7 +56,7 @@ class SocketReconnectorTest {
         secondJob.cancelAndJoin()
         delay(RelayHealth.DEFAULT_PENALTY_MS)
         val thirdJob = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { awaitCancellation() }
             }) { true }
@@ -72,7 +72,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (attempts.size == 1) {
                     flow {
@@ -98,7 +98,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (slot == ConnectionSlot.RELAY) null else flow { awaitCancellation() }
             }) { true }
@@ -115,7 +115,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { throw IOException("unreachable") }
             }) { true }
@@ -132,7 +132,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 when (attempts.size) {
                     1, 2 -> flow { throw IOException("unreachable") } // backoff grows to 2s
@@ -158,7 +158,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 when (attempts.size) {
                     1, 2 -> flow { throw IOException("unreachable") } // backoff grows to 2s
@@ -184,7 +184,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (slot == ConnectionSlot.RELAY) {
                     flow {
@@ -214,7 +214,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 when (attempts.size) {
                     1, 2 -> flow {
@@ -252,7 +252,7 @@ class SocketReconnectorTest {
         var attempts = 0
         val job = launch {
             reconnector.run(
-                openSocket = { _ ->
+                openSocket = { _, _ ->
                     attempts++
                     flow { awaitCancellation() }
                 },
@@ -276,7 +276,7 @@ class SocketReconnectorTest {
         var thrown: Throwable? = null
         val job = launch {
             try {
-                reconnector.run(openSocket = { _ -> flow { throw CancellationException("stop") } }) { true }
+                reconnector.run(openSocket = { _, _ -> flow { throw CancellationException("stop") } }) { true }
             } catch (e: CancellationException) {
                 thrown = e
                 throw e
@@ -292,7 +292,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
         var attempts = 0
         val job = launch {
-            reconnector.run(openSocket = { _ ->
+            reconnector.run(openSocket = { _, _ ->
                 attempts++
                 flow { throw IOException("unreachable") }
             }) { true }
@@ -316,7 +316,7 @@ class SocketReconnectorTest {
         val attempts = mutableListOf<Attempt>()
         health.markDown(currentTime)
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { awaitCancellation() } // healthy socket: never drops
             }) { true }
@@ -350,7 +350,7 @@ class SocketReconnectorTest {
         val attempts = mutableListOf<Attempt>()
         health.markDown(currentTime)
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (attempts.size == 1) health.markUp()
                 flow { awaitCancellation() }
@@ -371,7 +371,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime })
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 if (slot == ConnectionSlot.RELAY) {
                     null
                 } else {
@@ -405,7 +405,7 @@ class SocketReconnectorTest {
         val attempts = mutableListOf<Attempt>()
         var relayForgotten = false
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 if (slot == ConnectionSlot.RELAY && relayForgotten) {
                     null // exactly what eventsSocket() returns once the config is cleared
                 } else {
@@ -440,7 +440,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(health, now = { currentTime }, slotCredentials = credentials)
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { awaitCancellation() }
             }) { true }
@@ -470,7 +470,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, slotCredentials = credentials)
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 flow { awaitCancellation() }
             }) { true }
@@ -498,7 +498,7 @@ class SocketReconnectorTest {
         val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, slotCredentials = credentials)
         val attempts = mutableListOf<Attempt>()
         val job = launch {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, _ ->
                 attempts.add(Attempt(slot, currentTime))
                 if (attempts.size == 1) credentials.invalidate(slot)
                 flow { awaitCancellation() }
@@ -507,6 +507,90 @@ class SocketReconnectorTest {
 
         delay(1)
         assertEquals(2, attempts.size)
+        job.cancelAndJoin()
+    }
+
+    /**
+     * cmux-app-um4. RELAY is preferred but unconfigured, so the connection
+     * really runs over DIRECT -- and the strip used to announce the
+     * preference instead of the outcome, which sent a live Tailscale
+     * connection's diagnosis off down the relay for the better part of a day.
+     */
+    @Test
+    fun theStatusNamesTheSlotActuallyOpenedNotTheOnePreferred() = runTest {
+        val monitor = ConnectionMonitor()
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, monitor = monitor)
+        val job = launch {
+            reconnector.run(openSocket = { slot, _ ->
+                if (slot == ConnectionSlot.RELAY) null else flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionStatus.Connecting(ConnectionSlot.DIRECT), monitor.status.value)
+        job.cancelAndJoin()
+    }
+
+    /**
+     * cmux-app-um4's other half: a transport that opens is working, whether
+     * or not anything has come down it yet. Reporting the socket's own open
+     * (rather than the first frame that decodes) is what separates "nothing
+     * to say" from "cannot connect" -- and it was the frames, not the
+     * transport, that were failing when this was found.
+     */
+    @Test
+    fun anOpenSocketIsReportedConnectedEvenWhenNoFrameEverArrives() = runTest {
+        val monitor = ConnectionMonitor()
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime }, monitor = monitor)
+        val job = launch {
+            reconnector.run(openSocket = { _, onOpen ->
+                flow {
+                    onOpen()
+                    awaitCancellation()
+                }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionStatus.Connected(ConnectionSlot.RELAY), monitor.status.value)
+        job.cancelAndJoin()
+    }
+
+    /** Moving the report after the fallback must not cost the penalty window
+     *  its own distinct status: settling for DIRECT because RELAY is being
+     *  skipped is a fallback, not an ordinary connect. */
+    @Test
+    fun settlingForDirectInsideTheRelayPenaltyIsStillReportedAsAFallback() = runTest {
+        val health = RelayHealth()
+        val monitor = ConnectionMonitor()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime }, monitor = monitor)
+        health.markDown(currentTime)
+        val job = launch {
+            reconnector.run(openSocket = { _, _ -> flow { awaitCancellation() } }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionStatus.FallingBack(null), monitor.status.value)
+        job.cancelAndJoin()
+    }
+
+    /** ...but a penalized RELAY that is the only configured slot is what we
+     *  end up on anyway, and calling that a fallback names a transport the
+     *  app isn't using. */
+    @Test
+    fun aPenalizedRelayIsReportedPlainlyWhenDirectIsNotConfigured() = runTest {
+        val health = RelayHealth()
+        val monitor = ConnectionMonitor()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime }, monitor = monitor)
+        health.markDown(currentTime)
+        val job = launch {
+            reconnector.run(openSocket = { slot, _ ->
+                if (slot == ConnectionSlot.DIRECT) null else flow { awaitCancellation() }
+            }) { true }
+        }
+
+        delay(1)
+        assertEquals(ConnectionStatus.Connecting(ConnectionSlot.RELAY), monitor.status.value)
         job.cancelAndJoin()
     }
 }

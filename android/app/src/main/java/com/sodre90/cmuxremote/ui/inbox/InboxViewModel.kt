@@ -93,7 +93,7 @@ class InboxViewModel(
         if (bridge.anyBridgeConfigured()) {
             viewModelScope.launch {
                 reconnector.run(
-                    openSocket = { slot -> bridge.eventsSocket(slot)?.connect() },
+                    openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
                     onBeforeReconnect = { refresh() },
                 ) { frame ->
                     if (isPendingSetChangeSignal(frame.type)) refreshRequests.tryEmit(Unit)

@@ -8,9 +8,13 @@ import com.sodre90.cmuxremote.data.e2e.PairedSession
 import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
 import com.sodre90.cmuxremote.data.e2e.ReplayWindow
 import com.sodre90.cmuxremote.data.e2e.nonce
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -25,6 +29,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 private class SendOnlySession(private val secret: ByteArray) : PairedSession {
     private var counter = 0L
@@ -87,5 +93,31 @@ class EventsSocketTest {
         assertEquals("f1", frames[0].feedId)
         assertEquals("permissionRequest", frames[0].kind)
         assertEquals("heartbeat", frames[1].type)
+    }
+
+    /** cmux-app-um4: the open signal has to come from the upgrade itself.
+     *  Here the peer sends a frame the session cannot decrypt -- the flow
+     *  therefore emits nothing at all, which is exactly the case that used to
+     *  read as "still connecting" forever. */
+    @Test
+    fun signalsOpenOnTheUpgradeEvenWhenNoFrameEverDecodes() {
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    webSocket.send(ByteArray(40) { 0 }.toByteString())
+                }
+            }),
+        )
+
+        val opened = CountDownLatch(1)
+        val es = EventsSocket(OkHttpClient(), server.url("/").toString(), SendOnlySession(secret), cipher)
+        runBlocking {
+            val collector = launch { es.connect { opened.countDown() }.collect { } }
+            assertTrue(
+                "onOpen never fired; the socket's own upgrade is the only signal here",
+                withContext(Dispatchers.IO) { opened.await(5, TimeUnit.SECONDS) },
+            )
+            collector.cancelAndJoin()
+        }
     }
 }

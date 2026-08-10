@@ -25,12 +25,23 @@ class EventsSocket(
 ) {
     private val url = "${baseUrl.trimEnd('/')}/events"
 
-    /** Cold flow; opening the socket on collect and closing it on cancel. */
-    fun connect(): Flow<EventFrame> = callbackFlow {
+    /**
+     * Cold flow; opening the socket on collect and closing it on cancel.
+     *
+     * [onOpen] fires on the WebSocket upgrade, before any frame -- the flow
+     * itself cannot carry that, since a frame the peer never sends (or one
+     * that fails to decrypt, below) is indistinguishable from a socket that
+     * never opened at all.
+     */
+    fun connect(onOpen: () -> Unit = {}): Flow<EventFrame> = callbackFlow {
         val request = Request.Builder().url(url).build()
         val socket = http.newWebSocket(
             request,
             object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    onOpen()
+                }
+
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
                         .mapCatching {

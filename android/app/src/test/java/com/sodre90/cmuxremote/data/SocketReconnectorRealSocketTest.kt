@@ -93,9 +93,9 @@ class SocketReconnectorRealSocketTest {
         val reconnector = SocketReconnector<EventFrame>(health, initialBackoffMs = 1L, maxBackoffMs = 1L)
         val http = OkHttpClient()
         val job = launch(Dispatchers.IO) {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, onOpen ->
                 val base = if (slot == ConnectionSlot.RELAY) relayServer.url("/") else directServer.url("/")
-                EventsSocket(http, base.toString(), NoFrameSession(), cipher).connect()
+                EventsSocket(http, base.toString(), NoFrameSession(), cipher).connect(onOpen)
             }) { true }
         }
 
@@ -158,9 +158,9 @@ class SocketReconnectorRealSocketTest {
         )
         val http = OkHttpClient()
         val job = launch(Dispatchers.IO) {
-            reconnector.run(openSocket = { slot ->
+            reconnector.run(openSocket = { slot, onOpen ->
                 val base = if (slot == ConnectionSlot.RELAY) relayServer.url("/") else directServer.url("/")
-                EventsSocket(http, base.toString(), NoFrameSession(), cipher).connect()
+                EventsSocket(http, base.toString(), NoFrameSession(), cipher).connect(onOpen)
             }) { true }
         }
 

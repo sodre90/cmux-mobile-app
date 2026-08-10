@@ -36,11 +36,17 @@ class TerminalSocket(
     @Volatile
     private var socket: WebSocket? = null
 
-    fun connect(): Flow<TerminalDown> = callbackFlow {
+    /** [onOpen] fires on the WebSocket upgrade, before any frame -- see
+     *  [EventsSocket.connect] for why that can't come through the flow. */
+    fun connect(onOpen: () -> Unit = {}): Flow<TerminalDown> = callbackFlow {
         val request = Request.Builder().url(url).build()
         val ws = http.newWebSocket(
             request,
             object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    onOpen()
+                }
+
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
                         .mapCatching {

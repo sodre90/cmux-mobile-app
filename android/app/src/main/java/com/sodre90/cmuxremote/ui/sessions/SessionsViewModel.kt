@@ -223,7 +223,7 @@ class SessionsViewModel(
         if (!bridge.anyBridgeConfigured()) return
         viewModelScope.launch {
             reconnector.run(
-                openSocket = { slot -> bridge.eventsSocket(slot)?.connect() },
+                openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
                 onBeforeReconnect = { refreshRequests.tryEmit(Unit) }, // catch up on anything missed while disconnected
             ) { frame ->
                 if (frame.type != "heartbeat") refreshRequests.tryEmit(Unit)
