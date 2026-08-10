@@ -23,9 +23,10 @@ import java.io.IOException
  * penalty set, so mutating calls (replyFeed/renameWorkspace/setYoloMode/
  * registerDevice) are never silently re-executed against the wrong backend.
  *
- * [registerDevice] is wrapped here too: whichever slot (relay or direct) is
- * actually reachable for a given device should end up with the FCM token,
- * since either one may be the connection the Mac agent later pushes through.
+ * [registerDevice] is the one exception to the try-primary-then-fallback
+ * shape: it fans out to BOTH slots instead, because each keeps its own
+ * device table and either may be the connection a push later arrives
+ * through. See its own doc for why "whichever is reachable" was not enough.
  *
  * [sessions] and [pendingFeed] additionally retry a 409 not_paired through
  * [retryingNotPaired] -- see its doc for why. Every caller of these two reads
@@ -116,7 +117,43 @@ class FallbackBridgeClient(
     suspend fun replyFeed(feedId: String, reply: FeedReply) = call { it.replyFeed(feedId, reply) }
     suspend fun renameWorkspace(id: String, title: String) = call { it.renameWorkspace(id, title) }
     suspend fun setYoloMode(id: String, mode: String) = call { it.setYoloMode(id, mode) }
-    suspend fun registerDevice(fcmToken: String) = call { it.registerDevice(fcmToken) }
+    /**
+     * Registers on EVERY configured slot, not just whichever answers first.
+     *
+     * The relay and the agent keep separate device tables, and neither can
+     * fill the other's in: the relay answers /devices/register itself
+     * (bridge/internal/relay/relay.go) and the agent serves it only on its
+     * direct route set, never on the relay-tunneled one (see the note in
+     * bridge/internal/server/trusted.go). Registering just the first
+     * reachable slot therefore left the direct slot with no token at all
+     * while the relay was up -- the relay answers 200 whenever its own
+     * process is alive, even with its tunnel to the agent dead, so [call]
+     * never had cause to fail over -- and direct-mode push was silently
+     * dead exactly when a relay outage made it the only path left
+     * (cmux-app-vex).
+     *
+     * Deliberately not routed through [call]: that helper stops at the first
+     * success, and would read this endpoint's 200 as evidence the relay is
+     * healthy when it evidences only that the relay process is running.
+     *
+     * Best effort per slot -- one slot failing must not deny the other its
+     * token -- so this throws only when no slot accepted the token.
+     */
+    suspend fun registerDevice(fcmToken: String) {
+        val targets = listOfNotNull(primary(), fallback())
+        if (targets.isEmpty()) throw BridgeException(0, "not configured")
+        var registered = false
+        var lastFailure: IOException? = null
+        for (target in targets) {
+            try {
+                target.registerDevice(fcmToken)
+                registered = true
+            } catch (e: IOException) {
+                lastFailure = e
+            }
+        }
+        if (!registered) throw lastFailure ?: BridgeException(0, "not configured")
+    }
 
     /** Same fallback philosophy as [registerDevice]: whichever slot is
      *  actually reachable handles the test push, since either one may be

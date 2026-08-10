@@ -241,16 +241,17 @@ class FallbackBridgeClientTest {
 
     @Test
     fun primary4xxPropagatesWithoutFailoverOrPenalty() {
-        // registerDevice is a write, so it's never subject to sessions()/
+        // renameWorkspace is a write, so it's never subject to sessions()/
         // pendingFeed()'s not_paired retry (see the sessions*PairingRetry
         // tests below) -- that keeps this test isolated to the "4xx never
-        // fails over" behavior it's actually named for.
+        // fails over" behavior it's actually named for. Deliberately NOT
+        // registerDevice, which no longer routes through call() at all.
         primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
         primaryServer.enqueue(MockResponse()) // must be consumed by the 2nd call
         val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
 
         try {
-            runBlocking { fb.registerDevice("tok") }
+            runBlocking { fb.renameWorkspace("ws-1", "new title") }
             fail("expected the primary's 409 to propagate instead of failing over")
         } catch (e: BridgeException) {
             assertEquals(409, e.code)
@@ -258,7 +259,7 @@ class FallbackBridgeClientTest {
         assertEquals(0, fallbackServer.requestCount)
 
         // No penalty was set, so the second call must still try primary first.
-        runBlocking { fb.registerDevice("tok") }
+        runBlocking { fb.renameWorkspace("ws-1", "new title") }
 
         assertEquals(2, primaryServer.requestCount)
         assertEquals(0, fallbackServer.requestCount)
@@ -378,18 +379,24 @@ class FallbackBridgeClientTest {
     }
 
     @Test
-    fun registerDevicePrimarySuccessNeverCallsFallback() {
+    fun registerDeviceRegistersOnEverySlotEvenWhenTheFirstOneSucceeds() {
+        // cmux-app-vex. Relay and agent keep separate device tables, and the
+        // relay answers /devices/register itself, so a primary success is no
+        // evidence the direct slot has the token -- stopping there left
+        // direct-mode push with nothing to send to, and the gap only showed
+        // up during a relay outage, when direct was the only path left.
         primaryServer.enqueue(MockResponse())
+        fallbackServer.enqueue(MockResponse())
         val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
 
         runBlocking { fb.registerDevice("fcm-token-abc") }
 
         assertEquals(1, primaryServer.requestCount)
-        assertEquals(0, fallbackServer.requestCount)
+        assertEquals("both slots must receive the token", 1, fallbackServer.requestCount)
     }
 
     @Test
-    fun registerDeviceFallsBackWhenPrimaryUnreachable() {
+    fun registerDeviceStillReachesTheOtherSlotWhenOneIsUnreachable() {
         primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         fallbackServer.enqueue(MockResponse())
         val fb = FallbackBridgeClient(
@@ -401,5 +408,63 @@ class FallbackBridgeClientTest {
 
         assertEquals(1, primaryServer.requestCount)
         assertEquals(1, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun registerDeviceIsNotStoppedByARejectionFromOneSlot() {
+        // A 4xx is fatal for the ordinary writes (see
+        // primary4xxPropagatesWithoutFailoverOrPenalty) because re-running
+        // them against another backend could double-apply. Registering a
+        // token is idempotent per slot, and one slot rejecting it says
+        // nothing about the other, so it must not deny the other its token.
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
+        fallbackServer.enqueue(MockResponse())
+        val fb = FallbackBridgeClient(primary = { clientFor(primaryServer) }, fallback = { clientFor(fallbackServer) })
+
+        runBlocking { fb.registerDevice("fcm-token-abc") }
+
+        assertEquals(1, primaryServer.requestCount)
+        assertEquals(1, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun registerDeviceThrowsOnlyWhenNoSlotAcceptedTheToken() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer, connectTimeoutMs = 300) },
+        )
+
+        try {
+            runBlocking { fb.registerDevice("fcm-token-abc") }
+            fail("expected registerDevice to report that no slot took the token")
+        } catch (e: IOException) {
+            // expected
+        }
+        assertEquals(1, primaryServer.requestCount)
+        assertEquals(1, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun registerDeviceUsesTheOnlyConfiguredSlot() {
+        fallbackServer.enqueue(MockResponse())
+        val fb = FallbackBridgeClient(primary = { null }, fallback = { clientFor(fallbackServer) })
+
+        runBlocking { fb.registerDevice("fcm-token-abc") }
+
+        assertEquals(1, fallbackServer.requestCount)
+    }
+
+    @Test
+    fun registerDeviceThrowsWhenNoSlotIsConfigured() {
+        val fb = FallbackBridgeClient(primary = { null }, fallback = { null })
+
+        try {
+            runBlocking { fb.registerDevice("fcm-token-abc") }
+            fail("expected registerDevice to reject an unconfigured client")
+        } catch (e: BridgeException) {
+            assertEquals(0, e.code)
+        }
     }
 }
