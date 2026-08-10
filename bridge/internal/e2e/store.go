@@ -207,6 +207,20 @@ func boolToInt(b bool) int64 {
 // docs/superpowers/specs/2026-08-10-per-pairing-key-separation-design.md).
 var ErrSharedSecretReused = errors.New("shared secret already paired to a different device")
 
+// ErrReplayRejected reports a counter the replay window refused before any
+// AEAD work happened, so nothing is known about whether the frame was
+// authentic. Distinct from the AEAD failure both paths used to share,
+// because the two call for opposite responses: an AEAD failure means the
+// bytes are wrong, while this means the stored counter state is stale.
+// Conflating them is what made cmux-app-a3g a long hunt rather than a
+// one-line diagnosis; the wrapped detail names the counter and the window it
+// was refused against, since the giveaway is the gap between them.
+//
+// Deliberately internal: the wire response for both cases stays
+// "decrypt_failed" (see internal/server/encryption.go), so this enriches the
+// agent's own logs without telling a caller which of the two it hit.
+var ErrReplayRejected = errors.New("replay_rejected")
+
 // AddDevice persists a newly paired device, keyed by deviceID. Re-pairing an
 // already-known deviceID unconditionally overwrites its row -- including
 // resetting its send/recv counters to zero -- matching the pre-SQLite Store's
@@ -474,7 +488,7 @@ func (s *Store) ValidateAndCommitRecvCounter(deviceID string, n uint64, decrypt 
 	highestSet := highestSetRaw != 0
 
 	if !canAcceptRecvCounter(highest, highestSet, windowBits, n) {
-		return nil, fmt.Errorf("decrypt_failed")
+		return nil, fmt.Errorf("%w: counter=%d highest_seen=%d", ErrReplayRejected, n, highest)
 	}
 
 	pt, err := decrypt()

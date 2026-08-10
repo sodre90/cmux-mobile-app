@@ -335,6 +335,43 @@ func TestValidateAndCommitRecvCounterRejectsWithoutDecrypting(t *testing.T) {
 	}
 }
 
+func TestValidateAndCommitRecvCounterDistinguishesAReplayRejectionFromADecryptFailure(t *testing.T) {
+	dir := t.TempDir()
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("secret")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	// Leave the window far ahead of where a fresh pairing's counters start,
+	// reproducing the state a superseded pairing used to strand (cmux-app-a3g).
+	if _, err := s.ValidateAndCommitRecvCounter("dev1", 246410, func() ([]byte, error) {
+		return []byte("ok"), nil
+	}); err != nil {
+		t.Fatalf("seeding the window: %v", err)
+	}
+
+	_, err := s.ValidateAndCommitRecvCounter("dev1", 0, func() ([]byte, error) {
+		t.Fatal("decrypt must not run for a counter the window refused")
+		return nil, nil
+	})
+	if !errors.Is(err, ErrReplayRejected) {
+		t.Fatalf("a stale window must report ErrReplayRejected, got %v", err)
+	}
+	// The gap is the diagnosis, so both numbers have to be in the message.
+	if msg := err.Error(); !strings.Contains(msg, "counter=0") || !strings.Contains(msg, "highest_seen=246410") {
+		t.Fatalf("message must name the counter and the window, got %q", msg)
+	}
+
+	// The other half of the distinction: a genuine AEAD failure must NOT be
+	// reported as a replay rejection, or the dead end just moves.
+	_, err = s.ValidateAndCommitRecvCounter("dev1", 246411, func() ([]byte, error) {
+		return nil, fmt.Errorf("decrypt_failed")
+	})
+	if errors.Is(err, ErrReplayRejected) {
+		t.Fatalf("an AEAD failure must not masquerade as a replay rejection, got %v", err)
+	}
+}
+
 func TestValidateAndCommitRecvCounterDoesNotAdvanceOnDecryptFailure(t *testing.T) {
 	dir := t.TempDir()
 	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
