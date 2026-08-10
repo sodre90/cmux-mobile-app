@@ -70,6 +70,42 @@ class FrameTest {
         }
     }
 
+    @Test
+    fun decryptFrameRejectsAFrameFromAnotherPairingWithoutAdvancingTheWindow() {
+        // cmux-app-1fx / cmux-app-a3g. Every pairing used to derive the same
+        // key, so a frame produced under a *stale* pairing's row still
+        // authenticated against the live session -- and because that row's
+        // counter was far ahead, committing it slid the replay window past
+        // the live counter and every real frame afterwards was rejected as a
+        // replay. Per-pairing keys must make the foreign frame fail the AEAD
+        // instead, leaving the window where it was.
+        val liveSecret = ByteArray(32) { it.toByte() }
+        val otherPairingSecret = ByteArray(32) { (it + 1).toByte() }
+        val session = FakeSession(liveSecret)
+
+        val foreignCounter = 5_000L
+        val foreign = cipher.seal(otherPairingSecret, nonce(DIR_AGENT_TO_DEVICE, foreignCounter), "x".toByteArray())
+        val foreignFrame = ByteArray(8 + foreign.size)
+        ByteBuffer.wrap(foreignFrame, 0, 8).putLong(foreignCounter)
+        foreign.copyInto(foreignFrame, 8)
+
+        try {
+            decryptFrame(session, cipher, foreignFrame)
+            fail("a frame from a different pairing must not decrypt")
+        } catch (e: DecryptFailedException) {
+            // expected
+        }
+
+        // The live session must still be usable at its own, much lower
+        // counter -- that is the part the shared key used to break.
+        val live = cipher.seal(liveSecret, nonce(DIR_AGENT_TO_DEVICE, 0L), "live".toByteArray())
+        val liveFrame = ByteArray(8 + live.size)
+        ByteBuffer.wrap(liveFrame, 0, 8).putLong(0L)
+        live.copyInto(liveFrame, 8)
+
+        assertArrayEquals("live".toByteArray(), decryptFrame(session, cipher, liveFrame))
+    }
+
     @Test(expected = DecryptFailedException::class)
     fun decryptFrameRejectsWrongDirectionFrame() {
         // The single highest-risk failure mode per Global Constraints: a
