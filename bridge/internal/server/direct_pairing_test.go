@@ -235,3 +235,57 @@ func TestDirectDevicePairRejectsUnknownCode(t *testing.T) {
 		t.Fatalf("want 410, got %d", resp.StatusCode)
 	}
 }
+
+// The direct listener mints tokens on redemption exactly as the relay does,
+// so the operator's refusal has to take them back here too (cmux-app-af1).
+// Direct mode's abort is reachable without a client cert -- pairing.
+// ConstantTenant resolves every caller to this Mac's one tenant, and
+// Tailscale's ACLs are this listener's boundary.
+func TestDirectAbortPairingRevokesTheRedeemedToken(t *testing.T) {
+	srv, store, tenantID := newDirectPairingServer(t)
+	defer srv.Close()
+
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64")
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/agent/pairing-code/"+code, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var body wire.AbortPairingResp
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Revoked {
+		t.Fatal("want revoked=true for a pairing that had already been redeemed")
+	}
+	if _, err := store.Verify(tok); err == nil {
+		t.Fatal("a refused pairing's token still verifies")
+	}
+}
+
+func TestDirectAbortPairingUnknownCodeIs404(t *testing.T) {
+	srv, _, _ := newDirectPairingServer(t)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/agent/pairing-code/bogus", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}

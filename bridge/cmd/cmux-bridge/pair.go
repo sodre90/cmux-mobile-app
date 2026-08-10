@@ -107,6 +107,49 @@ func pollPairingCode(client *http.Client, agentBase, code string) (devicePubkey,
 	return body.DevicePubkey, body.TokenHash, body.Redeemed, nil
 }
 
+// abortPairing destroys whatever the pairing code produced: the device token
+// redemption already minted, and the code itself. Reports whether a token
+// was actually revoked, so the operator is told plainly that the phone's
+// credential is dead rather than merely that the pairing didn't finish.
+func abortPairing(client *http.Client, agentBase, code string) (revoked bool, err error) {
+	req, err := http.NewRequest(http.MethodDelete, agentBase+"/agent/pairing-code/"+code, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	var body struct {
+		Revoked bool `json:"revoked"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return false, err
+	}
+	return body.Revoked, nil
+}
+
+// abandonPairing rolls back a pairing that got as far as redemption but must
+// not stand, and reports what the operator now needs to know. Redemption
+// hands the phone a working bearer token before anyone has confirmed
+// anything, so leaving it in place would trust a pairing that was refused or
+// that failed to complete (cmux-app-af1). A failed rollback is escalated
+// rather than logged, because the live credential is then still out there.
+func abandonPairing(client *http.Client, agentBase, code, why string, out io.Writer) error {
+	revoked, err := abortPairing(client, agentBase, code)
+	if err != nil {
+		return fmt.Errorf("%s, but revoking the device token the phone already holds FAILED (revoke it by hand): %w", why, err)
+	}
+	if revoked {
+		_, _ = fmt.Fprintf(out, "Revoked the device token this pairing had already issued.\n")
+	}
+	return fmt.Errorf("%s", why)
+}
+
 // pairDevice runs one pairing session: request a fresh pairing code from the
 // relay, render it (with the agent's e2e public key and the phone's
 // no-cert pairing URL) as a QR code to out, then poll agentBase until the
@@ -178,11 +221,15 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 			return fmt.Errorf("read confirmation: %w", err)
 		}
 		if !confirmed {
-			return fmt.Errorf("pairing aborted: fingerprint not confirmed for code %s", code)
+			return abandonPairing(client, agentBase, code,
+				fmt.Sprintf("pairing aborted: fingerprint not confirmed for code %s", code), out)
 		}
 
 		if err := sessions.AddDevice(tokenHash, devicePub, secret); err != nil {
-			return fmt.Errorf("persist paired device: %w", err)
+			// Half a pairing is worse than none: the phone would keep a token
+			// that authenticates but decrypts nothing.
+			return abandonPairing(client, agentBase, code,
+				fmt.Sprintf("persist paired device: %v", err), out)
 		}
 		_, _ = fmt.Fprintf(out, "Device paired successfully.\n")
 		return nil

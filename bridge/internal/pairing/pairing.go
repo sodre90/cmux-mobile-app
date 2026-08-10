@@ -1,4 +1,4 @@
-// Package pairing implements the four self-service pairing-code HTTP routes
+// Package pairing implements the self-service pairing-code HTTP routes
 // served, byte-identically, by both the relay (internal/relay) and direct
 // mode (internal/server). The handlers used to exist near-verbatim in both
 // packages; their only real difference -- how a request resolves to a
@@ -7,6 +7,7 @@ package pairing
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -44,7 +45,7 @@ type RateLimiter func(*http.Request) bool
 // not this package's concern.
 func AllowAll(*http.Request) bool { return true }
 
-// Mount registers the four pairing routes onto mux, backed by store, with
+// Mount registers the pairing routes onto mux, backed by store, with
 // tenant deciding which tenant the agent-facing routes act for and
 // devicePairLimit gating POST /devices/pair specifically (pass AllowAll to
 // disable).
@@ -52,6 +53,7 @@ func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, deviceP
 	h := &handlers{store: store, tenant: tenant, devicePairLimit: devicePairLimit}
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(h.newPairingCode))
 	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(h.pairingCodeStatus))
+	mux.Handle("DELETE /agent/pairing-code/{code}", http.HandlerFunc(h.abortPairing))
 	mux.Handle("GET /devices/pair-info/{code}", http.HandlerFunc(h.pairingCodeInfo))
 	mux.Handle("POST /devices/pair", http.HandlerFunc(h.devicePair))
 }
@@ -115,6 +117,35 @@ func (h *handlers) pairingCodeStatus(w http.ResponseWriter, req *http.Request) {
 		DevicePubkey: pubkey,
 		TokenHash:    hash,
 	})
+}
+
+// abortPairing lets the agent that issued a pairing code destroy whatever
+// that code produced, for the case the operator refuses the fingerprint (see
+// cmd/cmux-bridge/pair.go). Redemption mints the device's bearer token
+// before the operator is ever asked, so without this an explicit refusal
+// left the phone holding a working credential -- one with no e2e session
+// behind it, but valid for every bearer-authenticated route
+// (cmux-app-af1). Tenant-scoped exactly like pairingCodeStatus.
+func (h *handlers) abortPairing(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := h.tenant(req)
+	if !ok {
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	revoked, err := h.store.AbortPairing(tenantID, req.PathValue("code"))
+	if errors.Is(err, auth.ErrNotFound) {
+		httpjson.Error(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if err != nil {
+		slog.Error("pairing: abort pairing", "tenant_id", tenantID, "err", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	if revoked {
+		slog.Warn("pairing: pairing refused by operator, device token revoked", "tenant_id", tenantID)
+	}
+	httpjson.Write(w, http.StatusOK, wire.AbortPairingResp{Revoked: revoked})
 }
 
 // pairingCodeInfo lets a phone that can't scan the QR (no camera, or

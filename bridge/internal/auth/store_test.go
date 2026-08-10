@@ -163,6 +163,88 @@ func TestPairingCodeSingleUse(t *testing.T) {
 	}
 }
 
+// cmux-app-af1: the token is minted at redemption, before the operator is
+// ever asked to confirm the fingerprint. Refusing therefore has to destroy a
+// credential that already exists and already works.
+func TestAbortPairingDestroysTheRedeemedToken(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, ok := s.RedeemPairingCode(code, "phone", testPubkey)
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+	if _, err := s.Verify(tok); err != nil {
+		t.Fatalf("token should verify before the abort: %v", err)
+	}
+
+	revoked, err := s.AbortPairing(tenant, code)
+	if err != nil {
+		t.Fatalf("AbortPairing: %v", err)
+	}
+	if !revoked {
+		t.Fatal("AbortPairing must report that it destroyed a token the phone was holding")
+	}
+	if _, err := s.Verify(tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused pairing's token still verifies: %v", err)
+	}
+	if _, _, _, ok := s.PairingCodeStatus(tenant, code); ok {
+		t.Fatal("an aborted code must not survive to be redeemed again")
+	}
+}
+
+// An abort that lands before the phone ever redeemed still burns the code --
+// otherwise the operator walks away and a scanned QR can mint a token
+// nobody is left watching for.
+func TestAbortPairingBeforeRedemptionRevokesNothingButKillsTheCode(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revoked, err := s.AbortPairing(tenant, code)
+	if err != nil {
+		t.Fatalf("AbortPairing: %v", err)
+	}
+	if revoked {
+		t.Fatal("nothing had been issued yet, so nothing can have been revoked")
+	}
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
+		t.Fatal("an aborted code must no longer be redeemable")
+	}
+}
+
+// The same isolation PairingCodeStatus enforces: a code is not a capability
+// another tenant's agent can act on by guessing it.
+func TestAbortPairingIsTenantScoped(t *testing.T) {
+	s := newStore(t)
+	owner := newTenant(t, s)
+	stranger := newTenant(t, s)
+	code, err := s.NewPairingCode(owner, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, ok := s.RedeemPairingCode(code, "phone", testPubkey)
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+
+	if _, err := s.AbortPairing(stranger, code); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another tenant must not be able to abort this pairing, got %v", err)
+	}
+	if _, err := s.Verify(tok); err != nil {
+		t.Fatalf("the owner's token must survive a stranger's abort: %v", err)
+	}
+	if _, err := s.AbortPairing(owner, "NOSUCHCODE"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown code must report not-found, got %v", err)
+	}
+}
+
 func TestRedeemPairingCodeRequiresDevicePubkey(t *testing.T) {
 	s := newStore(t)
 	tenant := newTenant(t, s)

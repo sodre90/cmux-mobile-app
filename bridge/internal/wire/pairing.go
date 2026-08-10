@@ -5,7 +5,7 @@ import "time"
 // PairingCodeTTL is how long a self-service pairing code stays redeemable.
 const PairingCodeTTL = 10 * time.Minute
 
-// The six DTOs below are the self-service pairing wire contract, served
+// The DTOs below are the self-service pairing wire contract, served
 // identically by the relay (internal/relay) and direct mode
 // (internal/server).
 
@@ -26,6 +26,13 @@ type PairingCodeStatusResp struct {
 	Redeemed     bool   `json:"redeemed"`
 	DevicePubkey string `json:"device_pubkey,omitempty"`
 	TokenHash    string `json:"token_hash,omitempty"`
+}
+
+// AbortPairingResp is the response to DELETE /agent/pairing-code/{code}.
+// Revoked distinguishes an abort that destroyed a credential the phone was
+// already holding from one that arrived before any redemption.
+type AbortPairingResp struct {
+	Revoked bool `json:"revoked"`
 }
 
 // PairingCodeInfoResp is the response to GET /devices/pair-info/{code}.

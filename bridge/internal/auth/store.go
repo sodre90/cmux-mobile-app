@@ -529,6 +529,58 @@ func (s *Store) PairingCodeStatus(tenantID, code string) (devicePubkey, tokenHas
 	return pubkey.String, hash.String, true, true
 }
 
+// AbortPairing undoes a pairing the operator refused at the agent's
+// fingerprint prompt: it deletes the device token RedeemPairingCode already
+// minted, and the pairing code itself so nothing can redeem it a second
+// time. Reports whether a device token was actually destroyed, so an agent
+// can distinguish "the phone's credential is gone" from "the phone never got
+// one" -- both are acceptable outcomes of an abort, but only the first is a
+// credential the operator would otherwise still be trusting.
+//
+// This exists because the token is minted at redemption, which happens
+// BEFORE the operator sees the fingerprint to confirm: an abort left a fully
+// valid bearer token in the store with no matching e2e session, i.e. a
+// credential for a pairing that was explicitly refused (cmux-app-af1).
+// Scoped to tenantID for the same reason PairingCodeStatus is -- an agent
+// must not be able to delete another tenant's device by guessing a code.
+func (s *Store) AbortPairing(tenantID, code string) (revokedToken bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("abort pairing: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	var gotTenant string
+	var hash sql.NullString
+	err = tx.QueryRow(`SELECT tenant_id, token_hash FROM pairing_codes WHERE code = ?`, code).
+		Scan(&gotTenant, &hash)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && gotTenant != tenantID) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("abort pairing: %w", err)
+	}
+
+	if hash.Valid && hash.String != "" {
+		res, err := tx.Exec(`DELETE FROM devices WHERE token_hash = ? AND tenant_id = ?`, hash.String, tenantID)
+		if err != nil {
+			return false, fmt.Errorf("abort pairing: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		revokedToken = n > 0
+	}
+	if _, err := tx.Exec(`DELETE FROM pairing_codes WHERE code = ? AND tenant_id = ?`, code, tenantID); err != nil {
+		return false, fmt.Errorf("abort pairing: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("abort pairing: %w", err)
+	}
+	return revokedToken, nil
+}
+
 // PairingCodeInfo resolves a pairing code to the agent's e2e public key and
 // tenant, for a phone pairing via manual entry instead of a scanned QR --
 // the QR carries this same data directly; this lets a phone without the QR

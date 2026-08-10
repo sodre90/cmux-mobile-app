@@ -657,3 +657,123 @@ func TestPairingCodeInfoRejectsRedeemedCode(t *testing.T) {
 		t.Fatalf("want 410 for an already-redeemed code, got %d", resp.StatusCode)
 	}
 }
+
+// cmux-app-af1. The relay hands the phone a working bearer token the moment
+// it redeems, which is before the operator has seen a fingerprint to accept
+// or refuse -- so the refusal path needs a way to take that token back, and
+// it must be as tenant-scoped as every other agent-facing route.
+func TestAbortPairingRevokesTheRedeemedToken(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64")
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/agent/pairing-code/"+code, nil)
+	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var body struct {
+		Revoked bool `json:"revoked"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Revoked {
+		t.Fatal("the agent has to be told the phone's token is gone, not just that the code is")
+	}
+	if _, err := store.Verify(tok); err == nil {
+		t.Fatal("a refused pairing's token still verifies")
+	}
+}
+
+func TestAbortPairingScopedToOwnTenant(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantA, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantB, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantA, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64")
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/agent/pairing-code/"+code, nil)
+	req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantB)
+	req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("tenant B must not be able to revoke tenant A's device, got %d", resp.StatusCode)
+	}
+	if _, err := store.Verify(tok); err != nil {
+		t.Fatalf("tenant A's token must survive: %v", err)
+	}
+}
+
+func TestAbortPairingRequiresAgentCN(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := New(store, nil, "relay-secret")
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/agent/pairing-code/"+code, nil)
+	req.Header.Set("X-Client-Cert-Cn", "CN=phone")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("want 403 for a non-agent CN, got %d", resp.StatusCode)
+	}
+}
