@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -51,6 +52,59 @@ func TestAddDeviceAndSharedSecret(t *testing.T) {
 	}
 	if string(got) != string(secret) {
 		t.Fatalf("shared secret mismatch: got %q want %q", got, secret)
+	}
+}
+
+// Two device rows sharing one key is the cmux-app-1fx defect: each row keeps
+// its own counters and AddDevice resets them to zero, so a shared key means
+// the same (direction, counter) nonce is used twice. Correct derivation makes
+// this unreachable -- the point of the guard is that a regression in it fails
+// loudly here instead of silently reusing nonces in production.
+func TestAddDeviceRejectsSecretAlreadyPairedToAnotherDevice(t *testing.T) {
+	dir := t.TempDir()
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
+	secret := []byte("0123456789abcdef0123456789abcdef")
+
+	if err := s.AddDevice("dev1", testPubKey(t), secret); err != nil {
+		t.Fatalf("AddDevice dev1: %v", err)
+	}
+	if _, err := s.NextSendCounter("dev1"); err != nil {
+		t.Fatalf("NextSendCounter dev1: %v", err)
+	}
+
+	err := s.AddDevice("dev2", testPubKey(t), secret)
+	if !errors.Is(err, ErrSharedSecretReused) {
+		t.Fatalf("AddDevice dev2 = %v, want ErrSharedSecretReused", err)
+	}
+	if _, ok := s.SharedSecret("dev2"); ok {
+		t.Fatal("rejected device must not be persisted")
+	}
+	// The rejected pairing must not have disturbed the live row -- in
+	// particular its counter must not be rolled back to zero.
+	if n, err := s.NextSendCounter("dev1"); err != nil || n != 1 {
+		t.Fatalf("dev1 NextSendCounter = %d, %v; want 1, nil (existing row left intact)", n, err)
+	}
+}
+
+// Re-pairing the same device is the legitimate path through the same guard:
+// the row being replaced is not a *different* device, so resetting its
+// counters alongside a fresh key stays allowed.
+func TestAddDeviceAllowsRepairingSameDeviceID(t *testing.T) {
+	dir := t.TempDir()
+	s := mustOpen(t, filepath.Join(dir, "sessions.json"))
+	secret := []byte("0123456789abcdef0123456789abcdef")
+
+	if err := s.AddDevice("dev1", testPubKey(t), secret); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+	if _, err := s.NextSendCounter("dev1"); err != nil {
+		t.Fatalf("NextSendCounter: %v", err)
+	}
+	if err := s.AddDevice("dev1", testPubKey(t), secret); err != nil {
+		t.Fatalf("re-pair dev1: %v", err)
+	}
+	if n, err := s.NextSendCounter("dev1"); err != nil || n != 0 {
+		t.Fatalf("NextSendCounter after re-pair = %d, %v; want 0, nil (counters reset)", n, err)
 	}
 }
 
@@ -448,7 +502,7 @@ func TestNextSendCounterCostDoesNotScaleWithDeviceCount(t *testing.T) {
 	pairDevices := func(from, to int) {
 		t.Helper()
 		for i := from; i < to; i++ {
-			if err := s.AddDevice(fmt.Sprintf("dev%d", i), testPubKey(t), []byte("secret")); err != nil {
+			if err := s.AddDevice(fmt.Sprintf("dev%d", i), testPubKey(t), []byte(fmt.Sprintf("secret%d", i))); err != nil {
 				t.Fatalf("AddDevice dev%d: %v", i, err)
 			}
 		}

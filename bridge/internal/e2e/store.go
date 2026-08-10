@@ -197,16 +197,35 @@ func boolToInt(b bool) int64 {
 	return 0
 }
 
+// ErrSharedSecretReused rejects a pairing that would key a second device row
+// with a secret an existing row already holds. Each row carries its own frame
+// counters and AddDevice resets them to zero, while the AEAD nonce is a pure
+// function of (direction, counter) -- so two rows sharing a key means reused
+// nonces. Correct key derivation makes this unreachable; asserting it turns a
+// future derivation regression into a loud pairing failure instead of silent
+// nonce reuse (see
+// docs/superpowers/specs/2026-08-10-per-pairing-key-separation-design.md).
+var ErrSharedSecretReused = errors.New("shared secret already paired to a different device")
+
 // AddDevice persists a newly paired device, keyed by deviceID. Re-pairing an
 // already-known deviceID unconditionally overwrites its row -- including
 // resetting its send/recv counters to zero -- matching the pre-SQLite Store's
-// map-assignment semantics exactly.
+// map-assignment semantics exactly. Re-keying a *different* deviceID with an
+// existing row's secret fails with [ErrSharedSecretReused].
 func (s *Store) AddDevice(deviceID string, devicePub *ecdh.PublicKey, sharedSecret []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`
+	secretB64 := base64.StdEncoding.EncodeToString(sharedSecret)
+	// The guard is a WHERE NOT EXISTS on the insert itself rather than a
+	// separate SELECT: reading first would open the transaction for read and
+	// then upgrade it to write, which two concurrent pairing processes can
+	// deadlock on (SQLITE_BUSY, not resolvable by busy_timeout). One
+	// statement takes the write lock once -- see
+	// TestConcurrentPairAndCounterCommitLosesNeither.
+	res, err := s.db.Exec(`
 		INSERT INTO devices (device_id, device_pubkey, shared_secret, send_counter, recv_highest, recv_highest_set, recv_window_bits, last_active_unix)
-		VALUES (?, ?, ?, 0, 0, 0, 0, ?)
+		SELECT ?, ?, ?, 0, 0, 0, 0, ?
+		WHERE NOT EXISTS (SELECT 1 FROM devices WHERE shared_secret = ? AND device_id <> ?)
 		ON CONFLICT(device_id) DO UPDATE SET
 			device_pubkey    = excluded.device_pubkey,
 			shared_secret    = excluded.shared_secret,
@@ -217,13 +236,36 @@ func (s *Store) AddDevice(deviceID string, devicePub *ecdh.PublicKey, sharedSecr
 			last_active_unix = excluded.last_active_unix`,
 		deviceID,
 		base64.StdEncoding.EncodeToString(devicePub.Bytes()),
-		base64.StdEncoding.EncodeToString(sharedSecret),
+		secretB64,
 		time.Now().Unix(),
+		secretB64,
+		deviceID,
 	)
 	if err != nil {
 		return fmt.Errorf("add device %s: %w", deviceID, err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("add device %s: %w", deviceID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("add device %s: %w (already paired as %s)", deviceID, ErrSharedSecretReused, s.deviceIDForSecret(secretB64, deviceID))
+	}
 	return nil
+}
+
+// deviceIDForSecret names the row that tripped AddDevice's reuse guard. Only
+// ever called on the error path, so a racing write changing the answer
+// between the two statements costs nothing but a less precise message.
+func (s *Store) deviceIDForSecret(secretB64, excludingDeviceID string) string {
+	var id string
+	if err := s.db.QueryRow(
+		`SELECT device_id FROM devices WHERE shared_secret = ? AND device_id <> ? LIMIT 1`,
+		secretB64, excludingDeviceID,
+	).Scan(&id); err != nil {
+		return "unknown"
+	}
+	return id
 }
 
 // DeviceIDs returns every deviceID this agent has ever paired with (direct or
