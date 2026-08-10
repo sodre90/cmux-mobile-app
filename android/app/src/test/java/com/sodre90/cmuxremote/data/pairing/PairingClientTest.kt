@@ -20,7 +20,7 @@ import org.junit.Test
 import java.io.IOException
 import java.util.Base64
 
-/** Records what PairingClient persisted -- stands in for real Settings/CryptoSession/Identity. */
+/** Records what PairingClient persisted -- stands in for real Settings/CryptoSession. */
 private class FakeIdentity(val priv: ByteArray, val pub: ByteArray)
 
 class PairingClientTest {
@@ -248,7 +248,7 @@ class PairingClientTest {
 
 /** Test seam: same logic as PairingClient.prepare/commit, but with
  *  persistence as three callbacks instead of real
- *  Identity/CryptoSession/Settings instances. */
+ *  CryptoSession/Settings instances. */
 private class TestablePairingClient(
     private val http: OkHttpClient,
     private val phonePrivateKey: ByteArray,

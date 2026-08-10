@@ -3,8 +3,8 @@ package com.sodre90.cmuxremote.data.pairing
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
-import com.sodre90.cmuxremote.data.e2e.Identity
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
+import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
 import com.sodre90.cmuxremote.data.e2e.pairingFingerprint
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.coroutines.Dispatchers
@@ -49,8 +49,7 @@ private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
  * The prepare/commit/resolveManualCode surface [PairingViewModel]
  * [com.sodre90.cmuxremote.ui.pairing.PairingViewModel] consumes -- narrow
  * enough to fake in a plain JVM test, unlike [PairingClient] itself (whose
- * constructor needs a real Android-Keystore-backed Identity/CryptoSession/
- * Settings). [PairingClient] is the sole real implementation.
+ * constructor needs a real Android-Keystore-backed CryptoSession/Settings). [PairingClient] is the sole real implementation.
  */
 interface PairingSession {
     /** Computes the SAS fingerprint for [qr]'s agent key against this
@@ -66,6 +65,37 @@ interface PairingSession {
 }
 
 /**
+ * The phone's X25519 keypair for a single pairing attempt, minted by [begin]
+ * and surrendered by [consume].
+ *
+ * One keypair per pairing is what keeps each pairing's AEAD key distinct.
+ * The agent's identity key is persistent and the HKDF has no per-pairing
+ * salt, so a phone key reused across pairings derives a bit-identical key
+ * while each new device row restarts its counters at zero -- reusing nonces
+ * (cmux-app-1fx, see
+ * docs/superpowers/specs/2026-08-10-per-pairing-key-separation-design.md).
+ *
+ * [consume] is single-use for the same reason: two pairings completed from
+ * one keypair would share a key just as surely as a persisted one. It also
+ * refuses to invent a keypair when none is pending, because the SAS
+ * fingerprint the user confirmed must belong to the key actually submitted
+ * -- a key generated at commit time was never shown to anyone.
+ */
+internal class PairingKeys(
+    private val generate: () -> Pair<ByteArray, ByteArray> = ::generateX25519KeyPair,
+) {
+    private var pending: Pair<ByteArray, ByteArray>? = null
+
+    @Synchronized
+    fun begin(): Pair<ByteArray, ByteArray> = generate().also { pending = it }
+
+    @Synchronized
+    fun consume(): Pair<ByteArray, ByteArray> =
+        (pending ?: throw IOException("pairing failed: confirm the fingerprint again"))
+            .also { pending = null }
+}
+
+/**
  * Completes self-service pairing against POST /devices/pair: submits the
  * phone's e2e public key alongside the scanned code, and on success derives
  * the shared secret via ECDH and persists everything -- bearer token + base
@@ -77,25 +107,34 @@ interface PairingSession {
  * docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md.
  * [prepare] makes no network call, so a rejected fingerprint costs nothing
  * server-side; only [commit] actually redeems the pairing code.
+ *
+ * [prepare] also mints the keypair this pairing will use (see [PairingKeys]),
+ * so re-running it after the user backs out replaces the pending key and the
+ * fingerprint on screen always describes the key [commit] will submit. One
+ * instance per [slot], so relay and direct never share pending state.
  */
 class PairingClient(
     private val http: OkHttpClient,
-    private val identity: Identity,
     private val session: CryptoSession,
     private val settings: Settings,
     private val slot: ConnectionSlot,
 ) : PairingSession {
-    override fun prepare(qr: PairingQr): String = prepareInternal(qr, identity.publicKey)
+    private val keys = PairingKeys()
 
-    override suspend fun commit(qr: PairingQr) = commitInternal(
-        http = http,
-        qr = qr,
-        phonePrivateKey = identity.privateKey,
-        phonePublicKey = identity.publicKey,
-        onSetPairing = session::setPairing,
-        onSetBaseUrl = { settings.setBaseUrl(slot, it) },
-        onSetToken = { settings.setDeviceToken(slot, it) },
-    )
+    override fun prepare(qr: PairingQr): String = prepareInternal(qr, keys.begin().second)
+
+    override suspend fun commit(qr: PairingQr) {
+        val (privateKey, publicKey) = keys.consume()
+        commitInternal(
+            http = http,
+            qr = qr,
+            phonePrivateKey = privateKey,
+            phonePublicKey = publicKey,
+            onSetPairing = session::setPairing,
+            onSetBaseUrl = { settings.setBaseUrl(slot, it) },
+            onSetToken = { settings.setDeviceToken(slot, it) },
+        )
+    }
 
     override suspend fun resolveManualCode(serverUrl: String, code: String): PairingQr =
         resolvePairingCode(http, serverUrl, code)
@@ -133,7 +172,7 @@ internal suspend fun resolvePairingCode(http: OkHttpClient, serverUrl: String, c
  *  [PairingQr.hasSafePairUrl] up front too, so a malformed manual-entry URL
  *  fails before the user ever sees a confirmation screen, not just later at
  *  [commitInternal]. Free function so PairingClientTest can exercise it
- *  without constructing a real Identity. */
+ *  without constructing a real CryptoSession. */
 internal fun prepareInternal(qr: PairingQr, phonePublicKey: ByteArray): String {
     if (!qr.hasSafePairUrl()) throw IOException("pairing failed: server address must be https://")
     val agentPublicKey = Base64.getDecoder().decode(qr.agentPubkey)
@@ -142,7 +181,7 @@ internal fun prepareInternal(qr: PairingQr, phonePublicKey: ByteArray): String {
 
 /** Free function (not a CryptoSession/Settings method) so PairingClientTest can
  *  exercise the real handshake logic via plain callbacks -- see Task 11's
- *  Step 1 note on why Identity/CryptoSession/Settings can't be constructed in a
+ *  Step 1 note on why CryptoSession/Settings can't be constructed in a
  *  local JVM unit test. */
 internal suspend fun commitInternal(
     http: OkHttpClient,

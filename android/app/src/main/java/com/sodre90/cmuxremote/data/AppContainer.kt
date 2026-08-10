@@ -6,7 +6,6 @@ import com.goterl.lazysodium.SodiumAndroid
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.E2eInterceptor
-import com.sodre90.cmuxremote.data.e2e.Identity
 import com.sodre90.cmuxremote.data.pairing.PairingClient
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -25,7 +24,6 @@ import java.util.concurrent.TimeUnit
 class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, PairingGateway, TerminalDisplayGateway {
 
     val settings = Settings(appContext)
-    val identity = Identity(appContext)
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
     val workspaceOrderStore = WorkspaceOrderStore(appContext)
     val terminalDisplayStore = TerminalDisplayStore(appContext)
@@ -42,6 +40,12 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         val migratedSlot = settings.migrateLegacyIfNeeded()
         sessions.forEach { (slot, session) -> session.absorbLegacyIfTarget(slot == migratedSlot) }
     }
+
+    // One PairingClient per slot, not one per call: it holds the keypair
+    // minted by prepare() until the matching commit() submits it, and a fresh
+    // instance per call would drop that between the two halves of the
+    // fingerprint-confirmation flow.
+    private val pairingClients = mutableMapOf<ConnectionSlot, PairingClient>()
 
     private val clients = mutableMapOf<ConnectionSlot, Pair<String, OkHttpClient>>()
 
@@ -82,6 +86,9 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         settings.clearSlot(slot)
         sessions.getValue(slot).clear()
         clients.remove(slot)
+        // Drops any keypair a half-finished pairing left pending, so the next
+        // attempt cannot commit a key whose fingerprint predates the Forget.
+        pairingClients.remove(slot)
     }
 
     fun bridgeClient(slot: ConnectionSlot): BridgeClient? =
@@ -99,8 +106,11 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     /** Unauthenticated -- POST /devices/pair takes no bearer token (see
      *  bridge/internal/relay/relay.go's handleDevicePair). */
+    @Synchronized
     override fun pairingClient(slot: ConnectionSlot): PairingClient =
-        PairingClient(OkHttpClient(), identity, sessions.getValue(slot), settings, slot)
+        pairingClients.getOrPut(slot) {
+            PairingClient(OkHttpClient(), sessions.getValue(slot), settings, slot)
+        }
 
     override fun loadOrder(): List<String> = workspaceOrderStore.load()
 
