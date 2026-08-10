@@ -2,12 +2,12 @@ package com.sodre90.cmuxremote.ui
 
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionMonitor
-import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.PairingGateway
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.data.WorkspaceOrderGateway

@@ -117,6 +117,7 @@ class FallbackBridgeClient(
     suspend fun replyFeed(feedId: String, reply: FeedReply) = call { it.replyFeed(feedId, reply) }
     suspend fun renameWorkspace(id: String, title: String) = call { it.renameWorkspace(id, title) }
     suspend fun setYoloMode(id: String, mode: String) = call { it.setYoloMode(id, mode) }
+
     /**
      * Registers on EVERY configured slot, not just whichever answers first.
      *

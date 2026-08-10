@@ -3,11 +3,11 @@ package com.sodre90.cmuxremote.ui.inbox
 import com.sodre90.cmuxremote.data.BridgeClient
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionMonitor
-import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
