@@ -40,12 +40,32 @@ func printStatus(w io.Writer, snap status.Snapshot) {
 	_, _ = fmt.Fprintf(w, "as of:           %s\n", formatAgo(snap.WrittenAt))
 	_, _ = fmt.Fprintf(w, "relay tunnel:    %s\n", upDown(snap.RelayTunnelUp))
 	if snap.DirectModeEnabled {
-		_, _ = fmt.Fprintf(w, "direct listener: %s\n", upDown(snap.DirectListenerUp))
+		_, _ = fmt.Fprintf(w, "direct listener: %s\n", describeDirectListener(snap))
 	} else {
 		_, _ = fmt.Fprintln(w, "direct listener: disabled")
 	}
 	_, _ = fmt.Fprintf(w, "cmux reached:    %s\n", formatTimeOrNever(snap.LastCmuxReachedAt))
 	_, _ = fmt.Fprintf(w, "last event:      %s\n", formatTimeOrNever(snap.LastEventAt))
+}
+
+// describeDirectListener says what the listener is doing, not merely that it
+// is bound. Both ways a bound listener can be useless -- nothing reaching it
+// (a firewall, an ACL) and connections reaching it but never completing
+// (TLS) -- used to print as a plain "up", which is how the direct half of
+// dual-pairing stayed dead for days with the only operator-visible signal
+// calling it healthy (cmux-app-0no).
+func describeDirectListener(snap status.Snapshot) string {
+	switch {
+	case !snap.DirectListenerUp:
+		return "down"
+	case !snap.DirectLastServedAt.IsZero():
+		return fmt.Sprintf("up, last served %s", formatAgo(snap.DirectLastServedAt))
+	case snap.DirectConnectionsAccepted == 0:
+		return "bound, but nothing has ever connected -- check the macOS firewall and Tailscale ACLs"
+	default:
+		return fmt.Sprintf("bound, but none of %d connections got as far as a request -- check TLS",
+			snap.DirectConnectionsAccepted)
+	}
 }
 
 func upDown(up bool) string {

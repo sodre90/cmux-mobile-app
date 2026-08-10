@@ -32,10 +32,27 @@ type Snapshot struct {
 	RelayTunnelUp bool `json:"relay_tunnel_up"`
 
 	// DirectModeEnabled reports whether this agent has direct_listen
-	// configured at all. DirectListenerUp is only meaningful when this is
-	// true.
+	// configured at all. The three fields below are only meaningful when
+	// this is true.
 	DirectModeEnabled bool `json:"direct_mode_enabled"`
-	DirectListenerUp  bool `json:"direct_listener_up"`
+
+	// DirectListenerUp reports only that the listener is bound. That is a
+	// weaker claim than it reads as: a bound socket nothing can reach still
+	// reports up, which is how a macOS firewall block stayed invisible for
+	// days behind a plain "direct listener: up" (cmux-app-0no). The two
+	// fields below separate the ways it can be bound and still useless.
+	DirectListenerUp bool `json:"direct_listener_up"`
+
+	// DirectConnectionsAccepted counts connections the direct listener has
+	// accepted since the agent started. Zero, while bound, means nothing is
+	// arriving at all -- a firewall or a Tailscale ACL, not a TLS fault.
+	DirectConnectionsAccepted int64 `json:"direct_connections_accepted"`
+
+	// DirectLastServedAt is when the listener last read a request off a
+	// connection, which is the earliest moment a TLS handshake is known to
+	// have completed. Never, with connections accepted, means clients are
+	// arriving and failing before they deliver anything.
+	DirectLastServedAt time.Time `json:"direct_last_served_at"`
 
 	// LastCmuxReachedAt is when a `cmux rpc` call (fast-path socket or
 	// subprocess) last completed successfully.

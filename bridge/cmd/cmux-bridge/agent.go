@@ -185,10 +185,9 @@ func refreshDirectCert(ctx context.Context, domain, certFile, keyFile string, ce
 // ACLs are the access-control boundary for these routes (some of which,
 // like the pairing endpoints, are otherwise unauthenticated), so listening
 // on 0.0.0.0/[::] here would let any LAN-adjacent device reach them too.
-// onListening, if not nil, is called once the TLS listener is up, just
-// before it starts serving -- runAgent uses it to drive the direct-listener
-// status for `cmux-bridge status`.
-func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler, onListening func()) error {
+// health, if not nil, is where the listener reports itself for
+// `cmux-bridge status`.
+func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler, health *directHealth) error {
 	mux := http.NewServeMux()
 	server.MountDirectPairing(mux, store, tenantID)
 	mux.Handle("/", handler)
@@ -233,7 +232,7 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 	if err != nil {
 		return fmt.Errorf("direct mode: listen %s: %w", bindAddr, err)
 	}
-	tlsLn := tls.NewListener(tcpLn, &tls.Config{
+	tlsLn := tls.NewListener(countingListener{Listener: tcpLn, health: health}, &tls.Config{
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return certVal.Load(), nil
 		},
@@ -242,18 +241,94 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 	})
 
 	slog.Info("agent: direct listener up (tailscale-only)", "addr", bindAddr)
-	if onListening != nil {
-		onListening()
+	return serveDirectListener(ctx, tlsLn, mux, health)
+}
+
+// serveDirectListener serves handler on an already-bound ln until ctx is
+// canceled or serving fails, reporting to health as it goes. Split from
+// serveDirect so the health reporting can be tested against a real TLS
+// listener: everything above this point needs a live Tailscale daemon, and
+// nothing below it does.
+func serveDirectListener(ctx context.Context, ln net.Listener, handler http.Handler, health *directHealth) error {
+	health.markBound()
+	srv := &http.Server{
+		Handler: handler,
+		// StateActive is the first point at which bytes of a request have
+		// been read, so it is also the first proof the TLS handshake got
+		// all the way through -- which bind success alone never was.
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateActive {
+				health.markServed()
+			}
+		},
 	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- http.Serve(tlsLn, mux) }()
+	go func() { errCh <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
-		_ = tlsLn.Close()
+		_ = srv.Close()
 		return ctx.Err()
 	case err := <-errCh:
 		return err
 	}
+}
+
+// directHealth is what the direct listener reports about itself for
+// `cmux-bridge status`. A nil *directHealth is usable and records nothing,
+// so tests and any future caller that doesn't want the reporting can pass
+// one.
+type directHealth struct {
+	bound      atomic.Bool
+	accepted   atomic.Int64
+	lastServed atomic.Value // time.Time
+}
+
+func (h *directHealth) markBound() {
+	if h != nil {
+		h.bound.Store(true)
+	}
+}
+
+func (h *directHealth) markUnbound() {
+	if h != nil {
+		h.bound.Store(false)
+	}
+}
+
+func (h *directHealth) markAccepted() {
+	if h != nil {
+		h.accepted.Add(1)
+	}
+}
+
+func (h *directHealth) markServed() {
+	if h != nil {
+		h.lastServed.Store(time.Now())
+	}
+}
+
+func (h *directHealth) snapshot() (bound bool, accepted int64, lastServed time.Time) {
+	if h == nil {
+		return false, 0, time.Time{}
+	}
+	t, _ := h.lastServed.Load().(time.Time)
+	return h.bound.Load(), h.accepted.Load(), t
+}
+
+// countingListener records every accepted connection, which is what tells a
+// listener nothing can reach apart from one whose clients are failing later
+// (cmux-app-0no).
+type countingListener struct {
+	net.Listener
+	health *directHealth
+}
+
+func (l countingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err == nil {
+		l.health.markAccepted()
+	}
+	return conn, err
 }
 
 func runAgent(args []string) int {
@@ -332,28 +407,31 @@ func runAgent(args []string) int {
 	go srv.RunEvents(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
-	var relayTunnelUp, directListenerUp atomic.Bool
+	var relayTunnelUp atomic.Bool
+	directHealth := &directHealth{}
 	go status.RunWriter(ctx, cfg.StatusFile, statusWriteInterval, func() status.Snapshot {
 		var lastReached time.Time
 		if t, ok := lastCmuxReached.Load().(time.Time); ok {
 			lastReached = t
 		}
+		directUp, directAccepted, directLastServed := directHealth.snapshot()
 		return status.Snapshot{
-			WrittenAt:         time.Now(),
-			RelayTunnelUp:     relayTunnelUp.Load(),
-			DirectModeEnabled: cfg.DirectListen != "",
-			DirectListenerUp:  directListenerUp.Load(),
-			LastCmuxReachedAt: lastReached,
-			LastEventAt:       srv.LastEventAt(),
+			WrittenAt:                 time.Now(),
+			RelayTunnelUp:             relayTunnelUp.Load(),
+			DirectModeEnabled:         cfg.DirectListen != "",
+			DirectListenerUp:          directUp,
+			DirectConnectionsAccepted: directAccepted,
+			DirectLastServedAt:        directLastServed,
+			LastCmuxReachedAt:         lastReached,
+			LastEventAt:               srv.LastEventAt(),
 		}
 	})
 
 	if cfg.DirectListen != "" {
 		certDir := filepath.Join(filepath.Dir(cfg.DirectAuthStore), "direct-certs")
 		go func() {
-			err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler(),
-				func() { directListenerUp.Store(true) })
-			directListenerUp.Store(false)
+			err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler(), directHealth)
+			directHealth.markUnbound()
 			if err != nil && ctx.Err() == nil {
 				slog.Error("agent: direct listener ended", "err", err)
 			}

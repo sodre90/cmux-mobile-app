@@ -49,6 +49,48 @@ func TestPrintStatusDirectEnabledDown(t *testing.T) {
 	}
 }
 
+// cmux-app-0no. Each of these three states used to print the same word,
+// "up", including the two where the direct half of dual-pairing was in fact
+// dead.
+func TestPrintStatusDistinguishesBoundFromWorking(t *testing.T) {
+	cases := []struct {
+		name string
+		snap status.Snapshot
+		want string
+	}{
+		{
+			name: "nothing ever reaches it",
+			snap: status.Snapshot{DirectModeEnabled: true, DirectListenerUp: true},
+			want: "nothing has ever connected",
+		},
+		{
+			name: "connections arrive but never complete",
+			snap: status.Snapshot{DirectModeEnabled: true, DirectListenerUp: true, DirectConnectionsAccepted: 7},
+			want: "none of 7 connections",
+		},
+		{
+			name: "actually serving",
+			snap: status.Snapshot{
+				DirectModeEnabled:         true,
+				DirectListenerUp:          true,
+				DirectConnectionsAccepted: 7,
+				DirectLastServedAt:        time.Now(),
+			},
+			want: "up, last served",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			tc.snap.WrittenAt = time.Now()
+			printStatus(&buf, tc.snap)
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Fatalf("output missing %q: %s", tc.want, buf.String())
+			}
+		})
+	}
+}
+
 func TestRunStatusReadsWrittenSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	statusPath := filepath.Join(dir, "status.json")
