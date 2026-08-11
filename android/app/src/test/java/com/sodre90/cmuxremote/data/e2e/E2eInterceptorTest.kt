@@ -139,6 +139,29 @@ class E2eInterceptorTest {
         assertFalse(sentBody.contains("fcm_token"))
     }
 
+    // Forget clears the shared secret without waiting for this call, so an
+    // envelope here would lose a race it can never win -- on the direct slot
+    // just as much as on the relay. Both servers mount the route outside
+    // their encryption layer to match.
+    @Test
+    fun doesNotEncryptSelfRevokeOnEitherSlot() {
+        listOf(true, false).forEach { isRelaySlot ->
+            server.enqueue(MockResponse().setBody("{}"))
+
+            val client = clientFor(FakeSession(secret), isRelaySlot = isRelaySlot)
+            val request = Request.Builder()
+                .url(server.url("/devices/self-revoke"))
+                .post("{}".toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            client.newCall(request).execute().use { assertEquals("{}", it.body!!.string()) }
+
+            assertFalse(
+                "self-revoke must go out in plaintext (isRelaySlot=$isRelaySlot)",
+                server.takeRequest().body.readUtf8().contains("\"v\":1"),
+            )
+        }
+    }
+
     @Test
     fun markedButUndecryptableResponseIsHardError() {
         server.enqueue(

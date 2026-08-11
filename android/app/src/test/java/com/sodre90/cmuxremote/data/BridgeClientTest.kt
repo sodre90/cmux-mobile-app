@@ -113,6 +113,19 @@ class BridgeClientTest {
     }
 
     @Test
+    fun selfRevokeNamesNoDeviceAndSendsThisDevicesToken() {
+        server.enqueue(MockResponse().setBody("{}"))
+
+        runBlocking { client.selfRevoke() }
+
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/devices/self-revoke", req.path)
+        assertEquals("Bearer tok-7", req.getHeader("Authorization"))
+        assertEquals("{}", req.body.readUtf8())
+    }
+
+    @Test
     fun nonSuccessThrowsBridgeException() {
         server.enqueue(MockResponse().setResponseCode(502).setBody("""{"error":"cmux unavailable"}"""))
 

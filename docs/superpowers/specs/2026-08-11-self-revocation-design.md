@@ -86,6 +86,18 @@ Mounted on both servers, with the same handler:
 - direct: `auth.Require(s.store, ...)` — deliberately *not* the full `wrap`,
   so it stays outside `encryptionMiddleware` and matches relay mode
 
+Direct mode is the interesting half, and the reason is not symmetry with the
+relay. **This is the one route a device calls while destroying its own e2e
+state.** Forget clears the phone's shared secret immediately and does not
+wait on the network (it must work offline), so a request that needs that
+secret to seal its body — or to open the reply — loses a race against a
+local `SharedPreferences` write it can never win. Requiring an envelope here
+would make Forget's revocation fail in the ordinary case, not a rare one.
+
+That also fixes the phone-side rule: `/devices/self-revoke` is plaintext on
+**both** slots, unlike `/devices/register`, which is plaintext only on the
+relay slot. `E2eInterceptor` needs a second, ungated list for it.
+
 ### The reconciler
 
 On the agent, on a timer: list every configured server, and remove any local

@@ -38,11 +38,15 @@ func (s *Server) DirectHandler() http.Handler {
 	mux := s.routes(wrap).(*http.ServeMux)
 	mux.Handle("POST /devices/register", wrap(http.HandlerFunc(s.handleRegisterDevice)))
 	mux.Handle("POST /devices/test-push", wrap(http.HandlerFunc(s.handleTestPushDevice)))
-	// Bearer auth only, deliberately skipping wrap's encryptionMiddleware:
-	// this route carries no cmux content, and it is terminated identically in
-	// relay mode, where no e2e layer exists to be behind. Do not "fix" it to
-	// use wrap -- a handler behind that middleware cannot delete a device the
-	// response is about to be encrypted for (cmux-app-f5y).
+	// Bearer auth only, deliberately skipping wrap's encryptionMiddleware.
+	// This is the one route a device calls while destroying its own e2e
+	// state: the phone fires it from Forget and clears its shared secret
+	// immediately, without waiting, so by the time the request reaches a
+	// wire there is usually no secret left to encrypt the body with or
+	// decrypt the reply against. Requiring an envelope here would make
+	// Forget's revocation fail almost every time (cmux-app-f5y). Relay mode
+	// terminates the same route in plaintext for its own reason, so the two
+	// modes agree.
 	devices.MountSelfRevoke(mux, s.store, func(h http.Handler) http.Handler {
 		return auth.Require(s.store, h)
 	})

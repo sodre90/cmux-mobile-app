@@ -18,8 +18,9 @@ import java.io.IOException
  * RELAY connection slot or the DIRECT one. Only RELAY has a relay in front of
  * the agent that terminates certain routes itself and expects them in
  * plaintext ([RELAY_TERMINATED_PATHS]); DIRECT talks straight to the agent
- * with no relay to terminate anything, so on DIRECT every route -- including
- * those same paths -- must be encrypted like normal.
+ * with no relay to terminate anything, so on DIRECT those same paths are
+ * encrypted like normal. [UNENCRYPTED_PATHS] is the narrower exception that
+ * holds on both slots.
  */
 class E2eInterceptor(
     private val session: PairedSession,
@@ -34,9 +35,19 @@ class E2eInterceptor(
         // endpoints here to avoid silent regressions. (/devices/pair uses a
         // separate un-intercepted client.) These paths do NOT apply on the
         // DIRECT slot: there is no relay in that path to terminate anything in
-        // plaintext, so DIRECT encrypts every route, this list included --
-        // gating on isRelaySlot below is what makes that distinction.
+        // plaintext, so DIRECT encrypts them like any other route -- gating on
+        // isRelaySlot below is what makes that distinction. UNENCRYPTED_PATHS
+        // is the list that isn't gated that way.
         private val RELAY_TERMINATED_PATHS = setOf("/devices/register")
+
+        // Plaintext on BOTH slots, unlike the list above. Forget retires this
+        // device's token and clears its e2e session without waiting for the
+        // network, so by the time this request is written there is usually no
+        // shared secret left to seal it with -- encrypting it on DIRECT would
+        // make Forget's revocation fail in the ordinary case. Both servers
+        // mount it outside their encryption layer to match (see
+        // bridge/internal/server/direct.go).
+        private val UNENCRYPTED_PATHS = setOf("/devices/self-revoke")
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -45,10 +56,12 @@ class E2eInterceptor(
             return chain.proceed(original)
         }
 
-        val isRelayTerminated = isRelaySlot && RELAY_TERMINATED_PATHS.any { original.url.encodedPath.endsWith(it) }
+        val path = original.url.encodedPath
+        val sentInPlaintext = UNENCRYPTED_PATHS.any { path.endsWith(it) } ||
+            (isRelaySlot && RELAY_TERMINATED_PATHS.any { path.endsWith(it) })
 
         val requestBody = original.body
-        val request = if (requestBody != null && !isRelayTerminated) {
+        val request = if (requestBody != null && !sentInPlaintext) {
             val plaintext = Buffer().also { requestBody.writeTo(it) }.readByteArray()
             val encrypted = try {
                 encryptBody(session, cipher, plaintext)

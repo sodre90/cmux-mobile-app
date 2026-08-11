@@ -157,9 +157,11 @@ func TestDirectHandlerRejectsUnpairedDevice(t *testing.T) {
 	}
 }
 
-// Self-revoke is mounted outside encryptionMiddleware on purpose, so a plain
-// request with no e2e envelope must reach it and work. If somebody "fixes"
-// the mount to use DirectHandler's wrap, this fails -- which is the point.
+// Self-revoke is mounted outside encryptionMiddleware on purpose: the phone
+// calls it while clearing the very shared secret an envelope would need, so
+// a plain request with no envelope must reach it and work. If somebody
+// "fixes" the mount to use DirectHandler's wrap, this fails -- which is the
+// point.
 func TestDirectHandlerSelfRevokeNeedsNoEncryptedEnvelope(t *testing.T) {
 	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
 	authStore, err := auth.Open(filepath.Join(t.TempDir(), "auth.db"))

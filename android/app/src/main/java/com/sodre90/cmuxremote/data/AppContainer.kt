@@ -7,6 +7,10 @@ import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.E2eInterceptor
 import com.sodre90.cmuxremote.data.pairing.PairingClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -80,9 +84,12 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     /** Clears [slot]'s stored bridge config and e2e session, and evicts its
      *  cached [OkHttpClient] -- used by "Forget" in ConnectionSettingsScreen.
      *  The other slot is untouched. Re-pairing this slot afterwards behaves
-     *  exactly like pairing it for the first time. */
+     *  exactly like pairing it for the first time. Also asks the server to
+     *  retire this device's token, best-effort; see
+     *  [releaseCredentialOnServer]. */
     @Synchronized
     fun forgetSlot(slot: ConnectionSlot) {
+        releaseCredentialOnServer(slot)
         settings.clearSlot(slot)
         sessions.getValue(slot).clear()
         clients.remove(slot)
@@ -93,6 +100,20 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         // the credentials just cleared -- see [SlotCredentials].
         sharedSlotCredentials.invalidate(slot)
     }
+
+    // Fire-and-forget on purpose, and the local clear above never waits on
+    // it: Forget has to work with the server unreachable, and a phone stuck
+    // paired to a bridge it can't dial would be the worse failure. What the
+    // server misses here an operator can still revoke by hand, and the agent
+    // reaps the orphaned shared secret on its own timer either way. The
+    // client is captured before settings.clearSlot because it holds this
+    // slot's bearer token by value (see Mtls.BearerInterceptor).
+    private fun releaseCredentialOnServer(slot: ConnectionSlot) {
+        val client = bridgeClient(slot) ?: return
+        selfRevokeScope.launch { runCatching { client.selfRevoke() } }
+    }
+
+    private val selfRevokeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun bridgeClient(slot: ConnectionSlot): BridgeClient? =
         settings.bridgeConfig(slot)?.let { BridgeClient(httpClient(slot, it), it.baseUrl) }

@@ -87,6 +87,17 @@ class BridgeClient(
         post("$root/devices/test-push", "{}")
     }
 
+    /** Retires this device's own bearer token on whichever server terminates
+     *  the call (see bridge/internal/devices/devices.go's selfRevoke). The
+     *  device is taken from the bearer token, so there is nothing to name in
+     *  the request and nothing to decode from the reply; revoking an
+     *  already-gone token is a success, not a 404. Never e2e-encrypted --
+     *  see [com.sodre90.cmuxremote.data.e2e.E2eInterceptor]'s
+     *  UNENCRYPTED_PATHS. */
+    suspend fun selfRevoke() {
+        post("$root/devices/self-revoke", "{}")
+    }
+
     private suspend fun post(url: String, json: String) = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(url)

@@ -36,7 +36,8 @@ Mounting:
 
 Direct mode deliberately does **not** use that file's existing `wrap`, which
 adds `encryptionMiddleware`. Say why in a comment or the next reader will
-"fix" it.
+"fix" it — the reason is Commit 3's: Forget clears the shared secret without
+waiting for this call, so an envelope would lose a race it can never win.
 
 Tests:
 - `internal/devices/devices_test.go` — revokes the caller; a second call is
@@ -77,6 +78,12 @@ guard that stops a relay outage unpairing the Mac.
 Add the call to the existing authenticated client (same bearer/base-URL path
 as `/devices/test-push`; no e2e envelope, so it must not go through the
 encrypting body path).
+
+`E2eInterceptor` needs a second exemption list beside
+`RELAY_TERMINATED_PATHS`, ungated by `isRelaySlot`: this path is plaintext on
+both slots. Gating it on the relay slot would leave DIRECT encrypting a body
+whose secret Forget has already cleared — the failure the Go mount above
+exists to avoid.
 
 `forgetSlot` fires it best-effort and clears locally **regardless of the
 outcome**. Do not make `forgetSlot` suspend and do not let a failure
