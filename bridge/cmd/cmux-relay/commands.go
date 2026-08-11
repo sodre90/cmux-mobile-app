@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
@@ -18,6 +19,75 @@ import (
 // devices in the store you meant" look identical otherwise (cmux-app-xdc).
 func announceStore(cfg config.Config) {
 	fmt.Fprintln(os.Stderr, "store:", cfg.TokenStore)
+}
+
+// displayedHashLen is how much of a token hash `devices list` prints. It is
+// the operator's only source for the prefix `revoke` takes, so it has to be
+// wide enough that what they can see is never ambiguous.
+const displayedHashLen = 12
+
+func shortHash(tokenHash string) string {
+	if len(tokenHash) <= displayedHashLen {
+		return tokenHash
+	}
+	return tokenHash[:displayedHashLen]
+}
+
+// revokeDevice deletes the device arg names. arg is a prefix of the hash
+// `devices list` prints, because the raw token this used to require is a
+// value only the phone ever holds -- which left the relay operator unable to
+// revoke anything they could see (cmux-app-nvt). A raw token still works as
+// a fallback for the one case where somebody does have one: a leak.
+//
+// Resolution refuses rather than guesses, and revocation is scoped to the
+// resolved device's own tenant, so a mistyped prefix can only ever fail.
+func revokeDevice(store *auth.Store, arg string) int {
+	matches := matchingDevices(store.List(), arg)
+	switch len(matches) {
+	case 1:
+		dev := matches[0]
+		if err := store.RevokeByHash(dev.TenantID, dev.TokenHash); err != nil {
+			fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
+			return 1
+		}
+		fmt.Printf("revoked %s (%s, tenant %s)\n", shortHash(dev.TokenHash), dev.Name, dev.TenantID)
+		return 0
+	case 0:
+		if err := store.Revoke(arg); err != nil {
+			if errors.Is(err, auth.ErrNotFound) {
+				fmt.Fprintf(os.Stderr, "no device matches %q -- run `devices list` for the prefixes\n", arg)
+			} else {
+				fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
+			}
+			return 1
+		}
+		fmt.Println("revoked by raw token")
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "%q matches %d devices, be more specific:\n", arg, len(matches))
+		for _, dev := range matches {
+			fmt.Fprintf(os.Stderr, "  %s  %s  tenant=%s\n", shortHash(dev.TokenHash), dev.Name, dev.TenantID)
+		}
+		return 1
+	}
+}
+
+// matchingDevices returns the devices arg selects: an exact hash on its own,
+// otherwise every device the prefix covers.
+func matchingDevices(devs []auth.Device, arg string) []auth.Device {
+	if arg == "" {
+		return nil
+	}
+	var matches []auth.Device
+	for _, dev := range devs {
+		if dev.TokenHash == arg {
+			return []auth.Device{dev}
+		}
+		if strings.HasPrefix(dev.TokenHash, arg) {
+			matches = append(matches, dev)
+		}
+	}
+	return matches
 }
 
 func runDevices(args []string) int {
@@ -41,27 +111,18 @@ func runDevices(args []string) int {
 			return 0
 		}
 		for _, d := range devs {
-			fmt.Printf("%-16s  tenant=%s  token=...%s  fcm=%v  created=%s\n",
-				d.Name, d.TenantID, d.HashSuffix, d.FCM != "", d.Created.Format(time.RFC3339))
+			fmt.Printf("%-16s  device=%s  tenant=%s  fcm=%v  created=%s\n",
+				d.Name, shortHash(d.TokenHash), d.TenantID, d.FCM != "", d.Created.Format(time.RFC3339))
 		}
 		return 0
 	case rest[0] == "revoke":
 		if len(rest) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: cmux-relay devices revoke <token>")
+			fmt.Fprintln(os.Stderr, "usage: cmux-relay devices revoke <device-prefix>")
 			return 2
 		}
-		if err := store.Revoke(rest[1]); err != nil {
-			if errors.Is(err, auth.ErrNotFound) {
-				fmt.Fprintln(os.Stderr, "no such token")
-			} else {
-				fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
-			}
-			return 1
-		}
-		fmt.Println("revoked")
-		return 0
+		return revokeDevice(store, rest[1])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: cmux-relay devices [list|revoke <token>]")
+		fmt.Fprintln(os.Stderr, "usage: cmux-relay devices [list|revoke <device-prefix>]")
 		return 2
 	}
 }
