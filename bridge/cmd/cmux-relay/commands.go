@@ -21,6 +21,29 @@ func announceStore(cfg config.Config) {
 	fmt.Fprintln(os.Stderr, "store:", cfg.TokenStore)
 }
 
+// parseAdminArgs parses the --config flag the admin commands share and
+// returns the positional arguments after it.
+//
+// Go's flag package stops at the first positional, so `devices list --config
+// <path>` parses no flags at all and falls back to the DEFAULT config --
+// silently reading a different database than the one the operator named.
+// That is the same wrong-store trap as cmux-app-xdc, one layer up, so a flag
+// stranded behind a subcommand is refused rather than ignored.
+func parseAdminArgs(name string, args []string) (cfgPath string, rest []string, ok bool) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	path := fs.String("config", defaultConfigPath(), "path to config.toml")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, false
+	}
+	for _, arg := range fs.Args() {
+		if strings.HasPrefix(arg, "-") {
+			fmt.Fprintf(os.Stderr, "flags must come before the subcommand: cmux-relay %s %s ...\n", name, arg)
+			return "", nil, false
+		}
+	}
+	return *path, fs.Args(), true
+}
+
 // displayedHashLen is how much of a token hash `devices list` prints. It is
 // the operator's only source for the prefix `revoke` takes, so it has to be
 // wide enough that what they can see is never ambiguous.
@@ -91,18 +114,16 @@ func matchingDevices(devs []auth.Device, arg string) []auth.Device {
 }
 
 func runDevices(args []string) int {
-	fs := flag.NewFlagSet("devices", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath(), "path to config.toml")
-	if err := fs.Parse(args); err != nil {
+	cfgPath, rest, ok := parseAdminArgs("devices", args)
+	if !ok {
 		return 2
 	}
-	cfg, store, err := cli.OpenExistingStore(*cfgPath)
+	cfg, store, err := cli.OpenExistingStore(cfgPath)
 	if err != nil {
 		slog.Error("devices: load store", "err", err)
 		return 1
 	}
 	announceStore(cfg)
-	rest := fs.Args()
 	switch {
 	case len(rest) == 0 || rest[0] == "list":
 		devs := store.List()
@@ -128,18 +149,16 @@ func runDevices(args []string) int {
 }
 
 func runTenants(args []string) int {
-	fs := flag.NewFlagSet("tenants", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath(), "path to config.toml")
-	if err := fs.Parse(args); err != nil {
+	cfgPath, rest, ok := parseAdminArgs("tenants", args)
+	if !ok {
 		return 2
 	}
-	cfg, store, err := cli.OpenExistingStore(*cfgPath)
+	cfg, store, err := cli.OpenExistingStore(cfgPath)
 	if err != nil {
 		slog.Error("tenants: load store", "err", err)
 		return 1
 	}
 	announceStore(cfg)
-	rest := fs.Args()
 	switch {
 	case len(rest) == 0 || rest[0] == "list":
 		tenants, err := store.ListTenants()

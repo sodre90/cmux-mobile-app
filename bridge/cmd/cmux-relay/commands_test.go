@@ -145,3 +145,32 @@ func TestMatchingDevicesPrefersAnExactHashOverAPrefix(t *testing.T) {
 		t.Fatalf("exact hash should win outright, got %+v", matches)
 	}
 }
+
+// A --config stranded behind the subcommand used to parse as nothing at all,
+// so the command read the default store instead of the one named -- the same
+// wrong-database trap, one layer up from cmux-app-xdc.
+func TestAdminArgsRefuseAFlagBehindTheSubcommand(t *testing.T) {
+	if _, _, ok := parseAdminArgs("devices", []string{"list", "--config", "/etc/cmux-relay/config.toml"}); ok {
+		t.Fatal("a flag after the subcommand must be refused, not silently ignored")
+	}
+}
+
+func TestAdminArgsReadTheConfigFlagBeforeTheSubcommand(t *testing.T) {
+	cfgPath, rest, ok := parseAdminArgs("devices", []string{"--config", "/etc/cmux-relay/config.toml", "revoke", "abcd"})
+	if !ok {
+		t.Fatal("the documented argument order must parse")
+	}
+	if cfgPath != "/etc/cmux-relay/config.toml" {
+		t.Fatalf("cfgPath = %q", cfgPath)
+	}
+	if len(rest) != 2 || rest[0] != "revoke" || rest[1] != "abcd" {
+		t.Fatalf("rest = %v, want [revoke abcd]", rest)
+	}
+}
+
+func TestAdminArgsDefaultToTheBareSubcommand(t *testing.T) {
+	cfgPath, rest, ok := parseAdminArgs("devices", nil)
+	if !ok || cfgPath == "" || len(rest) != 0 {
+		t.Fatalf("bare `devices` should parse with the default config: ok=%v cfg=%q rest=%v", ok, cfgPath, rest)
+	}
+}
