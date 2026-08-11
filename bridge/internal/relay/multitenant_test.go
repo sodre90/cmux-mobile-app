@@ -129,3 +129,57 @@ func TestRelayRevokedTenantCannotReconnectOrServeDevices(t *testing.T) {
 		t.Fatalf("a revoked tenant's device token must stop verifying, got %d", resp2.StatusCode)
 	}
 }
+
+// Device revocation is an agent-facing route reached with an agent's own
+// mTLS identity, so it is a second place a tenant boundary could be crossed:
+// the token hash it takes as an argument is not secret (it appears in logs
+// and in X-Device-ID), so possessing one must not be enough to use it
+// against a tenant you are not.
+func TestRelayAgentCannotRevokeAnotherTenantsDevice(t *testing.T) {
+	store, err := auth.Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantA, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantB, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devA, _ := store.Issue(tenantA, "phone-a", "test-device-pubkey-a")
+	deviceA, err := store.Verify(devA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relayHTTP := httptest.NewServer(New(store, nil, "relay-secret").Handler())
+	defer relayHTTP.Close()
+
+	revokeAs := func(tenantID, tokenHash string) int {
+		req, _ := http.NewRequest("POST", relayHTTP.URL+"/agent/devices/"+tokenHash+"/revoke", nil)
+		req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantID)
+		req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := revokeAs(tenantB, deviceA.TokenHash); code != http.StatusNotFound {
+		t.Fatalf("cross-tenant revoke status = %d, want 404", code)
+	}
+	if _, err := store.Verify(devA); err != nil {
+		t.Fatalf("tenant A's device must survive tenant B's revoke attempt: %v", err)
+	}
+
+	if code := revokeAs(tenantA, deviceA.TokenHash); code != http.StatusOK {
+		t.Fatalf("own-tenant revoke status = %d, want 200", code)
+	}
+	if _, err := store.Verify(devA); err == nil {
+		t.Fatal("tenant A revoking its own device should have removed it")
+	}
+}

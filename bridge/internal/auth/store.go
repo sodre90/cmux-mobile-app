@@ -332,7 +332,24 @@ func (s *Store) Verify(token string) (Device, error) {
 func (s *Store) List() []Device {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT token_hash, tenant_id, name, fcm_token, device_pubkey, created_at FROM devices ORDER BY created_at`)
+	return s.queryDevices(`SELECT token_hash, tenant_id, name, fcm_token, device_pubkey, created_at
+		FROM devices ORDER BY created_at`)
+}
+
+// ListByTenant returns only tenantID's devices -- the agent-facing view of
+// List, for the device-admin routes an agent reaches over its own mTLS
+// identity. Separate from List rather than a parameter on it because the two
+// have opposite audiences: List is the relay operator's cross-tenant
+// inventory, and an agent must never learn that another tenant exists.
+func (s *Store) ListByTenant(tenantID string) []Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.queryDevices(`SELECT token_hash, tenant_id, name, fcm_token, device_pubkey, created_at
+		FROM devices WHERE tenant_id = ? ORDER BY created_at`, tenantID)
+}
+
+func (s *Store) queryDevices(query string, args ...any) []Device {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}
@@ -364,6 +381,33 @@ func (s *Store) Revoke(token string) error {
 	res, err := s.db.Exec(`DELETE FROM devices WHERE token_hash = ?`, hashToken(token))
 	if err != nil {
 		return fmt.Errorf("revoke device: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokeByHash removes a device by its token hash, scoped to tenantID.
+//
+// The hash, not the raw token, is what every other layer already speaks:
+// auth.Device.TokenHash, the X-Device-ID header, the operator listing, and
+// the agent's own e2e device_id. Revoke's raw-token argument is held only by
+// the device being revoked, which makes it unusable for anyone revoking a
+// device they no longer hold -- see cmux-app-vkq. Both remain: they have
+// different callers and different trust stories.
+//
+// The tenant scope is part of the DELETE rather than a preceding SELECT, so
+// there is no window between deciding a device belongs to tenantID and
+// removing it. ErrNotFound covers both "no such hash" and "not yours",
+// deliberately indistinguishable.
+func (s *Store) RevokeByHash(tenantID, tokenHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`DELETE FROM devices WHERE token_hash = ? AND tenant_id = ?`, tokenHash, tenantID)
+	if err != nil {
+		return fmt.Errorf("revoke device by hash: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

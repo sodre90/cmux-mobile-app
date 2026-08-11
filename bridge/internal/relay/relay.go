@@ -18,6 +18,7 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/ca"
+	"github.com/sodre90/cmux-bridge/internal/devices"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/pairing"
 	"github.com/sodre90/cmux-bridge/internal/ratelimit"
@@ -250,6 +251,9 @@ func (r *Relay) Handler() http.Handler {
 	pairing.Mount(mux, r.store, r.agentOnly, func(req *http.Request) bool {
 		return r.devicePairLimiter.allow(r.clientIP(req))
 	})
+	// Device admin (internal/devices), agent-CN-gated by the same resolver:
+	// an agent enumerates and revokes only its own tenant's devices.
+	devices.Mount(mux, r.store, r.agentOnly)
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("POST /devices/test-push", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleTestPush))))

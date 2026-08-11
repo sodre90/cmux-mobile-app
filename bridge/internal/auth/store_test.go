@@ -718,3 +718,73 @@ func TestPairingCodeInfoRefusesARefusedCode(t *testing.T) {
 		t.Fatal("a refused code must not keep resolving to the agent's pubkey")
 	}
 }
+
+func TestRevokeByHashRemovesTheDevice(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
+	dev, err := s.Verify(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.RevokeByHash(tenant, dev.TokenHash); err != nil {
+		t.Fatalf("RevokeByHash should succeed for a known device: %v", err)
+	}
+	if _, err := s.Verify(tok); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked token must stop verifying, got err=%v", err)
+	}
+}
+
+func TestRevokeByHashRejectsAnUnknownHash(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	if err := s.RevokeByHash(tenant, "not-a-real-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RevokeByHash of an unknown hash must be ErrNotFound, got %v", err)
+	}
+}
+
+// The whole point of the tenant scope: an agent holding a valid cert for its
+// own tenant must not be able to revoke a device belonging to another one,
+// even knowing its hash (which is not secret -- it appears in logs and in
+// the X-Device-ID header).
+func TestRevokeByHashCannotReachAnotherTenantsDevice(t *testing.T) {
+	s := newStore(t)
+	tenantA := newTenant(t, s)
+	tenantB := newTenant(t, s)
+	tokA, _ := s.Issue(tenantA, "phone-a", testPubkey)
+	devA, err := s.Verify(tokA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.RevokeByHash(tenantB, devA.TokenHash); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant revoke must be ErrNotFound, got %v", err)
+	}
+	if _, err := s.Verify(tokA); err != nil {
+		t.Fatalf("tenant A's device must survive tenant B's revoke attempt: %v", err)
+	}
+}
+
+func TestListByTenantReturnsOnlyThatTenantsDevices(t *testing.T) {
+	s := newStore(t)
+	tenantA := newTenant(t, s)
+	tenantB := newTenant(t, s)
+	if _, err := s.Issue(tenantA, "phone-a", testPubkey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Issue(tenantB, "phone-b", testPubkey); err != nil {
+		t.Fatal(err)
+	}
+
+	listA := s.ListByTenant(tenantA)
+	if len(listA) != 1 {
+		t.Fatalf("want 1 device for tenant A, got %d", len(listA))
+	}
+	if listA[0].Name != "phone-a" || listA[0].TenantID != tenantA {
+		t.Fatalf("ListByTenant leaked another tenant's device: %+v", listA[0])
+	}
+	if len(s.List()) != 2 {
+		t.Fatal("List must still see across tenants -- it is the operator's inventory")
+	}
+}
