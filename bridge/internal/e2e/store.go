@@ -271,6 +271,28 @@ func (s *Store) AddDevice(deviceID string, devicePub *ecdh.PublicKey, sharedSecr
 // deviceIDForSecret names the row that tripped AddDevice's reuse guard. Only
 // ever called on the error path, so a racing write changing the answer
 // between the two statements costs nothing but a less precise message.
+// RemoveDevice deletes a device's row, reporting whether one was actually
+// there. AddDevice's counterpart, absent until cmux-app-vkq needed it: until
+// then nothing could retire a shared secret, so a device revoked at the auth
+// store stayed decryptable here forever.
+//
+// Reporting removed rather than an error for the missing case is what lets a
+// caller reap an orphaned secret -- one whose auth row is already gone --
+// without treating the ordinary "nothing to do" outcome as a failure.
+func (s *Store) RemoveDevice(deviceID string) (removed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`DELETE FROM devices WHERE device_id = ?`, deviceID)
+	if err != nil {
+		return false, fmt.Errorf("remove device %s: %w", deviceID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("remove device %s: %w", deviceID, err)
+	}
+	return n > 0, nil
+}
+
 func (s *Store) deviceIDForSecret(secretB64, excludingDeviceID string) string {
 	var id string
 	if err := s.db.QueryRow(

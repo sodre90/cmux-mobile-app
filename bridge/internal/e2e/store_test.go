@@ -695,3 +695,72 @@ func TestRecvWindowBitsBit63RoundTrips(t *testing.T) {
 		t.Fatal("expected counter 1000-63 to now be rejected as a replay (bit 63 of the persisted window)")
 	}
 }
+
+func TestRemoveDeviceDeletesAndReports(t *testing.T) {
+	s := mustOpen(t, filepath.Join(t.TempDir(), "sessions.json"))
+	if err := s.AddDevice("dev1", testPubKey(t), []byte("0123456789abcdef0123456789abcdef")); err != nil {
+		t.Fatalf("AddDevice: %v", err)
+	}
+
+	removed, err := s.RemoveDevice("dev1")
+	if err != nil {
+		t.Fatalf("RemoveDevice: %v", err)
+	}
+	if !removed {
+		t.Fatal("RemoveDevice should report removing a device that was there")
+	}
+	if _, ok := s.SharedSecret("dev1"); ok {
+		t.Fatal("a removed device must no longer resolve to a shared secret")
+	}
+}
+
+// Reaping an orphaned secret -- one whose auth row is already gone -- is an
+// ordinary outcome, not a failure, so an unknown id reports false and no
+// error rather than making the caller special-case it.
+func TestRemoveDeviceIsQuietlyANoOpForAnUnknownDevice(t *testing.T) {
+	s := mustOpen(t, filepath.Join(t.TempDir(), "sessions.json"))
+
+	removed, err := s.RemoveDevice("never-existed")
+	if err != nil {
+		t.Fatalf("RemoveDevice of an unknown device should not error: %v", err)
+	}
+	if removed {
+		t.Fatal("RemoveDevice should report false when there was nothing to remove")
+	}
+}
+
+// The counters are the durability guarantee this store exists to protect
+// (cmux-app-uvh, cmux-app-1fx), so prove the delete is surgical: revoking one
+// device must not disturb another's replay state.
+func TestRemoveDeviceLeavesOtherDevicesCountersIntact(t *testing.T) {
+	s := mustOpen(t, filepath.Join(t.TempDir(), "sessions.json"))
+	if err := s.AddDevice("keep", testPubKey(t), []byte("0123456789abcdef0123456789abcdef")); err != nil {
+		t.Fatalf("AddDevice keep: %v", err)
+	}
+	if err := s.AddDevice("drop", testPubKey(t), []byte("fedcba9876543210fedcba9876543210")); err != nil {
+		t.Fatalf("AddDevice drop: %v", err)
+	}
+	for range 3 {
+		if _, err := s.NextSendCounter("keep"); err != nil {
+			t.Fatalf("NextSendCounter keep: %v", err)
+		}
+	}
+	if _, err := s.ValidateAndCommitRecvCounter("keep", 7, func() ([]byte, error) { return nil, nil }); err != nil {
+		t.Fatalf("ValidateAndCommitRecvCounter keep: %v", err)
+	}
+
+	if _, err := s.RemoveDevice("drop"); err != nil {
+		t.Fatalf("RemoveDevice drop: %v", err)
+	}
+
+	next, err := s.NextSendCounter("keep")
+	if err != nil {
+		t.Fatalf("NextSendCounter keep after removal: %v", err)
+	}
+	if next != 3 {
+		t.Fatalf("send counter = %d, want 3 -- removing another device rewound it", next)
+	}
+	if _, err := s.ValidateAndCommitRecvCounter("keep", 7, func() ([]byte, error) { return nil, nil }); err == nil {
+		t.Fatal("recv high-water mark was lost: frame 7 should still be rejected as a replay")
+	}
+}
