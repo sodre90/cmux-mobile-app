@@ -194,9 +194,21 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 	}
 }
 
+// replayTimeout is what mobile.terminal.replay gets instead of the cmux
+// package's default, because it is categorically heavier than every other
+// call the bridge makes: it serialises a whole render grid, measured at
+// 1.0-4.45s for 240-390KB per surface against a 5s default, and 6.9-10.4s
+// once cmux itself was busy. Failing there is worse than waiting, because
+// the phone reconnects on failure and the reconnect issues another replay
+// -- the retry storm cost more than the slow call it was avoiding
+// (cmux-app-69y).
+const replayTimeout = 20 * time.Second
+
 // fetchReplay calls mobile.terminal.replay and returns a wire.TerminalDown
 // (Type unset) holding the render grid and dimensions.
 func (s *Server) fetchReplay(ctx context.Context, id string) (wire.TerminalDown, error) {
+	ctx, cancel := context.WithTimeout(ctx, replayTimeout)
+	defer cancel()
 	raw, err := s.cmux.Rpc(ctx, "mobile.terminal.replay",
 		map[string]any{"surface_id": id})
 	if err != nil {

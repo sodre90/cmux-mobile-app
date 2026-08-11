@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -34,7 +35,23 @@ type socketConn struct {
 	nextID uint64
 }
 
-const socketIOTimeout = 5 * time.Second
+// socketIOTimeout bounds a call whose caller expressed no deadline of its
+// own. A caller that knows its method is heavier says so by passing a ctx
+// with a deadline, which wins outright -- shortening OR lengthening this.
+// It used to be allowed to shorten only, which left no way to ask for more
+// than 5s: mobile.terminal.replay measured 1.0-4.45s returning 240-390KB,
+// so it spent most of a budget sized for calls like mobile.workspace.list
+// (0.15-0.30s) and tipped over whenever cmux was busy (cmux-app-69y).
+// A var, not a const, only so tests can shorten it without sleeping out a
+// real five seconds.
+var socketIOTimeout = 5 * time.Second
+
+// ErrCmuxTooSlow reports that cmux accepted a request and did not answer
+// within the budget, as opposed to being unreachable. The two call for
+// opposite responses -- wait longer or retry a heavy call, versus check
+// whether cmux is running at all -- and used to be a single "i/o timeout"
+// buried in a read error.
+var ErrCmuxTooSlow = errors.New("cmux too slow")
 
 // resolveSocketPath mirrors the cmux CLI's own precedence: CMUX_SOCKET_PATH
 // first. Without it, `cmux --help` says the CLI "defaults to
@@ -232,8 +249,9 @@ func (sc *socketConn) rpc(ctx context.Context, method string, params any) (resul
 // application-level error from cmux) must be treated as committed, since the
 // request may already have taken effect on cmux's side.
 func (sc *socketConn) attemptLocked(ctx context.Context, method, id string, line []byte) (result json.RawMessage, wrote bool, err error) {
-	deadline := time.Now().Add(socketIOTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+	start := time.Now()
+	deadline := start.Add(socketIOTimeout)
+	if d, ok := ctx.Deadline(); ok {
 		deadline = d
 	}
 	_ = sc.conn.SetDeadline(deadline)
@@ -244,6 +262,10 @@ func (sc *socketConn) attemptLocked(ctx context.Context, method, id string, line
 
 	respLine, err := sc.reader.ReadString('\n')
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, true, fmt.Errorf("%w: cmux socket rpc %s: no response in %s",
+				ErrCmuxTooSlow, method, deadline.Sub(start).Truncate(time.Millisecond))
+		}
 		return nil, true, fmt.Errorf("cmux socket rpc %s: read: %w", method, err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -347,5 +348,98 @@ func TestFastPathPoolSlowCallDoesNotBlockConcurrentFastCall(t *testing.T) {
 
 	if fastElapsed > 50*time.Millisecond {
 		t.Fatalf("fast call took %v while a slow call was in flight on another pooled connection; want it to complete promptly, not queue behind the slow one", fastElapsed)
+	}
+}
+
+// withSocketIOTimeout shortens the default budget for one test, so a test
+// about deadlines doesn't have to sleep out a real five seconds.
+func withSocketIOTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := socketIOTimeout
+	socketIOTimeout = d
+	t.Cleanup(func() { socketIOTimeout = prev })
+}
+
+// cmux-app-69y. The default budget is sized for calls like
+// mobile.workspace.list; mobile.terminal.replay is an order of magnitude
+// heavier and has to be able to ask for more. The old clamp let a caller's
+// deadline shorten the default only, so this call died at the default no
+// matter what deadline it was given.
+func TestCallerDeadlineCanExceedTheDefaultBudget(t *testing.T) {
+	withSocketIOTimeout(t, 50*time.Millisecond)
+	startFakeCmuxSocket(t, fakeSocketPassword, func(method string, params json.RawMessage) (json.RawMessage, string, string) {
+		time.Sleep(300 * time.Millisecond)
+		return json.RawMessage(`{"via":"socket"}`), "", ""
+	})
+	bin := testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "subprocess should not have been used" >&2
+exit 1
+`)
+	c := &Client{Bin: bin, FastPath: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	out, err := c.Rpc(ctx, "mobile.terminal.replay", nil)
+	if err != nil {
+		t.Fatalf("a call slower than the default budget but inside its own deadline must succeed: %v", err)
+	}
+	if !strings.Contains(string(out), `"via":"socket"`) {
+		t.Fatalf("want response via socket fast path, got %s", out)
+	}
+}
+
+// The deadline is authoritative in both directions -- a caller that wants
+// less than the default still gets less.
+func TestCallerDeadlineShorterThanTheDefaultStillWins(t *testing.T) {
+	withSocketIOTimeout(t, 10*time.Second)
+	startFakeCmuxSocket(t, fakeSocketPassword, func(method string, params json.RawMessage) (json.RawMessage, string, string) {
+		time.Sleep(300 * time.Millisecond)
+		return json.RawMessage(`{}`), "", ""
+	})
+	bin := testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "subprocess should not have been used" >&2
+exit 1
+`)
+	c := &Client{Bin: bin, FastPath: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := c.Rpc(ctx, "mobile.terminal.replay", nil); err == nil {
+		t.Fatal("want the caller's shorter deadline to cut the call off")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("waited %s, so the short deadline was ignored", elapsed)
+	}
+}
+
+// A cmux that accepted the request and went quiet is a different problem
+// from a cmux that isn't there, and the two want opposite responses. They
+// used to be one undifferentiated "i/o timeout" inside a read error.
+func TestSlowCmuxIsReportedDistinctlyFromUnreachableCmux(t *testing.T) {
+	withSocketIOTimeout(t, 50*time.Millisecond)
+	startFakeCmuxSocket(t, fakeSocketPassword, func(method string, params json.RawMessage) (json.RawMessage, string, string) {
+		time.Sleep(2 * time.Second)
+		return json.RawMessage(`{}`), "", ""
+	})
+	bin := testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "subprocess should not have been used" >&2
+exit 1
+`)
+	c := &Client{Bin: bin, FastPath: true}
+
+	_, err := c.Rpc(context.Background(), "mobile.terminal.replay", nil)
+	if !errors.Is(err, ErrCmuxTooSlow) {
+		t.Fatalf("a request cmux never answered must report ErrCmuxTooSlow, got %v", err)
+	}
+
+	// The other failure: nothing listening at all. Must NOT look like slowness.
+	t.Setenv("CMUX_SOCKET_PATH", filepath.Join(t.TempDir(), "does-not-exist.sock"))
+	unreachable := &Client{Bin: testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "cmux not running" >&2
+exit 1
+`), FastPath: true}
+	if _, err := unreachable.Rpc(context.Background(), "mobile.terminal.replay", nil); errors.Is(err, ErrCmuxTooSlow) {
+		t.Fatalf("an unreachable cmux must not be reported as a slow one: %v", err)
 	}
 }
