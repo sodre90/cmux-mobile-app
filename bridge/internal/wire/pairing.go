@@ -5,6 +5,12 @@ import "time"
 // PairingCodeTTL is how long a self-service pairing code stays redeemable.
 const PairingCodeTTL = 10 * time.Minute
 
+// PairingConfirmTTL is how long the operator has to answer the agent's
+// fingerprint prompt before a redeemed pairing resolves itself to refused.
+// Long enough for a human to walk to the Mac, short enough that a phone left
+// waiting gets a real answer instead of hanging.
+const PairingConfirmTTL = 5 * time.Minute
+
 // The DTOs below are the self-service pairing wire contract, served
 // identically by the relay (internal/relay) and direct mode
 // (internal/server).
@@ -53,4 +59,13 @@ type DevicePairReq struct {
 type DevicePairResp struct {
 	Token    string `json:"token"`
 	TenantID string `json:"tenant_id"`
+}
+
+// PairStatusResp is the response to GET /devices/pair-status/{code}, the
+// route a phone polls to learn whether the operator accepted it. It carries
+// one enum value -- pending, confirmed or refused -- and deliberately nothing
+// else: no token, no key material, no tenant id, because the route is
+// unauthenticated by design (see internal/pairing).
+type PairStatusResp struct {
+	State string `json:"state"`
 }

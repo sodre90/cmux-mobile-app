@@ -54,7 +54,9 @@ func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, deviceP
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(h.newPairingCode))
 	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(h.pairingCodeStatus))
 	mux.Handle("DELETE /agent/pairing-code/{code}", http.HandlerFunc(h.abortPairing))
+	mux.Handle("POST /agent/pairing-code/{code}/confirm", http.HandlerFunc(h.confirmPairing))
 	mux.Handle("GET /devices/pair-info/{code}", http.HandlerFunc(h.pairingCodeInfo))
+	mux.Handle("GET /devices/pair-status/{code}", http.HandlerFunc(h.pairStatus))
 	mux.Handle("POST /devices/pair", http.HandlerFunc(h.devicePair))
 }
 
@@ -146,6 +148,50 @@ func (h *handlers) abortPairing(w http.ResponseWriter, req *http.Request) {
 		slog.Warn("pairing: pairing refused by operator, device token revoked", "tenant_id", tenantID)
 	}
 	httpjson.Write(w, http.StatusOK, wire.AbortPairingResp{Revoked: revoked})
+}
+
+// confirmPairing lets the agent that issued a pairing code record that the
+// operator answered yes at the fingerprint prompt. It is the counterpart to
+// abortPairing and the single commit point of the whole flow: until it lands,
+// the phone holds its pairing in memory and persists nothing (cmux-app-gmo).
+// Tenant-scoped exactly like abortPairing, with the same 403/404 split.
+func (h *handlers) confirmPairing(w http.ResponseWriter, req *http.Request) {
+	tenantID, ok := h.tenant(req)
+	if !ok {
+		httpjson.Error(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	err := h.store.ConfirmPairing(tenantID, req.PathValue("code"), wire.PairingConfirmTTL)
+	switch {
+	case errors.Is(err, auth.ErrNotFound):
+		httpjson.Error(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, auth.ErrPairingRefused):
+		httpjson.Error(w, http.StatusConflict, "pairing_refused")
+	case errors.Is(err, auth.ErrPairingConfirmExpired):
+		httpjson.Error(w, http.StatusConflict, "pairing_confirm_expired")
+	case err != nil:
+		slog.Error("pairing: confirm pairing", "tenant_id", tenantID, "err", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
+	default:
+		httpjson.Write(w, http.StatusOK, struct{}{})
+	}
+}
+
+// pairStatus lets a phone that has completed /devices/pair learn whether the
+// operator accepted it, so it can persist the pairing only once the answer is
+// yes. Public, no auth -- matching /devices/pair and /devices/pair-info on
+// the same vhost, and necessarily so: refusing a pairing destroys the very
+// bearer token an authenticated route would demand, so the refused case would
+// answer 401, indistinguishable from a misconfigured credential. An
+// unauthenticated route can say "refused" out loud. Not tenant-scoped and it
+// must not echo a tenant back: the response is one enum value, nothing more.
+func (h *handlers) pairStatus(w http.ResponseWriter, req *http.Request) {
+	state, ok := h.store.PairingConfirmationState(req.PathValue("code"), wire.PairingConfirmTTL)
+	if !ok {
+		httpjson.Error(w, http.StatusNotFound, "not_found")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, wire.PairStatusResp{State: state})
 }
 
 // pairingCodeInfo lets a phone that can't scan the QR (no camera, or

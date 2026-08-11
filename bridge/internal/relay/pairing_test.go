@@ -777,3 +777,150 @@ func TestAbortPairingRequiresAgentCN(t *testing.T) {
 		t.Fatalf("want 403 for a non-agent CN, got %d", resp.StatusCode)
 	}
 }
+
+// confirmablePairing builds the state the confirm route acts on: a relay
+// serving a tenant whose pairing code a phone has already redeemed.
+func confirmablePairing(t *testing.T) (store *auth.Store, srv *httptest.Server, tenantID, code string) {
+	t.Helper()
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err = store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err = store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64"); !ok {
+		t.Fatal("redeem should succeed")
+	}
+	rl := New(store, nil, "relay-secret")
+	srv = httptest.NewServer(rl.Handler())
+	t.Cleanup(srv.Close)
+	return store, srv, tenantID, code
+}
+
+func agentConfirm(t *testing.T, srv *httptest.Server, tenantCN, code string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/agent/pairing-code/"+code+"/confirm", nil)
+	if tenantCN != "" {
+		req.Header.Set("X-Client-Cert-Cn", "CN=agent:"+tenantCN)
+		req.Header.Set("X-Client-Cert-Verify", "SUCCESS")
+	} else {
+		req.Header.Set("X-Client-Cert-Cn", "CN=phone")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func devicePairStatus(t *testing.T, srv *httptest.Server, code string) (int, wire.PairStatusResp) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/devices/pair-status/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body wire.PairStatusResp
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return resp.StatusCode, body
+}
+
+// cmux-app-gmo. The phone holds its pairing in memory until it reads
+// confirmed, so this route is what ends the wait.
+func TestConfirmPairingMovesTheStatusThePhoneIsWatching(t *testing.T) {
+	_, srv, tenantID, code := confirmablePairing(t)
+
+	if status, body := devicePairStatus(t, srv, code); status != http.StatusOK || body.State != auth.PairingPending {
+		t.Fatalf("before the operator answers = (%d, %q), want (200, pending)", status, body.State)
+	}
+	if got := agentConfirm(t, srv, tenantID, code); got != http.StatusOK {
+		t.Fatalf("confirm = %d, want 200", got)
+	}
+	if status, body := devicePairStatus(t, srv, code); status != http.StatusOK || body.State != auth.PairingConfirmed {
+		t.Fatalf("after the operator confirms = (%d, %q), want (200, confirmed)", status, body.State)
+	}
+}
+
+func TestConfirmPairingRequiresAgentCN(t *testing.T) {
+	store, srv, _, code := confirmablePairing(t)
+
+	if got := agentConfirm(t, srv, "", code); got != http.StatusForbidden {
+		t.Fatalf("a caller with no agent CN = %d, want 403", got)
+	}
+	if state, _ := store.PairingConfirmationState(code, time.Minute); state != auth.PairingPending {
+		t.Fatalf("the rejected call still confirmed the pairing: state=%q", state)
+	}
+}
+
+// The same 403/404 split abortPairing uses: a foreign tenant that presents a
+// valid agent CN is a real agent, just not this pairing's -- so 404, not 403.
+func TestConfirmPairingScopedToOwnTenant(t *testing.T) {
+	store, srv, _, code := confirmablePairing(t)
+	stranger, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := agentConfirm(t, srv, stranger, code); got != http.StatusNotFound {
+		t.Fatalf("tenant B confirming tenant A's pairing = %d, want 404", got)
+	}
+	if state, _ := store.PairingConfirmationState(code, time.Minute); state != auth.PairingPending {
+		t.Fatalf("the stranger confirmed another tenant's pairing: state=%q", state)
+	}
+}
+
+func TestConfirmPairingAfterARefusalIs409(t *testing.T) {
+	store, srv, tenantID, code := confirmablePairing(t)
+	if _, err := store.AbortPairing(tenantID, code); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := agentConfirm(t, srv, tenantID, code); got != http.StatusConflict {
+		t.Fatalf("confirming a refused pairing = %d, want 409", got)
+	}
+	if _, body := devicePairStatus(t, srv, code); body.State != auth.PairingRefused {
+		t.Fatalf("state after the rejected confirm = %q, want refused", body.State)
+	}
+}
+
+// The status route is the one thing in the pairing flow a phone must reach
+// with no credential at all: refusal destroys the very token an
+// authenticated route would demand.
+func TestPairStatusNeedsNoCredentialAndLeaksNothingElse(t *testing.T) {
+	_, srv, _, code := confirmablePairing(t)
+
+	resp, err := http.Get(srv.URL + "/devices/pair-status/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("an unauthenticated poll = %d, want 200", resp.StatusCode)
+	}
+	var raw map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 || raw["state"] != auth.PairingPending {
+		t.Fatalf("the status response must carry state and nothing else, got %v", raw)
+	}
+}
+
+func TestPairStatusUnknownCodeIs404(t *testing.T) {
+	_, srv, _, _ := confirmablePairing(t)
+
+	if status, _ := devicePairStatus(t, srv, "NOSUCHCD"); status != http.StatusNotFound {
+		t.Fatalf("an unknown code = %d, want 404", status)
+	}
+}

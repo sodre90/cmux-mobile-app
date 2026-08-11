@@ -30,6 +30,18 @@ import (
 // which must never turn an infra error into a 401).
 var ErrNotFound = errors.New("auth: not found")
 
+// ErrPairingRefused and ErrPairingConfirmExpired are what ConfirmPairing
+// returns for a pairing that can no longer be confirmed. Both are the same
+// 409 to an HTTP caller, but they are separate values because they mean
+// opposite things about the operator: one answered no, the other never
+// answered. An agent that comes back from the dead late is told its
+// confirmation did not take rather than silently disagreeing with a phone
+// that already gave up.
+var (
+	ErrPairingRefused        = errors.New("auth: pairing already refused")
+	ErrPairingConfirmExpired = errors.New("auth: pairing confirmation window elapsed")
+)
+
 const schema = `
 CREATE TABLE IF NOT EXISTS tenants (
 	id         TEXT PRIMARY KEY,
@@ -75,6 +87,8 @@ var migrations = []string{
 	`ALTER TABLE pairing_codes ADD COLUMN token_hash TEXT`,
 	`ALTER TABLE pairing_codes ADD COLUMN redeemed_at TEXT`,
 	`ALTER TABLE pairing_codes ADD COLUMN agent_pubkey TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE pairing_codes ADD COLUMN confirmed_at TEXT`,
+	`ALTER TABLE pairing_codes ADD COLUMN refused_at TEXT`,
 }
 
 // applyMigrations runs each migration statement, tolerating a "duplicate
@@ -471,10 +485,12 @@ func (s *Store) RedeemPairingCode(code, name, devicePubkey string) (token, tenan
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	var expiresAt string
-	var redeemedAt sql.NullString
-	err = tx.QueryRow(`SELECT tenant_id, expires_at, redeemed_at FROM pairing_codes WHERE code = ?`, code).
-		Scan(&tenantID, &expiresAt, &redeemedAt)
-	if err != nil || redeemedAt.Valid {
+	var redeemedAt, refusedAt sql.NullString
+	err = tx.QueryRow(`SELECT tenant_id, expires_at, redeemed_at, refused_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&tenantID, &expiresAt, &redeemedAt, &refusedAt)
+	// refused_at is checked here because AbortPairing no longer deletes the
+	// row -- deletion used to be what made a refused code unredeemable.
+	if err != nil || redeemedAt.Valid || refusedAt.Valid {
 		return "", "", false
 	}
 	exp, err := time.Parse(time.RFC3339, expiresAt)
@@ -531,11 +547,16 @@ func (s *Store) PairingCodeStatus(tenantID, code string) (devicePubkey, tokenHas
 
 // AbortPairing undoes a pairing the operator refused at the agent's
 // fingerprint prompt: it deletes the device token RedeemPairingCode already
-// minted, and the pairing code itself so nothing can redeem it a second
-// time. Reports whether a device token was actually destroyed, so an agent
-// can distinguish "the phone's credential is gone" from "the phone never got
-// one" -- both are acceptable outcomes of an abort, but only the first is a
-// credential the operator would otherwise still be trusting.
+// minted, and stamps the pairing code refused so nothing can redeem it a
+// second time. Reports whether a device token was actually destroyed, so an
+// agent can distinguish "the phone's credential is gone" from "the phone
+// never got one" -- both are acceptable outcomes of an abort, but only the
+// first is a credential the operator would otherwise still be trusting.
+//
+// It used to DELETE the pairing_codes row, which was only ever how a refused
+// code was made unredeemable. The row now has to survive for the phone to
+// have something to read (PairingConfirmationState), so RedeemPairingCode and
+// PairingCodeInfo check refused_at directly instead (cmux-app-gmo).
 //
 // This exists because the token is minted at redemption, which happens
 // BEFORE the operator sees the fingerprint to confirm: an abort left a fully
@@ -572,13 +593,121 @@ func (s *Store) AbortPairing(tenantID, code string) (revokedToken bool, err erro
 		n, _ := res.RowsAffected()
 		revokedToken = n > 0
 	}
-	if _, err := tx.Exec(`DELETE FROM pairing_codes WHERE code = ? AND tenant_id = ?`, code, tenantID); err != nil {
+	if _, err := tx.Exec(`UPDATE pairing_codes SET refused_at = ? WHERE code = ? AND tenant_id = ?`,
+		now(), code, tenantID); err != nil {
 		return false, fmt.Errorf("abort pairing: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("abort pairing: %w", err)
 	}
 	return revokedToken, nil
+}
+
+// ConfirmPairing records that the operator answered yes at the agent's
+// fingerprint prompt, which is what lets the phone stop holding its pairing
+// in memory and persist it. Tenant-scoped exactly like AbortPairing: an agent
+// must not be able to confirm another tenant's pairing by guessing a code.
+//
+// Idempotent, because the agent's confirm POST is a plain HTTP call it may
+// legitimately retry. Refuses a code that was already refused, or one whose
+// redemption is older than confirmWindow -- see PairingConfirmationState for
+// why that window is enforced on read rather than swept.
+//
+// A code that was never redeemed is ErrNotFound: there is no pairing to
+// confirm yet, and no legitimate caller reaches this before observing
+// redemption via PairingCodeStatus.
+func (s *Store) ConfirmPairing(tenantID, code string, confirmWindow time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("confirm pairing: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	var gotTenant string
+	var redeemedAt, confirmedAt, refusedAt sql.NullString
+	err = tx.QueryRow(`SELECT tenant_id, redeemed_at, confirmed_at, refused_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&gotTenant, &redeemedAt, &confirmedAt, &refusedAt)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && gotTenant != tenantID) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("confirm pairing: %w", err)
+	}
+	if refusedAt.Valid {
+		return ErrPairingRefused
+	}
+	if confirmedAt.Valid {
+		return nil
+	}
+	if !redeemedAt.Valid {
+		return ErrNotFound
+	}
+	if confirmationWindowElapsed(redeemedAt.String, confirmWindow) {
+		return ErrPairingConfirmExpired
+	}
+
+	if _, err := tx.Exec(`UPDATE pairing_codes SET confirmed_at = ? WHERE code = ? AND tenant_id = ?`,
+		now(), code, tenantID); err != nil {
+		return fmt.Errorf("confirm pairing: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("confirm pairing: %w", err)
+	}
+	return nil
+}
+
+// Pairing confirmation states, as read by a phone waiting to hear whether the
+// operator accepted it. Only these three values ever reach the wire.
+const (
+	PairingPending   = "pending"
+	PairingConfirmed = "confirmed"
+	PairingRefused   = "refused"
+)
+
+// PairingConfirmationState reports where a pairing stands between redemption
+// and the operator's answer. Deliberately NOT tenant-scoped: the caller is a
+// phone that does not know its tenant, same reasoning as PairingCodeInfo. It
+// returns one enum value and nothing else, so there is nothing for an
+// unauthenticated caller to learn beyond the bit it is waiting for.
+//
+// A redeemed-but-unanswered pairing older than confirmWindow reads as
+// refused, computed here rather than written by a sweeper. That makes the
+// timeout fail closed with no process needing to survive to enforce it: an
+// agent killed at its own prompt resolves the pairing to refused on its own.
+func (s *Store) PairingConfirmationState(code string, confirmWindow time.Duration) (state string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var redeemedAt, confirmedAt, refusedAt sql.NullString
+	err := s.db.QueryRow(`SELECT redeemed_at, confirmed_at, refused_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&redeemedAt, &confirmedAt, &refusedAt)
+	if err != nil {
+		return "", false
+	}
+	switch {
+	case refusedAt.Valid:
+		return PairingRefused, true
+	case confirmedAt.Valid:
+		return PairingConfirmed, true
+	case redeemedAt.Valid && confirmationWindowElapsed(redeemedAt.String, confirmWindow):
+		return PairingRefused, true
+	default:
+		return PairingPending, true
+	}
+}
+
+// confirmationWindowElapsed reports whether redeemedAt is far enough in the
+// past that the operator's answer can no longer be accepted. An unparseable
+// timestamp counts as elapsed: this gates whether a pairing may still
+// complete, so corrupt state must fail closed.
+func confirmationWindowElapsed(redeemedAt string, confirmWindow time.Duration) bool {
+	t, err := time.Parse(time.RFC3339, redeemedAt)
+	if err != nil {
+		return true
+	}
+	return time.Since(t) > confirmWindow
 }
 
 // PairingCodeInfo resolves a pairing code to the agent's e2e public key and
@@ -593,10 +722,10 @@ func (s *Store) PairingCodeInfo(code string) (agentPubkey, tenantID, expiresAt s
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var pubkey sql.NullString
-	var redeemedAt sql.NullString
-	err := s.db.QueryRow(`SELECT agent_pubkey, tenant_id, expires_at, redeemed_at FROM pairing_codes WHERE code = ?`, code).
-		Scan(&pubkey, &tenantID, &expiresAt, &redeemedAt)
-	if err != nil || redeemedAt.Valid {
+	var redeemedAt, refusedAt sql.NullString
+	err := s.db.QueryRow(`SELECT agent_pubkey, tenant_id, expires_at, redeemed_at, refused_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&pubkey, &tenantID, &expiresAt, &redeemedAt, &refusedAt)
+	if err != nil || redeemedAt.Valid || refusedAt.Valid {
 		return "", "", "", false
 	}
 	exp, err := time.Parse(time.RFC3339, expiresAt)

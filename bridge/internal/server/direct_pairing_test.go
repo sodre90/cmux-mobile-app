@@ -289,3 +289,57 @@ func TestDirectAbortPairingUnknownCodeIs404(t *testing.T) {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
 	}
 }
+
+// cmux-app-gmo. Both mounts serve the confirmation routes byte-identically;
+// direct mode's ConstantTenant resolves every caller to this Mac's one
+// tenant, so there is no CN to present here.
+func TestDirectConfirmPairingMovesTheStatusThePhoneIsWatching(t *testing.T) {
+	srv, store, tenantID := newDirectPairingServer(t)
+	defer srv.Close()
+
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := store.RedeemPairingCode(code, "phone", "device-pubkey-b64"); !ok {
+		t.Fatal("redeem should succeed")
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/agent/pairing-code/"+code+"/confirm", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("confirm = %d, want 200", resp.StatusCode)
+	}
+
+	statusResp, err := http.Get(srv.URL + "/devices/pair-status/" + code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statusResp.Body.Close()
+	var body wire.PairStatusResp
+	if err := json.NewDecoder(statusResp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.State != auth.PairingConfirmed {
+		t.Fatalf("state = %q, want confirmed", body.State)
+	}
+}
+
+func TestDirectConfirmPairingUnknownCodeIs404(t *testing.T) {
+	srv, _, _ := newDirectPairingServer(t)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/agent/pairing-code/bogus/confirm", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}

@@ -191,8 +191,14 @@ func TestAbortPairingDestroysTheRedeemedToken(t *testing.T) {
 	if _, err := s.Verify(tok); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the refused pairing's token still verifies: %v", err)
 	}
-	if _, _, _, ok := s.PairingCodeStatus(tenant, code); ok {
+	// The row itself now survives the abort so the waiting phone has
+	// something to read, so what has to hold is that it is unredeemable and
+	// says refused -- not that it is gone.
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); ok {
 		t.Fatal("an aborted code must not survive to be redeemed again")
+	}
+	if state, ok := s.PairingConfirmationState(code, time.Minute); !ok || state != PairingRefused {
+		t.Fatalf("the phone must be able to read the refusal: state=%q ok=%v", state, ok)
 	}
 }
 
@@ -556,5 +562,159 @@ func TestMigrationAddsAgentPubkeyColumn(t *testing.T) {
 	agentPubkey, _, _, ok := s.PairingCodeInfo(code)
 	if !ok || agentPubkey != testPubkey {
 		t.Fatalf("PairingCodeInfo after migration = (%q, ok=%v), want (%q, true)", agentPubkey, ok, testPubkey)
+	}
+}
+
+// redeemedPairing sets up the state every confirmation test starts from: a
+// code that a phone has redeemed and whose operator has not yet answered.
+func redeemedPairing(t *testing.T, s *Store, tenant string) string {
+	t.Helper()
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := s.RedeemPairingCode(code, "phone", testPubkey); !ok {
+		t.Fatal("redeem should succeed")
+	}
+	return code
+}
+
+func TestConfirmPairingIsWhatMovesAPairingOutOfPending(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+
+	if state, ok := s.PairingConfirmationState(code, time.Minute); !ok || state != PairingPending {
+		t.Fatalf("a redeemed, unanswered pairing = (%q, ok=%v), want pending", state, ok)
+	}
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("ConfirmPairing: %v", err)
+	}
+	if state, ok := s.PairingConfirmationState(code, time.Minute); !ok || state != PairingConfirmed {
+		t.Fatalf("after confirming = (%q, ok=%v), want confirmed", state, ok)
+	}
+}
+
+// The agent's confirm is a plain HTTP POST it may legitimately retry, so a
+// second one must not turn a good pairing into an error.
+func TestConfirmPairingIsIdempotent(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("first ConfirmPairing: %v", err)
+	}
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("a repeated confirm must be a no-op, got %v", err)
+	}
+}
+
+// The same isolation AbortPairing enforces: confirming is not a capability
+// another tenant's agent can exercise by guessing a code.
+func TestConfirmPairingIsTenantScoped(t *testing.T) {
+	s := newStore(t)
+	owner := newTenant(t, s)
+	stranger := newTenant(t, s)
+	code := redeemedPairing(t, s, owner)
+
+	if err := s.ConfirmPairing(stranger, code, time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a stranger confirming another tenant's pairing = %v, want ErrNotFound", err)
+	}
+	if state, _ := s.PairingConfirmationState(code, time.Minute); state != PairingPending {
+		t.Fatalf("the stranger's attempt changed the row: state=%q", state)
+	}
+}
+
+func TestConfirmPairingCannotOverrideARefusal(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+	if _, err := s.AbortPairing(tenant, code); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ConfirmPairing(tenant, code, time.Minute); !errors.Is(err, ErrPairingRefused) {
+		t.Fatalf("confirming a refused pairing = %v, want ErrPairingRefused", err)
+	}
+	if state, _ := s.PairingConfirmationState(code, time.Minute); state != PairingRefused {
+		t.Fatalf("state after the rejected confirm = %q, want refused", state)
+	}
+}
+
+// An agent that comes back from the dead after the phone has already given
+// up must be told its confirmation did not take, rather than silently
+// disagreeing with a phone that moved on.
+func TestConfirmPairingIsRefusedOnceTheWindowElapsed(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+
+	const alreadyElapsed = -time.Second
+	if err := s.ConfirmPairing(tenant, code, alreadyElapsed); !errors.Is(err, ErrPairingConfirmExpired) {
+		t.Fatalf("confirming past the window = %v, want ErrPairingConfirmExpired", err)
+	}
+}
+
+// The timeout is computed on read, so it needs no sweeper and no surviving
+// process: an agent killed at its own prompt still resolves the pairing.
+func TestAnUnansweredPairingReadsRefusedOnceTheWindowElapses(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+
+	const alreadyElapsed = -time.Second
+	if state, ok := s.PairingConfirmationState(code, alreadyElapsed); !ok || state != PairingRefused {
+		t.Fatalf("an unanswered pairing past its window = (%q, ok=%v), want refused", state, ok)
+	}
+	// Nothing was written to get there -- the same row still reads pending
+	// inside a live window.
+	if state, _ := s.PairingConfirmationState(code, time.Minute); state != PairingPending {
+		t.Fatalf("the elapsed read mutated the row: state=%q, want pending", state)
+	}
+}
+
+// A phone polls with a code and no credential, so an unknown code has to be
+// distinguishable from a real one rather than answering pending forever.
+func TestPairingConfirmationStateRejectsAnUnknownCode(t *testing.T) {
+	s := newStore(t)
+	if state, ok := s.PairingConfirmationState("NOSUCHCD", time.Minute); ok {
+		t.Fatalf("an unknown code reported state %q", state)
+	}
+}
+
+// A refusal that lands before the phone ever redeemed is still readable --
+// the phone may be polling for a code it never got to redeem.
+func TestAPairingRefusedBeforeRedemptionStillReadsRefused(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AbortPairing(tenant, code); err != nil {
+		t.Fatal(err)
+	}
+
+	if state, ok := s.PairingConfirmationState(code, time.Minute); !ok || state != PairingRefused {
+		t.Fatalf("state = (%q, ok=%v), want refused", state, ok)
+	}
+}
+
+// PairingCodeInfo resolving a refused code would let a phone start a pairing
+// the operator has already killed.
+func TestPairingCodeInfoRefusesARefusedCode(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, testPubkey, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AbortPairing(tenant, code); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, _, ok := s.PairingCodeInfo(code); ok {
+		t.Fatal("a refused code must not keep resolving to the agent's pubkey")
 	}
 }
