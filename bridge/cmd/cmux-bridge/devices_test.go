@@ -315,3 +315,62 @@ func TestPrintDeviceRowsShowsTheDriftColumn(t *testing.T) {
 		t.Fatalf("the listing should print a short hash, not the whole one:\n%s", got)
 	}
 }
+
+func TestReaperRemovesSecretsNoServerKnowsAbout(t *testing.T) {
+	srv := fakeDeviceAdmin(t, wire.AgentDevice{Name: "phone-1", TokenHash: "aaaa1111"})
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+	addSecret(t, sessions, "cccc3333")
+
+	reaped, err := reapStrandedSecrets([]agentServer{srv.as("relay")}, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reaped != 1 {
+		t.Fatalf("reaped = %d, want 1", reaped)
+	}
+	if hasSecret(t, sessions, "cccc3333") {
+		t.Fatal("the stranded secret should be gone")
+	}
+	if !hasSecret(t, sessions, "aaaa1111") {
+		t.Fatal("a secret the server still lists must survive")
+	}
+}
+
+// Without this guard a relay outage would unpair every device on the Mac:
+// unreachable means the server's devices are unknown, not absent.
+func TestReaperTouchesNothingWhenAServerIsUnreachable(t *testing.T) {
+	live := fakeDeviceAdmin(t, wire.AgentDevice{Name: "phone-1", TokenHash: "aaaa1111"})
+	dead := fakeDeviceAdmin(t)
+	dead.Close()
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+	addSecret(t, sessions, "cccc3333")
+
+	reaped, err := reapStrandedSecrets([]agentServer{live.as("relay"), dead.as("direct")}, sessions)
+	if err == nil {
+		t.Fatal("an incomplete round must be reported, not treated as a clean sweep")
+	}
+	if reaped != 0 {
+		t.Fatalf("reaped = %d, want 0", reaped)
+	}
+	for _, id := range []string{"aaaa1111", "cccc3333"} {
+		if !hasSecret(t, sessions, id) {
+			t.Fatalf("%s was reaped despite an unreachable server", id)
+		}
+	}
+}
+
+func TestReaperIsANoOpWhenNothingIsStranded(t *testing.T) {
+	srv := fakeDeviceAdmin(t, wire.AgentDevice{Name: "phone-1", TokenHash: "aaaa1111"})
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+
+	reaped, err := reapStrandedSecrets([]agentServer{srv.as("relay")}, sessions)
+	if err != nil || reaped != 0 {
+		t.Fatalf("reaped = %d, err = %v; want 0, nil", reaped, err)
+	}
+	if !hasSecret(t, sessions, "aaaa1111") {
+		t.Fatal("a live device's secret must survive")
+	}
+}

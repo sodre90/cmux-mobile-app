@@ -405,6 +405,7 @@ func runAgent(args []string) int {
 		}
 	}
 	go srv.RunEvents(ctx)
+	go runReaper(ctx, cfg, sessions, reaperFirstRound, reaperPeriod)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
 	var relayTunnelUp atomic.Bool

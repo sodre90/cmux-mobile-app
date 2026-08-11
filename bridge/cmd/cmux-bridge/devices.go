@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -25,6 +27,15 @@ const deviceAdminTimeout = 10 * time.Second
 // operator's only source for the prefix `revoke` takes, so it has to be wide
 // enough that what they can see is never ambiguous.
 const displayedHashLen = 12
+
+// reaperFirstRound delays the first reaper round past agent startup, when
+// the relay tunnel is usually still coming up; reaperPeriod paces the rest.
+// Nothing here is urgent -- a stranded secret grants no access on its own --
+// so this is deliberately slow enough to be invisible.
+const (
+	reaperFirstRound = 2 * time.Minute
+	reaperPeriod     = time.Hour
+)
 
 // localSource marks a row that exists only in this Mac's e2e store: a shared
 // secret whose server-side token is already gone. Those are unusable and
@@ -211,6 +222,66 @@ func revokeByPrefix(out io.Writer, servers []agentServer, sessions *e2e.Store, p
 	_, _ = fmt.Fprintf(out, "revoked %s: %s\n", shortHash(row.device.TokenHash),
 		describeRevocation(row.server.kind, existed, removed))
 	return nil
+}
+
+// reapStrandedSecrets removes every shared secret this Mac holds that no
+// server has a device row for. Those are inert -- no request can
+// authenticate without the token -- so this is hygiene rather than security,
+// which is exactly why it runs on a timer instead of on the critical path of
+// whatever revoked the token (cmux-app-f5y).
+//
+// It is also what makes revocation converge from any direction: a device
+// revoked through the phone's Forget, through `cmux-relay devices revoke`,
+// or by an operator here all end the same way instead of leaving the two
+// stores to drift apart (cmux-app-vkq).
+//
+// The whole round is abandoned if any server failed to answer. A server that
+// did not reply means its devices are unknown, not absent; without that
+// guard a relay outage would unpair every device on this Mac.
+func reapStrandedSecrets(servers []agentServer, sessions *e2e.Store) (reaped int, err error) {
+	rows, problems := collectDevices(servers, sessions)
+	if len(problems) > 0 {
+		return 0, fmt.Errorf("skipped: %s", strings.Join(problems, "; "))
+	}
+	for _, row := range rows {
+		if row.server.kind != localSource {
+			continue
+		}
+		removed, err := sessions.RemoveDevice(row.device.TokenHash)
+		if err != nil {
+			return reaped, fmt.Errorf("remove stranded secret %s: %w", shortHash(row.device.TokenHash), err)
+		}
+		if removed {
+			reaped++
+			slog.Info("devices: reaped a shared secret no server knows about", "device", shortHash(row.device.TokenHash))
+		}
+	}
+	return reaped, nil
+}
+
+// runReaper reaps stranded secrets on a loop until ctx is done. The first
+// round is delayed rather than immediate: at startup the relay tunnel is
+// usually still coming up, and a round that cannot reach a server does
+// nothing anyway.
+func runReaper(ctx context.Context, cfg config.AgentConfig, sessions *e2e.Store, delay, period time.Duration) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		servers, err := configuredServers(cfg, deviceAdminTimeout)
+		if err != nil {
+			slog.Warn("devices: reaper found no reachable server", "err", err)
+		} else if reaped, err := reapStrandedSecrets(servers, sessions); err != nil {
+			slog.Warn("devices: reaper round incomplete", "err", err)
+		} else if reaped > 0 {
+			slog.Info("devices: reaper removed stranded secrets", "count", reaped)
+		}
+		timer.Reset(period)
+	}
 }
 
 func describeRevocation(source string, existed, secretRemoved bool) string {
