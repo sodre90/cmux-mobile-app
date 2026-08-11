@@ -9,9 +9,11 @@ import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
 import com.sodre90.cmuxremote.data.e2e.pairingFingerprint
 import com.sodre90.cmuxremote.model.BridgeJson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -23,6 +25,27 @@ import java.util.Base64
  *  RedeemPairingCode doesn't distinguish these (see the Go spec's error
  *  handling section), so neither does this. */
 class PairingCodeInvalidException : Exception("pairing_code_invalid")
+
+/** The operator answered no at the agent's fingerprint prompt. Distinct from
+ *  [PairingNotAnsweredException] because the two are not interchangeable to a
+ *  user: this one means a person decided, and re-pairing means asking them
+ *  again. */
+class PairingRefusedException : Exception("pairing_refused")
+
+/** Nobody answered the agent's fingerprint prompt before
+ *  [PAIRING_CONFIRM_TTL_MILLIS] elapsed -- the absence of a decision rather
+ *  than a decision, so the user's next move is to go find out whether the
+ *  agent is even running. */
+class PairingNotAnsweredException : Exception("pairing_not_answered")
+
+/** Mirrors wire.PairingConfirmTTL (bridge/internal/wire/pairing.go), which is
+ *  what the server enforces on its own side -- past it a redeemed pairing
+ *  reads refused there too, so polling any longer would only ever confirm a
+ *  refusal we already have to assume. */
+internal const val PAIRING_CONFIRM_TTL_MILLIS = 5L * 60 * 1000
+
+/** Matches the agent's own poll period for the mirror-image wait. */
+internal const val PAIR_STATUS_POLL_MILLIS = 2000L
 
 @Serializable
 private data class DevicePairRequest(
@@ -36,6 +59,18 @@ private data class DevicePairResponse(
     val token: String = "",
     @SerialName("tenant_id") val tenantId: String = "",
 )
+
+/** Mirrors wire.PairStatusResp. Defaults to pending so a response that is
+ *  missing or malformed keeps the phone waiting rather than reading as an
+ *  answer nobody gave. */
+@Serializable
+private data class PairStatusResponse(
+    val state: String = PAIR_STATE_PENDING,
+)
+
+private const val PAIR_STATE_PENDING = "pending"
+private const val PAIR_STATE_CONFIRMED = "confirmed"
+private const val PAIR_STATE_REFUSED = "refused"
 
 @Serializable
 private data class PairingCodeInfoResponse(
@@ -57,7 +92,12 @@ interface PairingSession {
      *  phone's own key -- no network call. */
     fun prepare(qr: PairingQr): String
 
-    suspend fun commit(qr: PairingQr)
+    /** Redeems the pairing code, then waits for the agent's operator to
+     *  accept or refuse the fingerprint before persisting anything.
+     *  [onAwaitingOperator] fires once the redemption lands and the wait
+     *  begins, which is the only moment the caller can distinguish from the
+     *  outside. */
+    suspend fun commit(qr: PairingQr, onAwaitingOperator: () -> Unit = {})
 
     /** Resolves a manually-entered server URL + pairing code (the CLI's
      *  fallback for when scanning isn't possible) into the same [PairingQr]
@@ -125,13 +165,14 @@ class PairingClient(
 
     override fun prepare(qr: PairingQr): String = prepareInternal(qr, keys.begin().second)
 
-    override suspend fun commit(qr: PairingQr) {
+    override suspend fun commit(qr: PairingQr, onAwaitingOperator: () -> Unit) {
         val (privateKey, publicKey) = keys.consume()
         commitInternal(
             http = http,
             qr = qr,
             phonePrivateKey = privateKey,
             phonePublicKey = publicKey,
+            onAwaitingOperator = onAwaitingOperator,
             onSetPairing = session::setPairing,
             onSetBaseUrl = { settings.setBaseUrl(slot, it) },
             onSetToken = { settings.setDeviceToken(slot, it) },
@@ -185,6 +226,16 @@ internal fun prepareInternal(qr: PairingQr, phonePublicKey: ByteArray): String {
     return pairingFingerprint(phonePublicKey, agentPublicKey)
 }
 
+/** What a completed redemption yields, held in memory until the operator
+ *  accepts it. Nothing here is persisted until then: the phone used to
+ *  declare the slot paired at redemption, which happens before anyone has
+ *  agreed to the pairing (cmux-app-gmo). */
+private class RedeemedPairing(
+    val token: String,
+    val agentPublicKey: ByteArray,
+    val sharedSecret: ByteArray,
+)
+
 /** Free function (not a CryptoSession/Settings method) so PairingClientTest can
  *  exercise the real handshake logic via plain callbacks -- see Task 11's
  *  Step 1 note on why CryptoSession/Settings can't be constructed in a
@@ -198,6 +249,9 @@ internal suspend fun commitInternal(
     onSetBaseUrl: (String) -> Unit,
     onSetToken: (String) -> Unit,
     onCredentialsReplaced: () -> Unit,
+    onAwaitingOperator: () -> Unit = {},
+    pollPeriodMillis: Long = PAIR_STATUS_POLL_MILLIS,
+    confirmTimeoutMillis: Long = PAIRING_CONFIRM_TTL_MILLIS,
 ): Unit = withContext(Dispatchers.IO) {
     // The manual-entry path (resolvePairingCode) builds its own PairingQr
     // from a locally-constructed URL and never goes through
@@ -214,25 +268,78 @@ internal suspend fun commitInternal(
         .post(BridgeJson.encodeToString(DevicePairRequest.serializer(), payload).toRequestBody(JSON_MEDIA))
         .build()
 
-    http.newCall(request).execute().use { response ->
+    val redeemed = http.newCall(request).execute().use { response ->
         if (response.code == 410) throw PairingCodeInvalidException()
         if (!response.isSuccessful) throw IOException("pairing failed: HTTP ${response.code}")
         val body = BridgeJson.decodeFromString(
             DevicePairResponse.serializer(),
             response.body?.string().orEmpty(),
         )
-
         val agentPublicKey = Base64.getDecoder().decode(qr.agentPubkey)
-        val sharedSecret = deriveSharedSecret(phonePrivateKey, agentPublicKey)
-
-        onSetPairing(agentPublicKey, sharedSecret)
-        onSetBaseUrl(baseUrlFromPairUrl(qr.pairUrl))
-        onSetToken(body.token)
-        // Last, and only on a pairing that got this far: sockets woken by
-        // this have to find the new credentials already stored, and a
-        // pairing that failed replaced nothing to wake them for.
-        onCredentialsReplaced()
+        RedeemedPairing(
+            token = body.token,
+            agentPublicKey = agentPublicKey,
+            sharedSecret = deriveSharedSecret(phonePrivateKey, agentPublicKey),
+        )
     }
+
+    val baseUrl = baseUrlFromPairUrl(qr.pairUrl)
+    onAwaitingOperator()
+    awaitOperatorConfirmation(http, baseUrl, qr.code, pollPeriodMillis, confirmTimeoutMillis)
+
+    onSetPairing(redeemed.agentPublicKey, redeemed.sharedSecret)
+    onSetBaseUrl(baseUrl)
+    onSetToken(redeemed.token)
+    // Last, and only on a pairing the operator accepted: sockets woken by
+    // this have to find the new credentials already stored, and it tears down
+    // a live connection on the slot -- which a refused pairing has no
+    // business doing.
+    onCredentialsReplaced()
+}
+
+/** Blocks until the agent's operator answers, mirroring the agent's own poll
+ *  loop on the other side of the same prompt. A transport error is retried
+ *  rather than read as a refusal -- so is a 404, which is what an old relay
+ *  without this route answers -- because only an explicit "refused" is an
+ *  answer. The deadline is what ends the wait either way. */
+private suspend fun awaitOperatorConfirmation(
+    http: OkHttpClient,
+    baseUrl: String,
+    code: String,
+    pollPeriodMillis: Long,
+    timeoutMillis: Long,
+) {
+    val deadline = System.nanoTime() + timeoutMillis * 1_000_000
+    while (true) {
+        when (fetchPairStatus(http, baseUrl, code)) {
+            PAIR_STATE_CONFIRMED -> return
+            PAIR_STATE_REFUSED -> throw PairingRefusedException()
+        }
+        if (System.nanoTime() >= deadline) throw PairingNotAnsweredException()
+        delay(pollPeriodMillis)
+    }
+}
+
+/** Returns null for anything that isn't a clean answer, which the caller
+ *  retries: this route carries no credential and no key material, so there is
+ *  nothing to distinguish among its failure modes -- only the explicit
+ *  states mean anything. */
+private fun fetchPairStatus(http: OkHttpClient, baseUrl: String, code: String): String? = try {
+    val request = Request.Builder().url("$baseUrl/devices/pair-status/$code").get().build()
+    http.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) {
+            null
+        } else {
+            BridgeJson.decodeFromString(
+                PairStatusResponse.serializer(),
+                response.body?.string().orEmpty(),
+            ).state
+        }
+    }
+} catch (e: IOException) {
+    null
+} catch (e: SerializationException) {
+    null
 }
 
 /** "https://host/devices/pair" -> "https://host" -- the same main vhost the

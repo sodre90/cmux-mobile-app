@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.PairingGateway
 import com.sodre90.cmuxremote.data.pairing.PairingCodeInvalidException
+import com.sodre90.cmuxremote.data.pairing.PairingNotAnsweredException
 import com.sodre90.cmuxremote.data.pairing.PairingQr
+import com.sodre90.cmuxremote.data.pairing.PairingRefusedException
 import com.sodre90.cmuxremote.data.pairing.isExpired
 import com.sodre90.cmuxremote.data.pairing.parsePairingQr
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,13 @@ sealed interface PairingUiState {
      *  commits. See docs/superpowers/specs/2026-07-10-pairing-mitm-fingerprint-design.md. */
     data class AwaitingConfirmation(val fingerprint: String) : PairingUiState
     data object Pairing : PairingUiState
+
+    /** The pairing code is redeemed and the phone is waiting for the agent's
+     *  operator to accept or refuse. It keeps the fingerprint on screen
+     *  because this is exactly the window in which that comparison is being
+     *  made at the Mac -- hiding it here would be actively unhelpful.
+     *  Nothing is persisted while in this state (cmux-app-gmo). */
+    data class AwaitingOperator(val fingerprint: String) : PairingUiState
 
     /** Carries the same fingerprint [AwaitingConfirmation] showed -- the CLI
      *  can't print its own fingerprint until it sees this device's POST
@@ -51,6 +60,8 @@ class PairingViewModel(
     private val codeInvalidScanAgainMessage: String,
     private val codeInvalidAskFreshMessage: String,
     private val pairingFailedMessage: String,
+    private val pairingRefusedMessage: String,
+    private val pairingNotAnsweredMessage: String,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<PairingUiState>(PairingUiState.Scanning)
@@ -107,18 +118,25 @@ class PairingViewModel(
         _state.value = PairingUiState.AwaitingConfirmation(fingerprint)
     }
 
-    /** The human confirmed the fingerprint matches the CLI's: complete the
-     *  pairing (POST /devices/pair, derive the shared secret, persist). */
+    /** The human confirmed the fingerprint matches the CLI's: redeem the
+     *  code, then wait for the operator at the Mac to answer the same
+     *  comparison before anything is persisted. */
     fun onConfirmed() {
         val awaiting = _state.value as? PairingUiState.AwaitingConfirmation ?: return
         val qr = pendingQr ?: return
         _state.value = PairingUiState.Pairing
         viewModelScope.launch {
             try {
-                pairing.pairingClient(slot).commit(qr)
+                pairing.pairingClient(slot).commit(qr) {
+                    _state.value = PairingUiState.AwaitingOperator(awaiting.fingerprint)
+                }
                 _state.value = PairingUiState.Success(awaiting.fingerprint)
             } catch (e: PairingCodeInvalidException) {
                 _state.value = PairingUiState.Error(pendingInvalidCodeMessage)
+            } catch (e: PairingRefusedException) {
+                _state.value = PairingUiState.Error(pairingRefusedMessage)
+            } catch (e: PairingNotAnsweredException) {
+                _state.value = PairingUiState.Error(pairingNotAnsweredMessage)
             } catch (e: Exception) {
                 _state.value = PairingUiState.Error(e.message ?: pairingFailedMessage)
             } finally {

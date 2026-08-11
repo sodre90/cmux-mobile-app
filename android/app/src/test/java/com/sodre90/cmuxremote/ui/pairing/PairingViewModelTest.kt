@@ -3,8 +3,11 @@ package com.sodre90.cmuxremote.ui.pairing
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.PairingGateway
 import com.sodre90.cmuxremote.data.pairing.PairingCodeInvalidException
+import com.sodre90.cmuxremote.data.pairing.PairingNotAnsweredException
 import com.sodre90.cmuxremote.data.pairing.PairingQr
+import com.sodre90.cmuxremote.data.pairing.PairingRefusedException
 import com.sodre90.cmuxremote.data.pairing.PairingSession
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -35,8 +38,9 @@ private class FakePairingSession(
         return onPrepare(qr)
     }
 
-    override suspend fun commit(qr: PairingQr) {
+    override suspend fun commit(qr: PairingQr, onAwaitingOperator: () -> Unit) {
         commitCallCount++
+        onAwaitingOperator()
         onCommit(qr)
     }
 
@@ -82,6 +86,8 @@ class PairingViewModelTest {
         codeInvalidScanAgainMessage = "invalid-scan-again",
         codeInvalidAskFreshMessage = "invalid-ask-fresh",
         pairingFailedMessage = "pairing-failed",
+        pairingRefusedMessage = "pairing-refused",
+        pairingNotAnsweredMessage = "pairing-not-answered",
     )
 
     @Test
@@ -226,5 +232,43 @@ class PairingViewModelTest {
         // the visible state.
         vm.onConfirmed()
         assertEquals(0, session.commitCallCount)
+    }
+
+    /** cmux-app-gmo. The fingerprint has to survive into the wait: that is
+     *  precisely the window in which the operator is doing the comparison. */
+    @Test
+    fun confirmingWaitsOnTheOperatorBeforeReportingSuccess() {
+        val releaseCommit = CompletableDeferred<Unit>()
+        val session = FakePairingSession(
+            onPrepare = { "ABCD-1234-EF56" },
+            onCommit = { releaseCommit.await() },
+        )
+        val vm = testViewModel(session)
+        vm.onQrScanned(validQrJson())
+        vm.onConfirmed()
+
+        waitUntil { vm.state.value is PairingUiState.AwaitingOperator }
+        assertEquals(PairingUiState.AwaitingOperator("ABCD-1234-EF56"), vm.state.value)
+        releaseCommit.complete(Unit)
+        waitUntil { vm.state.value is PairingUiState.Success }
+        assertEquals(PairingUiState.Success("ABCD-1234-EF56"), vm.state.value)
+    }
+
+    /** A refusal is an answer and a timeout is the absence of one, and the
+     *  user's next move differs, so neither may fall through to the generic
+     *  failure message. */
+    @Test
+    fun aRefusalAndATimeoutCarryTheirOwnMessages() {
+        val refused = testViewModel(FakePairingSession(onCommit = { throw PairingRefusedException() }))
+        refused.onQrScanned(validQrJson())
+        refused.onConfirmed()
+        waitUntil { refused.state.value is PairingUiState.Error }
+        assertEquals(PairingUiState.Error("pairing-refused"), refused.state.value)
+
+        val unanswered = testViewModel(FakePairingSession(onCommit = { throw PairingNotAnsweredException() }))
+        unanswered.onQrScanned(validQrJson())
+        unanswered.onConfirmed()
+        waitUntil { unanswered.state.value is PairingUiState.Error }
+        assertEquals(PairingUiState.Error("pairing-not-answered"), unanswered.state.value)
     }
 }

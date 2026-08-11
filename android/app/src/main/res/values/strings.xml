@@ -166,4 +166,8 @@
     <string name="error_pairing_code_invalid_scan_again">This code has expired or was already used -- scan a fresh one.</string>
     <string name="error_pairing_code_invalid_ask_fresh">This code has expired or was already used -- ask for a fresh one.</string>
     <string name="error_pairing_failed">Pairing failed</string>
+    <string name="pairing_awaiting_operator_title">Waiting for the Mac to confirm</string>
+    <string name="pairing_awaiting_operator_body">Check that this code matches the one on the Mac, then answer y there. Nothing is saved until you do.</string>
+    <string name="error_pairing_refused">The Mac declined this pairing -- start again if the codes really did match.</string>
+    <string name="error_pairing_not_answered">Nobody answered on the Mac -- check that cmux-bridge pair-device is still running.</string>
 </resources>

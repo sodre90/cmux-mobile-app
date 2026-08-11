@@ -201,6 +201,8 @@ fun CmuxNavHost(
             val codeInvalidScanAgain = stringResource(R.string.error_pairing_code_invalid_scan_again)
             val codeInvalidAskFresh = stringResource(R.string.error_pairing_code_invalid_ask_fresh)
             val pairingFailed = stringResource(R.string.error_pairing_failed)
+            val pairingRefused = stringResource(R.string.error_pairing_refused)
+            val pairingNotAnswered = stringResource(R.string.error_pairing_not_answered)
             val vm: PairingViewModel = viewModel(
                 factory = viewModelFactory {
                     initializer {
@@ -211,6 +213,8 @@ fun CmuxNavHost(
                             codeInvalidScanAgain,
                             codeInvalidAskFresh,
                             pairingFailed,
+                            pairingRefused,
+                            pairingNotAnswered,
                         )
                     }
                 },

@@ -136,6 +136,8 @@ class ViewModelConstructionTest {
             codeInvalidScanAgainMessage = "unused",
             codeInvalidAskFreshMessage = "unused",
             pairingFailedMessage = "unused",
+            pairingRefusedMessage = "unused",
+            pairingNotAnsweredMessage = "unused",
         )
     }
 }

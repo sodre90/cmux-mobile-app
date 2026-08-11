@@ -121,6 +121,14 @@ fun PairingScreen(vm: PairingViewModel, title: String, onPaired: () -> Unit) {
                 }
                 is PairingUiState.Pairing ->
                     Text(stringResource(R.string.pairing_in_progress), modifier = Modifier.padding(16.dp))
+                is PairingUiState.AwaitingOperator -> Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(stringResource(R.string.pairing_awaiting_operator_title))
+                    Text(s.fingerprint, style = MaterialTheme.typography.headlineSmall)
+                    Text(stringResource(R.string.pairing_awaiting_operator_body))
+                }
                 is PairingUiState.Error -> Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

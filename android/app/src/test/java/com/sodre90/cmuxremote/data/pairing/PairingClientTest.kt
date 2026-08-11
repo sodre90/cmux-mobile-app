@@ -6,8 +6,10 @@ import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
 import com.sodre90.cmuxremote.data.e2e.pairingFingerprint
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
@@ -60,6 +62,7 @@ class PairingClientTest {
         val (phonePriv, phonePub) = generateX25519KeyPair()
 
         server.enqueue(MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}"""))
+        server.enqueue(confirmed())
 
         val recordedBaseUrl = arrayOfNulls<String>(1)
         val recordedToken = arrayOfNulls<String>(1)
@@ -95,6 +98,10 @@ class PairingClientTest {
         assertEquals("POST", recorded.method)
         assertEquals("/devices/pair", recorded.path)
         assertTrue(recorded.body.readUtf8().contains("\"code\":\"CODE1\""))
+
+        val polled = server.takeRequest()
+        assertEquals("GET", polled.method)
+        assertEquals("/devices/pair-status/CODE1", polled.path)
     }
 
     /**
@@ -111,6 +118,7 @@ class PairingClientTest {
         val (_, agentPub) = generateX25519KeyPair()
         val (phonePriv, phonePub) = generateX25519KeyPair()
         server.enqueue(MockResponse().setBody("""{"token":"tok-new","tenant_id":"t1"}"""))
+        server.enqueue(confirmed())
 
         var tokenWhenSignalled: String? = null
         var storedToken: String? = null
@@ -273,6 +281,7 @@ class PairingClientTest {
         val (agentPriv, agentPub) = generateX25519KeyPair()
         val (phonePriv, phonePub) = generateX25519KeyPair()
         server.enqueue(MockResponse().setBody("""{"token":"tok-direct","tenant_id":"t1"}"""))
+        server.enqueue(confirmed())
 
         var recordedBaseUrlSlot: ConnectionSlot? = null
         var recordedTokenSlot: ConnectionSlot? = null
@@ -317,6 +326,156 @@ class PairingClientTest {
 
         assertEquals(server.url("/").toString().trimEnd('/') + "/devices/pair", qr.pairUrl)
     }
+
+    private fun confirmed() = MockResponse().setBody("""{"state":"confirmed"}""")
+
+    private fun pending() = MockResponse().setBody("""{"state":"pending"}""")
+
+    /**
+     * cmux-app-gmo. The phone used to declare the slot paired the moment
+     * redemption returned, which is before anyone at the Mac has agreed to
+     * the pairing. Observing the store from inside each poll is what makes
+     * this a claim about the whole wait rather than about one callback.
+     */
+    @Test
+    fun nothingIsPersistedWhileTheOperatorHasNotAnswered() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        val persisted = mutableListOf<String>()
+        val persistedDuringEachPoll = mutableListOf<List<String>>()
+
+        var polls = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path?.startsWith("/devices/pair-status/") != true) {
+                    return MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}""")
+                }
+                persistedDuringEachPoll += persisted.toList()
+                polls++
+                return if (polls < 3) pending() else confirmed()
+            }
+        }
+
+        var stateAtAwaitingOperator: List<String> = listOf("never fired")
+        val client = testClient(phonePriv, phonePub, persisted)
+
+        runBlocking {
+            client.commit(qrFor(agentPub, code = "CODE1")) {
+                stateAtAwaitingOperator = persisted.toList()
+            }
+        }
+
+        assertEquals(emptyList<String>(), stateAtAwaitingOperator)
+        assertEquals(3, persistedDuringEachPoll.size)
+        assertEquals(listOf(emptyList<String>(), emptyList(), emptyList()), persistedDuringEachPoll)
+        assertEquals(listOf("pairing", "baseUrl", "token", "credentialsReplaced"), persisted)
+    }
+
+    @Test
+    fun aRefusedPairingPersistsNothingAndSaysItWasRefused() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}"""))
+        server.enqueue(MockResponse().setBody("""{"state":"refused"}"""))
+
+        val persisted = mutableListOf<String>()
+        val client = testClient(phonePriv, phonePub, persisted)
+
+        try {
+            runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
+            fail("expected PairingRefusedException")
+        } catch (e: PairingRefusedException) {
+            // expected
+        }
+        assertEquals(emptyList<String>(), persisted)
+    }
+
+    /** An operator who never answers is not the same as one who said no: the
+     *  user's next move differs, so the two must not collapse. */
+    @Test
+    fun anUnansweredPairingPersistsNothingAndIsDistinctFromARefusal() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}"""))
+        repeat(20) { server.enqueue(pending()) }
+
+        val persisted = mutableListOf<String>()
+        val client = testClient(phonePriv, phonePub, persisted, confirmTimeoutMillis = 60)
+
+        try {
+            runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
+            fail("expected PairingNotAnsweredException")
+        } catch (e: PairingNotAnsweredException) {
+            // expected
+        }
+        assertEquals(emptyList<String>(), persisted)
+    }
+
+    /** A relay hiccup mid-wait is not an answer. Treating it as one would
+     *  fail a pairing the operator is in the middle of accepting -- and a
+     *  404 is exactly what a relay too old to serve this route replies. */
+    @Test
+    fun aTransientPollFailureIsRetriedRatherThanReadAsARefusal() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}"""))
+        server.enqueue(MockResponse().setResponseCode(503))
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(confirmed())
+
+        val persisted = mutableListOf<String>()
+        val client = testClient(phonePriv, phonePub, persisted)
+
+        runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
+
+        assertEquals(listOf("pairing", "baseUrl", "token", "credentialsReplaced"), persisted)
+    }
+
+    /** cmux-app-smu: onCredentialsReplaced tears down live sockets on the
+     *  slot, so it must stay last -- and now, must not fire at all for a
+     *  pairing the operator went on to refuse. */
+    @Test
+    fun aRefusedPairingDoesNotTearDownTheSlotsLiveSockets() {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+        server.enqueue(MockResponse().setBody("""{"token":"tok-abc","tenant_id":"t1"}"""))
+        server.enqueue(MockResponse().setBody("""{"state":"refused"}"""))
+
+        var signalled = false
+        val client = TestablePairingClient(
+            http = http,
+            phonePrivateKey = phonePriv,
+            phonePublicKey = phonePub,
+            onSetPairing = { _, _ -> },
+            onSetBaseUrl = {},
+            onSetToken = {},
+            onCredentialsReplaced = { signalled = true },
+        )
+
+        try {
+            runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
+            fail("expected PairingRefusedException")
+        } catch (e: PairingRefusedException) {
+            // expected
+        }
+        assertFalse("a refused pairing killed a working connection", signalled)
+    }
+
+    private fun testClient(
+        phonePriv: ByteArray,
+        phonePub: ByteArray,
+        persisted: MutableList<String>,
+        confirmTimeoutMillis: Long = 2000,
+    ) = TestablePairingClient(
+        http = http,
+        phonePrivateKey = phonePriv,
+        phonePublicKey = phonePub,
+        onSetPairing = { _, _ -> persisted += "pairing" },
+        onSetBaseUrl = { persisted += "baseUrl" },
+        onSetToken = { persisted += "token" },
+        onCredentialsReplaced = { persisted += "credentialsReplaced" },
+        confirmTimeoutMillis = confirmTimeoutMillis,
+    )
 }
 
 /** Test seam: same logic as PairingClient.prepare/commit, but with
@@ -330,17 +489,21 @@ private class TestablePairingClient(
     private val onSetBaseUrl: (String) -> Unit,
     private val onSetToken: (String) -> Unit,
     private val onCredentialsReplaced: () -> Unit = {},
+    private val confirmTimeoutMillis: Long = 2000,
 ) {
     fun prepare(qr: PairingQr): String = prepareInternal(qr, phonePublicKey)
 
-    suspend fun commit(qr: PairingQr) = commitInternal(
-        http,
-        qr,
-        phonePrivateKey,
-        phonePublicKey,
-        onSetPairing,
-        onSetBaseUrl,
-        onSetToken,
-        onCredentialsReplaced,
+    suspend fun commit(qr: PairingQr, onAwaitingOperator: () -> Unit = {}) = commitInternal(
+        http = http,
+        qr = qr,
+        phonePrivateKey = phonePrivateKey,
+        phonePublicKey = phonePublicKey,
+        onSetPairing = onSetPairing,
+        onSetBaseUrl = onSetBaseUrl,
+        onSetToken = onSetToken,
+        onCredentialsReplaced = onCredentialsReplaced,
+        onAwaitingOperator = onAwaitingOperator,
+        pollPeriodMillis = 10,
+        confirmTimeoutMillis = confirmTimeoutMillis,
     )
 }
