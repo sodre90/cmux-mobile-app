@@ -10,7 +10,15 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/cli"
+	"github.com/sodre90/cmux-bridge/internal/config"
 )
+
+// announceStore names the database every admin answer below came from, on
+// stderr so stdout stays parseable. "no paired devices" and "no paired
+// devices in the store you meant" look identical otherwise (cmux-app-xdc).
+func announceStore(cfg config.Config) {
+	fmt.Fprintln(os.Stderr, "store:", cfg.TokenStore)
+}
 
 func runDevices(args []string) int {
 	fs := flag.NewFlagSet("devices", flag.ContinueOnError)
@@ -18,11 +26,12 @@ func runDevices(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_, store, err := cli.LoadStore(*cfgPath)
+	cfg, store, err := cli.OpenExistingStore(*cfgPath)
 	if err != nil {
 		slog.Error("devices: load store", "err", err)
 		return 1
 	}
+	announceStore(cfg)
 	rest := fs.Args()
 	switch {
 	case len(rest) == 0 || rest[0] == "list":
@@ -63,11 +72,12 @@ func runTenants(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	_, store, err := cli.LoadStore(*cfgPath)
+	cfg, store, err := cli.OpenExistingStore(*cfgPath)
 	if err != nil {
 		slog.Error("tenants: load store", "err", err)
 		return 1
 	}
+	announceStore(cfg)
 	rest := fs.Args()
 	switch {
 	case len(rest) == 0 || rest[0] == "list":
