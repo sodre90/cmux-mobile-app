@@ -19,6 +19,8 @@ func main() {
 		os.Exit(runAgent(os.Args[2:]))
 	case "pair-device":
 		os.Exit(runPairDevice(os.Args[2:]))
+	case "devices":
+		os.Exit(runDevices(os.Args[2:]))
 	case "status":
 		os.Exit(runStatus(os.Args[2:]))
 	case "version", "--version", "-v":
@@ -30,5 +32,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <agent|pair-device|status|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cmux-bridge <agent|pair-device|devices|status|version> [flags]")
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
@@ -291,45 +290,17 @@ func runPairDevice(args []string) int {
 		return 1
 	}
 
-	var agentBase string
-	var client *http.Client
+	var srv agentServer
 	if *direct {
-		if cfg.DirectListen == "" {
-			slog.Error("pair-device: --direct requires direct_listen to be set", "config", *cfgPath)
-			return 1
-		}
-		st, err := tailscaleSelfStatus(context.Background())
-		if err != nil {
-			slog.Error("pair-device: tailscale status", "err", err)
-			return 1
-		}
-		if st.DNSName == "" {
-			slog.Error("pair-device: this Mac has no Tailscale DNS name yet -- is Tailscale up?")
-			return 1
-		}
-		host := strings.TrimSuffix(st.DNSName, ".")
-		agentBase = "https://" + host + cfg.DirectListen
-		// The direct listener's cert is a real, publicly-trusted Let's
-		// Encrypt cert (tailscale cert) -- the default transport's system
-		// root CAs already validate it, no client cert needed at all.
-		client = &http.Client{Timeout: pairingRequestTimeout}
+		srv, err = directServer(cfg, pairingRequestTimeout)
 	} else {
-		if cfg.RelayURL == "" {
-			slog.Error("pair-device: relay_url is required (or pass --direct)")
-			return 1
-		}
-		agentBase, err = httpsBaseFromRelayURL(cfg.RelayURL)
-		if err != nil {
-			slog.Error("pair-device: relay url", "err", err)
-			return 1
-		}
-		tlsCfg, err := loadTLS(cfg.ClientCert, cfg.ClientKey, cfg.CACert)
-		if err != nil {
-			slog.Error("pair-device: tls", "err", err)
-			return 1
-		}
-		client = &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: pairingRequestTimeout}
+		srv, err = relayServer(cfg, pairingRequestTimeout)
 	}
+	if err != nil {
+		slog.Error("pair-device: server", "direct", *direct, "err", err)
+		return 1
+	}
+	agentBase, client := srv.baseURL, srv.client
 	// /devices/pair is public on the same vhost as the agent-facing
 	// pairing-code endpoints in both modes.
 	devicePairURL := agentBase + "/devices/pair"
