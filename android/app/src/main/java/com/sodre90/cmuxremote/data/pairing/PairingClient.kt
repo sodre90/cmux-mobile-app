@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.data.pairing
 
+import com.sodre90.cmuxremote.data.BridgeConfig
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.SlotCredentials
@@ -153,6 +154,11 @@ internal class PairingKeys(
  * so re-running it after the user backs out replaces the pending key and the
  * fingerprint on screen always describes the key [commit] will submit. One
  * instance per [slot], so relay and direct never share pending state.
+ *
+ * [retirePreviousCredential] is handed whatever credential this pairing
+ * replaced, once the new one is stored and only for a pairing the operator
+ * accepted -- so a re-pair leaves no live token behind, and a refused one
+ * costs the working connection nothing.
  */
 class PairingClient(
     private val http: OkHttpClient,
@@ -160,6 +166,7 @@ class PairingClient(
     private val settings: Settings,
     private val slot: ConnectionSlot,
     private val slotCredentials: SlotCredentials,
+    private val retirePreviousCredential: (BridgeConfig) -> Unit = {},
 ) : PairingSession {
     private val keys = PairingKeys()
 
@@ -167,6 +174,11 @@ class PairingClient(
 
     override suspend fun commit(qr: PairingQr, onAwaitingOperator: () -> Unit) {
         val (privateKey, publicKey) = keys.consume()
+        // Read before commitInternal writes over it. Every pairing mints a
+        // fresh key and a fresh device row (cmux-app-1fx), so without this
+        // the row this one replaces would stay authenticating forever
+        // against a secret the agent has already dropped (cmux-app-bys).
+        val superseded = settings.bridgeConfig(slot)
         commitInternal(
             http = http,
             qr = qr,
@@ -179,7 +191,10 @@ class PairingClient(
             // Sockets still running on the old token map to the agent's
             // previous device row, whose key no longer matches this
             // session, so every frame they carry is dropped (cmux-app-smu).
-            onCredentialsReplaced = { slotCredentials.invalidate(slot) },
+            onCredentialsReplaced = {
+                slotCredentials.invalidate(slot)
+                superseded?.let(retirePreviousCredential)
+            },
         )
     }
 

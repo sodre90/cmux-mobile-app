@@ -109,7 +109,15 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     // client is captured before settings.clearSlot because it holds this
     // slot's bearer token by value (see Mtls.BearerInterceptor).
     private fun releaseCredentialOnServer(slot: ConnectionSlot) {
-        val client = bridgeClient(slot) ?: return
+        settings.bridgeConfig(slot)?.let { retireCredential(slot, it) }
+    }
+
+    // Takes the config rather than reading it, because the re-pair path calls
+    // this once the NEW credentials are already stored -- it has to name the
+    // ones being replaced. The client is built here, not inside the
+    // coroutine, for the same reason.
+    private fun retireCredential(slot: ConnectionSlot, cfg: BridgeConfig) {
+        val client = BridgeClient(httpClient(slot, cfg), cfg.baseUrl)
         selfRevokeScope.launch { runCatching { client.selfRevoke() } }
     }
 
@@ -133,7 +141,14 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
     @Synchronized
     override fun pairingClient(slot: ConnectionSlot): PairingClient =
         pairingClients.getOrPut(slot) {
-            PairingClient(OkHttpClient(), sessions.getValue(slot), settings, slot, sharedSlotCredentials)
+            PairingClient(
+                OkHttpClient(),
+                sessions.getValue(slot),
+                settings,
+                slot,
+                sharedSlotCredentials,
+                retirePreviousCredential = { cfg -> retireCredential(slot, cfg) },
+            )
         }
 
     override fun loadOrder(): List<String> = workspaceOrderStore.load()
