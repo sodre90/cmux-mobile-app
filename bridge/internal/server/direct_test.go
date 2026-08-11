@@ -156,3 +156,41 @@ func TestDirectHandlerRejectsUnpairedDevice(t *testing.T) {
 		t.Fatalf("want 409 not_paired, got %d", resp.StatusCode)
 	}
 }
+
+// Self-revoke is mounted outside encryptionMiddleware on purpose, so a plain
+// request with no e2e envelope must reach it and work. If somebody "fixes"
+// the mount to use DirectHandler's wrap, this fails -- which is the point.
+func TestDirectHandlerSelfRevokeNeedsNoEncryptedEnvelope(t *testing.T) {
+	bin := testutil.WriteFakeCmux(t, "#!/bin/sh\necho '{}'\n")
+	authStore, err := auth.Open(filepath.Join(t.TempDir(), "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := e2e.OpenStore(filepath.Join(t.TempDir(), "sessions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(&cmux.Client{Bin: bin}, authStore)
+	s.SetSessions(sessions)
+	tok, _ := directPairedDevice(t, authStore, sessions)
+
+	srv := httptest.NewServer(s.DirectHandler())
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/devices/self-revoke", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if resp.Header.Get("X-Cmux-Encrypted") != "" {
+		t.Fatal("this route is outside the e2e layer, so the response must not be marked encrypted")
+	}
+	if _, err := authStore.Verify(tok); err == nil {
+		t.Fatal("the caller's token should be gone")
+	}
+}

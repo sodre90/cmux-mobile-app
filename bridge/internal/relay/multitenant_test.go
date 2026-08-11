@@ -183,3 +183,58 @@ func TestRelayAgentCannotRevokeAnotherTenantsDevice(t *testing.T) {
 		t.Fatal("tenant A revoking its own device should have removed it")
 	}
 }
+
+// Self-revocation takes no identifier, so a device cannot aim it across the
+// tenant boundary -- but it is a device-authenticated route on the relay's
+// public surface, so prove that directly rather than by inspection.
+func TestRelayDeviceSelfRevokeCannotReachAnotherTenant(t *testing.T) {
+	store, err := auth.Open(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantA, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantB, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenA, err := store.Issue(tenantA, "phone-a", "test-device-pubkey-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenB, err := store.Issue(tenantB, "phone-b", "test-device-pubkey-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceA, err := store.Verify(tokenA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relayHTTP := httptest.NewServer(New(store, nil, "relay-secret").Handler())
+	defer relayHTTP.Close()
+
+	// Tenant B's device names tenant A's device every way the route could
+	// possibly read one.
+	body := `{"token_hash":"` + deviceA.TokenHash + `"}`
+	req, _ := http.NewRequest("POST", relayHTTP.URL+"/devices/self-revoke", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tokenB)
+	req.Header.Set("X-Device-ID", deviceA.TokenHash)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("self-revoke status = %d, want 200", resp.StatusCode)
+	}
+
+	if _, err := store.Verify(tokenA); err != nil {
+		t.Fatalf("tenant A's device must survive tenant B's self-revoke: %v", err)
+	}
+	if _, err := store.Verify(tokenB); err == nil {
+		t.Fatal("the caller's own token should be gone")
+	}
+}

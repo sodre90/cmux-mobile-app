@@ -257,6 +257,12 @@ func (r *Relay) Handler() http.Handler {
 	mux.Handle("POST /tenants/register", http.HandlerFunc(r.handleRegisterTenant))
 	mux.Handle("POST /devices/register", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleRegister))))
 	mux.Handle("POST /devices/test-push", r.notAgent(auth.Require(r.store, http.HandlerFunc(r.handleTestPush))))
+	// Device-facing, not agent-facing: the phone retiring its own credential
+	// on Forget. Terminated here rather than proxied -- the relay owns the
+	// token, and the request carries no cmux content for the agent to see.
+	devices.MountSelfRevoke(mux, r.store, func(h http.Handler) http.Handler {
+		return r.notAgent(auth.Require(r.store, h))
+	})
 	mux.Handle("/", r.notAgent(auth.Require(r.store, r.logProxy(r.proxy))))
 	if r.edgeToken == "" {
 		return mux

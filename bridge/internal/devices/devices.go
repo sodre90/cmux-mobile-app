@@ -45,6 +45,47 @@ func Mount(mux *http.ServeMux, store *auth.Store, tenant pairing.TenantResolver)
 	mux.Handle("POST /agent/devices/{tokenHash}/revoke", http.HandlerFunc(h.revokeDevice))
 }
 
+// MountSelfRevoke registers the one device-facing route here: a device
+// retiring its own credential, which is what the phone's Forget calls
+// (cmux-app-f5y).
+//
+// wrap, rather than Mount's TenantResolver, because the two servers
+// authenticate a device differently -- the relay adds its notAgent guard
+// around auth.Require, direct mode uses auth.Require alone -- while both
+// leave the verified device in the request context, which is all the handler
+// reads.
+//
+// Direct mode must pass a wrap WITHOUT encryptionMiddleware, unlike its
+// other device routes. This request carries no cmux content, and a handler
+// behind that middleware cannot delete anything the response is encrypted
+// with; see the design doc's "the obvious design is wrong".
+func MountSelfRevoke(mux *http.ServeMux, store *auth.Store, wrap func(http.Handler) http.Handler) {
+	h := &handlers{store: store}
+	mux.Handle("POST /devices/self-revoke", wrap(http.HandlerFunc(h.selfRevoke)))
+}
+
+// selfRevoke deletes the calling device's own token and nothing else. The
+// device comes from the bearer token auth.Require already verified, never
+// from the request, so there is no identifier here for a caller to point at
+// somebody else's credential.
+//
+// A token that is already gone is a success: the caller's goal is that the
+// credential stops working, and Forget must survive being retried.
+func (h *handlers) selfRevoke(w http.ResponseWriter, req *http.Request) {
+	dev, ok := auth.DeviceFromContext(req.Context())
+	if !ok {
+		httpjson.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	err := h.store.RevokeByHash(dev.TenantID, dev.TokenHash)
+	if err != nil && !errors.Is(err, auth.ErrNotFound) {
+		slog.Error("devices: self-revoke", "tenant_id", dev.TenantID, "err", err)
+		httpjson.Error(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	httpjson.Write(w, http.StatusOK, struct{}{})
+}
+
 func (h *handlers) listDevices(w http.ResponseWriter, req *http.Request) {
 	tenantID, ok := h.tenant(req)
 	if !ok {

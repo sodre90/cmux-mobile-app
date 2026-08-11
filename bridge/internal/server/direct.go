@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	"github.com/sodre90/cmux-bridge/internal/devices"
 )
 
 // injectDeviceID copies the bearer-token-verified Device's TokenHash (set by
@@ -37,5 +38,13 @@ func (s *Server) DirectHandler() http.Handler {
 	mux := s.routes(wrap).(*http.ServeMux)
 	mux.Handle("POST /devices/register", wrap(http.HandlerFunc(s.handleRegisterDevice)))
 	mux.Handle("POST /devices/test-push", wrap(http.HandlerFunc(s.handleTestPushDevice)))
+	// Bearer auth only, deliberately skipping wrap's encryptionMiddleware:
+	// this route carries no cmux content, and it is terminated identically in
+	// relay mode, where no e2e layer exists to be behind. Do not "fix" it to
+	// use wrap -- a handler behind that middleware cannot delete a device the
+	// response is about to be encrypted for (cmux-app-f5y).
+	devices.MountSelfRevoke(mux, s.store, func(h http.Handler) http.Handler {
+		return auth.Require(s.store, h)
+	})
 	return mux
 }

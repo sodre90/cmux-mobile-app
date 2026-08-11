@@ -206,3 +206,99 @@ func TestBothRoutesRefuseAnUnresolvedTenant(t *testing.T) {
 		t.Fatalf("a refused revoke must leave the device intact: %v", err)
 	}
 }
+
+// mountSelfRevoke builds a server with real device-bearer auth in front, the
+// way both production callers do -- the handler's whole safety property is
+// that the device comes from auth.Require, not from the request.
+func mountSelfRevoke(t *testing.T, s *auth.Store) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	devices.MountSelfRevoke(mux, s, func(h http.Handler) http.Handler { return auth.Require(s, h) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func selfRevoke(t *testing.T, srv *httptest.Server, token, body string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/devices/self-revoke", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+func TestSelfRevokeRetiresTheCallersOwnToken(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, err := s.Issue(tenant, "phone", testPubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code := selfRevoke(t, mountSelfRevoke(t, s), tok, ""); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if _, err := s.Verify(tok); err == nil {
+		t.Fatal("a self-revoked token must stop verifying")
+	}
+}
+
+// Forget has to survive being retried, so a token the store no longer has is
+// a success, not a 404. The auth store here is a second one that still holds
+// the device, which is how the handler sees a valid caller whose row is gone.
+func TestSelfRevokeOfAnAlreadyGoneTokenIsNotAnError(t *testing.T) {
+	authStore, revokeStore := newStore(t), newStore(t)
+	tenant := newTenant(t, authStore)
+	tok, err := authStore.Issue(tenant, "phone", testPubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	devices.MountSelfRevoke(mux, revokeStore, func(h http.Handler) http.Handler {
+		return auth.Require(authStore, h)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	if code := selfRevoke(t, srv, tok, ""); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- a retried Forget must not fail", code)
+	}
+}
+
+// The route takes no identifier at all, so a caller cannot aim it at anybody
+// else no matter what it sends.
+func TestSelfRevokeIgnoresADeviceNamedInTheRequest(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	callerToken, err := s.Issue(tenant, "caller", testPubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victimToken, err := s.Issue(tenant, "victim", testPubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim, err := s.Verify(victimToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := `{"token_hash":"` + victim.TokenHash + `","device_id":"` + victim.TokenHash + `"}`
+	if code := selfRevoke(t, mountSelfRevoke(t, s), callerToken, body); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if _, err := s.Verify(victimToken); err != nil {
+		t.Fatalf("naming another device must not revoke it: %v", err)
+	}
+	if _, err := s.Verify(callerToken); err == nil {
+		t.Fatal("the caller's own token should be gone")
+	}
+}
