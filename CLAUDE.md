@@ -8,11 +8,15 @@ daemon, `cmux-bridge agent` on the Mac). Full context: `docs/improvement-guide.m
 
 ```bash
 cd bridge && go build ./... && go vet ./... && go test ./...
-cd android && ./gradlew :app:assembleDebug :app:testDebugUnitTest
+cd android && ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:detekt
 ```
 
 Note: `testDebugUnitTest` needs a JDK 21+ runtime (a test-only dependency,
 `lazysodium-java`, ships Java 21 class files) even though app code targets JVM 17.
+
+`:app:detekt` is part of the gate, not an optional extra — it enforces import
+ordering and declaration spacing that nothing else catches, and three commits
+landed broken while it was missing from this list.
 
 ## Non-negotiable invariants
 
