@@ -133,6 +133,26 @@ func abortPairing(client *http.Client, agentBase, code string) (revoked bool, er
 	return body.Revoked, nil
 }
 
+// confirmPairing records the operator's yes, which is what releases the
+// phone: until this lands the phone holds the whole pairing in memory and
+// persists nothing (cmux-app-gmo). It is the last step of pairDevice and the
+// single commit point of the flow.
+func confirmPairing(client *http.Client, agentBase, code string) error {
+	req, err := http.NewRequest(http.MethodPost, agentBase+"/agent/pairing-code/"+code+"/confirm", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // abandonPairing rolls back a pairing that got as far as redemption but must
 // not stand, and reports what the operator now needs to know. Redemption
 // hands the phone a working bearer token before anyone has confirmed
@@ -230,6 +250,13 @@ func pairDevice(client *http.Client, agentBase, devicePairURL string, identity *
 			// that authenticates but decrypts nothing.
 			return abandonPairing(client, agentBase, code,
 				fmt.Sprintf("persist paired device: %v", err), out)
+		}
+		// Last, because it is what the phone is waiting on: anything that
+		// fails before here has to reach the phone as a refusal rather than
+		// leave it waiting out its own timeout.
+		if err := confirmPairing(client, agentBase, code); err != nil {
+			return abandonPairing(client, agentBase, code,
+				fmt.Sprintf("confirm pairing (the phone will report it as refused): %v", err), out)
 		}
 		_, _ = fmt.Fprintf(out, "Device paired successfully.\n")
 		return nil
