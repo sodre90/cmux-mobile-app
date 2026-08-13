@@ -44,7 +44,7 @@ func TestReconnectSwapsRegistryWhileRequestInFlight(t *testing.T) {
 	}
 
 	reg := NewRegistry()
-	p := newProxy(reg, "relay-secret")
+	p := newProxy(reg, "relay-secret", NewConnTracker())
 	handler := auth.Require(store, p)
 
 	authedRequest := func() *http.Request {

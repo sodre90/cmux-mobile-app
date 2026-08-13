@@ -13,7 +13,7 @@ import (
 )
 
 func TestProxyOfflineReturns503(t *testing.T) {
-	p := newProxy(NewRegistry(), "tok")
+	p := newProxy(NewRegistry(), "tok", NewConnTracker())
 	rr := httptest.NewRecorder()
 	p.ServeHTTP(rr, httptest.NewRequest("GET", "http://relay/sessions", nil))
 	if rr.Code != http.StatusServiceUnavailable {
@@ -64,7 +64,7 @@ func TestProxyForwardsAndInjectsRelayToken(t *testing.T) {
 
 	reg := NewRegistry()
 	reg.Set(tenantID, relaySess, nil)
-	p := newProxy(reg, "relay-secret")
+	p := newProxy(reg, "relay-secret", NewConnTracker())
 	handler := auth.Require(store, p)
 
 	req := httptest.NewRequest("GET", "http://relay/sessions", nil)

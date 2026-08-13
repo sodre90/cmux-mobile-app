@@ -128,7 +128,7 @@ func TestMetricsProxyAgentOfflineMoves(t *testing.T) {
 	}
 	before := expvarIntValue(t, metrics.ProxyAgentOfflineTotal, tenantID)
 
-	p := newProxy(NewRegistry(), "tok") // no session registered for tenantID
+	p := newProxy(NewRegistry(), "tok", NewConnTracker()) // no session registered for tenantID
 	handler := auth.Require(store, p)
 
 	req := httptest.NewRequest("GET", "http://relay/sessions", nil)

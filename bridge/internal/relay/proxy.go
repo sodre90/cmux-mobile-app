@@ -22,7 +22,7 @@ var ErrAgentOffline = errors.New("agent offline")
 // injecting the relay token. A device can never reach another tenant's
 // session: the dial target is resolved solely from auth.DeviceFromContext,
 // never from "whichever session happens to be registered."
-func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
+func newProxy(reg *Registry, relayToken string, conns *ConnTracker) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		// httputil.ReverseProxy only accepts a *log.Logger; slog.NewLogLogger
 		// routes its Printf calls through the shared slog handler instead of
@@ -57,7 +57,14 @@ func newProxy(reg *Registry, relayToken string) *httputil.ReverseProxy {
 				if sess == nil {
 					return nil, ErrAgentOffline
 				}
-				return sess.Open()
+				conn, err := sess.Open()
+				if err != nil {
+					return nil, err
+				}
+				// A WebSocket holds this stream for its whole life, which is
+				// what makes it reachable by revocation later; a plain
+				// request's stream deregisters itself moments later on Close.
+				return conns.Track(dev.TokenHash, dev.TenantID, conn), nil
 			},
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {

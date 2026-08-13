@@ -97,6 +97,9 @@ func runServe(args []string) int {
 	// No SIGHUP/reload handling needed: the store reads live from SQLite on
 	// every request, so a separate `cmux-relay devices`/`tenants` process's
 	// writes are visible immediately without a restart or reload signal.
+	// Connections that authenticated BEFORE such a write are the one thing
+	// that read-through doesn't cover, which is what this sweep is for.
+	go rl.SweepRevokedConnections(ctx)
 
 	httpSrv := &http.Server{Addr: cfg.Listen, Handler: rl.Handler()}
 	go func() {

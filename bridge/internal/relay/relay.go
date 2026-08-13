@@ -81,18 +81,21 @@ type Relay struct {
 	// Pusher directly via SetSessionHook and is unaffected by this field.
 	push             Pusher
 	testPushCooldown *ratelimit.Cooldown
+	conns            *ConnTracker
 }
 
 // New builds a Relay. store may be nil only in tests that never hit auth
 // routes. signer may be nil only in tests that never hit /tenants/register.
 func New(store *auth.Store, signer *ca.CA, relayToken string) *Relay {
 	reg := NewRegistry()
+	conns := NewConnTracker()
 	return &Relay{
 		store:             store,
 		reg:               reg,
 		ca:                signer,
 		relayToken:        relayToken,
-		proxy:             newProxy(reg, relayToken),
+		conns:             conns,
+		proxy:             newProxy(reg, relayToken, conns),
 		registerLimiter:   newIPRateLimiter(tenantRegisterMinInterval),
 		devicePairLimiter: newIPRateLimiter(devicePairMinInterval),
 		maxTenants:        defaultMaxTenants,
@@ -164,6 +167,14 @@ func (r *Relay) SetSessionHook(f func(context.Context, string, *yamux.Session)) 
 // SetEdgeToken sets a shared secret the trusted edge (nginx) must present in
 // X-Edge-Token on every request except /healthz. Empty disables the check.
 func (r *Relay) SetEdgeToken(t string) { r.edgeToken = t }
+
+// SweepRevokedConnections closes the connections of devices that have been
+// revoked since they connected, until ctx is done. Blocks; run it in a
+// goroutine. Requests already fail closed the instant a row is deleted --
+// this is only for sockets that authenticated before that happened.
+func (r *Relay) SweepRevokedConnections(ctx context.Context) {
+	r.conns.SweepRevoked(ctx, r.store, connSweepPeriod)
+}
 
 // parseCN extracts the CN attribute from an RFC2253 ("CN=foo,O=bar") or legacy
 // slash ("/CN=foo/O=bar") distinguished name.
