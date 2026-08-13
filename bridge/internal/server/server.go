@@ -48,6 +48,9 @@ type Server struct {
 	// against a paired device turning "send test notification" into a
 	// push-spam vector against itself and its own FCM quota.
 	testPushCooldown *ratelimit.Cooldown
+	// sockets holds live device WebSockets so revocation can reach the ones
+	// that authenticated before it happened (see conntrack.go).
+	sockets *socketTracker
 }
 
 // LastEventAt returns when this agent last processed a frame from its cmux
@@ -85,6 +88,7 @@ func New(c *cmux.Client, s *auth.Store) *Server {
 		hub:              newHub(),
 		terminalPoll:     250 * time.Millisecond,
 		testPushCooldown: ratelimit.NewCooldown(testPushDeviceCooldown),
+		sockets:          newSocketTracker(),
 	}
 }
 

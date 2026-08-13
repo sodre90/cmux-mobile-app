@@ -406,6 +406,10 @@ func runAgent(args []string) int {
 	}
 	go srv.RunEvents(ctx)
 	go runReaper(ctx, cfg, sessions, reaperFirstRound, reaperPeriod)
+	// `cmux-bridge devices revoke` edits the session store from its own
+	// process, so an already-streaming socket never learns about it; this is
+	// what closes those.
+	go srv.SweepUnpairedSockets(ctx)
 	handler := srv.TrustedHandler(cfg.RelayToken)
 
 	var relayTunnelUp atomic.Bool

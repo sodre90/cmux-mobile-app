@@ -59,6 +59,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	slog.Info("terminal: connected", "surface_id", id, "device", deviceLogID(deviceID))
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	if deviceID != "" {
+		defer s.sockets.track(deviceID, cancel)()
+	}
 
 	// gorilla/websocket allows only one concurrent writer per connection. The
 	// poll loop below and terminalReadLoop's ack writes both write to c, so

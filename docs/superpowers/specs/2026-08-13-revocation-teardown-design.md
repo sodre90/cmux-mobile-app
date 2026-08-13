@@ -67,10 +67,14 @@ with no change to the proxy's request path. Closing the stream ends
 `ReverseProxy`'s bidirectional copy, which closes the hijacked client
 connection too.
 
-**Agent.** `handleTerminal` and `handleEvents` already hold a `deviceID` and
-a `context.CancelFunc`. Registering the cancel under the device id and
-calling it on sweep is the whole change; both loops already exit on context
-cancellation.
+**Agent.** `handleTerminal` and `handleEvents` already hold a `deviceID`, so
+registering a teardown func under it and calling that on sweep is the whole
+change. The two handlers stop differently: `/terminal` exits its loops on
+context cancellation, while `/events` blocks on its frame channel and has to
+be unblocked by unregistering from the hub, so the registry holds a func
+rather than a `context.CancelFunc`. `/events` also serves the relay's own
+push-monitor subscription, which carries no device id and must never be
+registered.
 
 The cost is latency: a revoked socket survives up to one sweep interval.
 30s is the proposed bound — small against "until the connection drops on its

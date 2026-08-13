@@ -4,9 +4,9 @@ Design: `docs/superpowers/specs/2026-08-13-revocation-teardown-design.md`.
 Issue: cmux-app-dle.
 
 Two commits, one per server. They share no code — the registries hold
-different things (a `net.Conn` vs a `context.CancelFunc`) and the predicates
-read different stores — so a shared abstraction would be one interface with
-two implementations and no second caller. Keep them separate.
+different things (a `net.Conn` vs a teardown func) and the predicates read
+different stores — so a shared abstraction would be one interface with two
+implementations and no second caller. Keep them separate.
 
 ## Commit 1 — the relay closes the streams it dialed
 
@@ -36,9 +36,16 @@ close a conn belonging to a tenant other than the one revoked.
 `internal/server/conntrack.go` (new), `terminal.go`, `events.go`, `agent.go`,
 plus tests.
 
-Same shape, holding `context.CancelFunc`. Both handlers already build a
-cancellable context and already exit their loops on cancellation, so the
-change at each call site is a register + deferred deregister.
+Same shape, holding a teardown func — not a `context.CancelFunc` as first
+drafted. `/terminal` does exit its loops on cancellation, but `/events`
+blocks on its frame channel and would not notice a cancelled context until
+the next event arrived, which on an idle stream may be hours. Its teardown
+unregisters from the hub (closing the channel, which ends the loop) and
+closes the socket.
+
+`/events` registers only when `X-Device-ID` is present: an empty device id is
+the relay's own push-monitor subscription, and tearing that down would kill
+FCM fan-out for every tenant on the relay.
 
 The predicate is `sessions.SharedSecret(deviceID)`, the same call
 `handleTerminal` makes at connect. Skip the sweep entirely when
@@ -46,9 +53,10 @@ The predicate is `sessions.SharedSecret(deviceID)`, the same call
 device identity to key on.
 
 Tests:
-- a socket whose shared secret was removed is cancelled on the next sweep
+- a socket whose shared secret was removed is torn down on the next sweep
 - a socket whose secret is intact survives a round
 - deregistration on normal close leaves no entry behind
+- both of a device's sockets close, and the relay's subscription never does
 
 ## Verification
 

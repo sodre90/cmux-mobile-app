@@ -285,6 +285,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = c.Close() }()
 	ch := s.hub.register()
 	defer s.hub.unregister(ch)
+	// Only device subscribers: an empty deviceID is the relay's own
+	// push-monitor subscription, which no device revocation should ever tear
+	// down. Unregistering is what actually ends the loop below -- closing the
+	// socket alone would only surface at the next frame, and an idle stream
+	// may not see one for hours.
+	if deviceID != "" {
+		defer s.sockets.track(deviceID, func() {
+			s.hub.unregister(ch)
+			_ = c.Close()
+		})()
+	}
 
 	// Drain/await client close so a dead socket unblocks the writer.
 	go func() {
