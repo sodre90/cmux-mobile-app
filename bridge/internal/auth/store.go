@@ -20,6 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/sodre90/cmux-bridge/internal/metrics"
+	"github.com/sodre90/cmux-bridge/internal/ratelimit"
 )
 
 // ErrNotFound is returned by Verify, Revoke, and SetFCMToken when no
@@ -139,7 +140,15 @@ type Device struct {
 type Store struct {
 	mu sync.Mutex
 	db *sql.DB
+	// One cooldown per store, so a client retrying a dead token logs once a
+	// window per server rather than once per route it happens to try.
+	rejectionLog *ratelimit.Cooldown
 }
+
+// rejectionLogInterval is how often one rejected token hash may appear in the
+// log. Generous: the line exists to be noticed by an operator, not to trace
+// individual requests, and the client that trips it retries on its own timers.
+const rejectionLogInterval = time.Minute
 
 // Open opens (creating if absent) the SQLite database at path and applies the
 // schema and migrations. Safe to call from multiple short-lived processes
@@ -165,7 +174,7 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, rejectionLog: ratelimit.NewCooldown(rejectionLogInterval)}, nil
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
