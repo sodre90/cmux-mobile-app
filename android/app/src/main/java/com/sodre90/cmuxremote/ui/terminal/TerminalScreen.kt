@@ -114,7 +114,16 @@ fun TerminalScreen(
     // only place typed input touches the UI; the terminal's own echo is the
     // single visible record of what's been typed, instead of mirroring it in
     // a second, separately-scrolling box.
-    var input by rememberSaveable { mutableStateOf("") }
+    //
+    // Deliberately remember, not rememberSaveable: this mirrors the REMOTE
+    // line, which is not saved alongside it, so a value restored into a fresh
+    // composition describes a line that no longer exists. The first keystroke
+    // then diffs against that ghost and retypes the whole of it onto the live
+    // terminal (cmux-app-0jh). Losing the base instead costs only the erase
+    // half of the diff -- typing appends, and backspace on an empty field
+    // already sends DEL directly below. It also keeps typed input, which can
+    // be a password, from leaving the process in saved instance state.
+    var input by remember { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
