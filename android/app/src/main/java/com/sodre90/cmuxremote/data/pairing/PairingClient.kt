@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.data.pairing
 import com.sodre90.cmuxremote.data.BridgeConfig
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.Settings
+import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
@@ -166,6 +167,7 @@ class PairingClient(
     private val settings: Settings,
     private val slot: ConnectionSlot,
     private val slotCredentials: SlotCredentials,
+    private val credentialHealth: SlotCredentialHealth,
     private val retirePreviousCredential: (BridgeConfig) -> Unit = {},
 ) : PairingSession {
     private val keys = PairingKeys()
@@ -193,6 +195,11 @@ class PairingClient(
             // session, so every frame they carry is dropped (cmux-app-smu).
             onCredentialsReplaced = {
                 slotCredentials.invalidate(slot)
+                // Immediately, not at the next launch probe: registerDevice
+                // won't run again until then, so a stale "rejected" would
+                // still be demanding a re-pair on the screen the user just
+                // re-paired from.
+                credentialHealth.reset(slot)
                 superseded?.let(retirePreviousCredential)
             },
         )

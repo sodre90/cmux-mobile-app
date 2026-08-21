@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -41,8 +42,11 @@ class CmuxMessagingService : FirebaseMessagingService() {
         scope.launch {
             try {
                 container.activeBridge()?.registerDevice(token)
-            } catch (_: Exception) {
-                // Bridge unreachable or unconfigured; token is resent on next start.
+            } catch (e: Exception) {
+                // Token is resent on next start. Per-slot rejections are
+                // already recorded by FallbackBridgeClient's
+                // onRegistrationOutcome; this is only the no-slot-took-it case.
+                Log.w(TAG, "device registration failed on every slot: ${e.message}")
             }
         }
     }
@@ -120,6 +124,7 @@ class CmuxMessagingService : FirebaseMessagingService() {
 
     companion object {
         const val CHANNEL_ID = "agent_attention"
+        private const val TAG = "CmuxMessagingService"
         private const val GENERIC_TITLE = "cmux needs your attention"
         private const val GENERIC_BODY = "Open the app to see what's happening"
     }

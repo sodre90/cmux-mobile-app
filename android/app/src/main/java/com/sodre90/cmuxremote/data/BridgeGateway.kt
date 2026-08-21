@@ -26,4 +26,10 @@ interface BridgeGateway {
      *  so a slot that is forgotten or re-paired drops the connections still
      *  running on its previous credentials. */
     fun slotCredentials(): SlotCredentials
+
+    /** The process-wide [SlotCredentialHealth], so the Connections screen can
+     *  show a slot whose credential a server has rejected while the other
+     *  slot is still serving -- which is the only moment the user can still
+     *  do something about it. */
+    fun slotCredentialHealth(): SlotCredentialHealth
 }

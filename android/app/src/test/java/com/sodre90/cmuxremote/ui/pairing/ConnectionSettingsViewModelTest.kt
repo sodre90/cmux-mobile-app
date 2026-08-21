@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
@@ -35,6 +36,7 @@ private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient
     override fun relayHealth(): RelayHealth = RelayHealth()
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
+    override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
 }
 
 /** These tests only exercise the test-push flow, never font zoom -- a fixed

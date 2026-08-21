@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -100,8 +101,13 @@ class MainActivity : ComponentActivity() {
                 lifecycleScope.launch(Dispatchers.IO) {
                     try {
                         container.activeBridge()?.registerDevice(token)
-                    } catch (_: Exception) {
-                        // Bridge unreachable or unconfigured; retried next launch.
+                    } catch (e: Exception) {
+                        // Retried next launch. Per-slot rejections have already
+                        // been recorded by then (see FallbackBridgeClient's
+                        // onRegistrationOutcome), so this only reports that no
+                        // slot at all took the token -- which used to vanish
+                        // without trace.
+                        Log.w(TAG, "device registration failed on every slot: ${e.message}")
                     }
                 }
             }
@@ -113,5 +119,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_WORKSPACE_ID = "cmux.workspace_id"
         const val EXTRA_SURFACE_ID = "cmux.surface_id"
+        private const val TAG = "MainActivity"
     }
 }

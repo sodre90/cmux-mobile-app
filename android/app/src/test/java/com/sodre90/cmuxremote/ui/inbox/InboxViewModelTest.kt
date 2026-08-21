@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RelayHealth
+import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.PendingFeedItem
@@ -39,6 +40,7 @@ private class FakeInboxBridgeGateway(private val bridge: FallbackBridgeClient?) 
     override fun relayHealth(): RelayHealth = RelayHealth()
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
+    override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
 }
 
 /**

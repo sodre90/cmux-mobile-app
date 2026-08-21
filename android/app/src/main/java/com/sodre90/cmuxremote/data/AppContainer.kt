@@ -99,6 +99,9 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
         // Storage alone doesn't reach a socket that is already connected on
         // the credentials just cleared -- see [SlotCredentials].
         sharedSlotCredentials.invalidate(slot)
+        // Forgotten by intent is not the same fact as rejected by a server,
+        // and the Connections screen must not read the two the same way.
+        sharedSlotCredentialHealth.reset(slot)
     }
 
     // Fire-and-forget on purpose, and the local clear above never waits on
@@ -147,6 +150,7 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
                 settings,
                 slot,
                 sharedSlotCredentials,
+                sharedSlotCredentialHealth,
                 retirePreviousCredential = { cfg -> retireCredential(slot, cfg) },
             )
         }
@@ -184,11 +188,19 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     override fun slotCredentials(): SlotCredentials = sharedSlotCredentials
 
+    // Shared for the same reason again, and written from exactly one place:
+    // the registerDevice fan-out below, which is the only call that asks both
+    // slots about this device on every launch.
+    private val sharedSlotCredentialHealth = SlotCredentialHealth()
+
+    override fun slotCredentialHealth(): SlotCredentialHealth = sharedSlotCredentialHealth
+
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },
         fallback = { bridgeClient(ConnectionSlot.DIRECT) },
         relayHealth = sharedRelayHealth,
         monitor = sharedConnectionMonitor,
+        onRegistrationOutcome = sharedSlotCredentialHealth::record,
     )
 
     /** The fallback-aware entry point most read/write call sites should use
