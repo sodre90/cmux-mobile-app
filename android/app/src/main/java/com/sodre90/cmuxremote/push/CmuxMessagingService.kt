@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.push
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -55,14 +56,22 @@ class CmuxMessagingService : FirebaseMessagingService() {
         val type = message.data["type"]
         if (type != "attention" && type != "test") return
         val container = (application as? CmuxApp)?.container
-        val (title, body) = decryptContent(container, message.data) ?: (GENERIC_TITLE to GENERIC_BODY)
-        showNotification(
-            title,
-            body,
-            workspaceId = message.data["workspace_id"]?.takeIf { it.isNotBlank() },
-            surfaceId = message.data["surface_id"]?.takeIf { it.isNotBlank() },
-        )
+        val decrypted = decryptContent(container, message.data)
+        val workspaceId = message.data["workspace_id"]?.takeIf { it.isNotBlank() }
+        val surfaceId = message.data["surface_id"]?.takeIf { it.isNotBlank() }
+        val notificationId = attentionNotificationId(workspaceId, surfaceId)
+        if (decrypted == null && genericFallbackWouldHideContent(shownTitle(notificationId))) return
+        val (title, body) = decrypted ?: (GENERIC_TITLE to GENERIC_BODY)
+        showNotification(title, body, workspaceId, surfaceId, notificationId)
     }
+
+    /** The title of the notification currently on screen under [notificationId],
+     *  or null if nothing is showing there. */
+    private fun shownTitle(notificationId: Int): CharSequence? =
+        getSystemService(NotificationManager::class.java)
+            .activeNotifications
+            .firstOrNull { it.id == notificationId }
+            ?.notification?.extras?.getCharSequence(Notification.EXTRA_TITLE)
 
     /**
      * Decrypts the per-device e2e payload the bridge/relay embed under
@@ -75,18 +84,39 @@ class CmuxMessagingService : FirebaseMessagingService() {
      */
     private fun decryptContent(container: AppContainer?, data: Map<String, String>): Pair<String, String>? {
         val container = container ?: return null
-        val blobB64 = data["e2e"] ?: return null
+        val blobB64 = data["e2e"] ?: run {
+            Log.w(TAG, "push carried no e2e payload; sender had no session for this device")
+            return null
+        }
         val slot = data["slot"]?.let { name -> ConnectionSlot.entries.find { it.name.equals(name, ignoreCase = true) } }
             ?: return null
         return try {
             val payload = decryptPushPayload(container.session(slot), container.cipher, blobB64)
             payload.title to payload.body
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // Exception class only. The payload being decrypted IS the
+            // notification's real content (invariant 5), and the two causes
+            // worth telling apart in the field -- no key material for this slot
+            // yet, versus a blob encrypted for a session this device has since
+            // replaced -- are already distinct exception types.
+            Log.w(TAG, "push payload did not decrypt on slot ${slot.name}: ${e::class.simpleName}")
             null
         }
     }
 
-    private fun showNotification(title: String, body: String, workspaceId: String?, surfaceId: String?) {
+    // Stable per-workspace [notificationId] -- the relay pushes once per
+    // NeedsAttention frame with no dedup, and cmux can emit more than one of
+    // those for a prompt that's still pending. Keying on workspaceId means a
+    // repeat push updates the same notification tile instead of stacking a new
+    // one for the same terminal. It is also why [genericFallbackWouldHideContent]
+    // has to exist.
+    private fun showNotification(
+        title: String,
+        body: String,
+        workspaceId: String?,
+        surfaceId: String?,
+        notificationId: Int,
+    ) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Agent attention", NotificationManager.IMPORTANCE_HIGH),
@@ -97,12 +127,6 @@ class CmuxMessagingService : FirebaseMessagingService() {
             putExtra(MainActivity.EXTRA_WORKSPACE_ID, workspaceId)
             putExtra(MainActivity.EXTRA_SURFACE_ID, surfaceId)
         }
-        // Stable per-workspace id -- the relay pushes once per NeedsAttention
-        // frame with no dedup, and cmux can emit more than one of those for a
-        // prompt that's still pending. Keying on workspaceId means a repeat
-        // push updates the same notification tile instead of stacking a new
-        // one for the same terminal.
-        val notificationId = attentionNotificationId(workspaceId, surfaceId)
         val pending = PendingIntent.getActivity(
             this,
             notificationId,
@@ -125,10 +149,29 @@ class CmuxMessagingService : FirebaseMessagingService() {
     companion object {
         const val CHANNEL_ID = "agent_attention"
         private const val TAG = "CmuxMessagingService"
-        private const val GENERIC_TITLE = "cmux needs your attention"
-        private const val GENERIC_BODY = "Open the app to see what's happening"
     }
 }
+
+internal const val GENERIC_TITLE = "cmux needs your attention"
+internal const val GENERIC_BODY = "Open the app to see what's happening"
+
+/**
+ * Whether posting the content-free fallback would replace something better.
+ *
+ * The relay and the Mac agent push the same attention event independently,
+ * out of separate device stores that cannot see each other, and both copies
+ * land on the one id [attentionNotificationId] returns. Whichever arrives
+ * last is what the user is left looking at. So a copy that could not be
+ * decrypted -- one whose sender had no session for this device, or one
+ * encrypted for a session this device has since replaced -- would otherwise
+ * overwrite the copy that decrypted fine with "cmux needs your attention"
+ * (cmux-app-17r).
+ *
+ * Only this direction is guarded. Real content arriving after the fallback
+ * still replaces it, because that path never consults this.
+ */
+internal fun genericFallbackWouldHideContent(shownTitle: CharSequence?): Boolean =
+    shownTitle != null && shownTitle.toString() != GENERIC_TITLE
 
 /**
  * The notification id an attention/test push is filed under -- shared between
