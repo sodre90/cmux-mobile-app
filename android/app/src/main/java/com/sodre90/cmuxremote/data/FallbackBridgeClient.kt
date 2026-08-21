@@ -27,6 +27,9 @@ import java.io.IOException
  * shape: it fans out to BOTH slots instead, because each keeps its own
  * device table and either may be the connection a push later arrives
  * through. See its own doc for why "whichever is reachable" was not enough.
+ * Because it touches both slots on every launch it is also the app's only
+ * routine check on the standby credential, which it reports per slot through
+ * [onRegistrationOutcome].
  *
  * [sessions] and [pendingFeed] additionally retry a 409 not_paired through
  * [retryingNotPaired] -- see its doc for why. Every caller of these two reads
@@ -39,6 +42,7 @@ class FallbackBridgeClient(
     private val relayHealth: RelayHealth = RelayHealth(),
     private val pairingRetryDelayMs: Long = NOT_PAIRED_RETRY_DELAY_MS,
     private val monitor: ConnectionMonitor = ConnectionMonitor(),
+    private val onRegistrationOutcome: (ConnectionSlot, RegistrationOutcome) -> Unit = { _, _ -> },
 ) {
     private suspend fun <T> call(block: suspend (BridgeClient) -> T): T {
         val primaryClient = primary()
@@ -139,19 +143,32 @@ class FallbackBridgeClient(
      *
      * Best effort per slot -- one slot failing must not deny the other its
      * token -- so this throws only when no slot accepted the token.
+     *
+     * Every slot's answer is handed to [onRegistrationOutcome] as it resolves.
+     * That is this call's second job, and the reason the outcomes are reported
+     * through a callback rather than returned: a slot's 401 here is the only
+     * routine evidence the app gets that its credential on that server no
+     * longer exists (cmux-app-hr1), and it must survive the all-slots-failed
+     * throw below -- which is precisely the lockout the evidence explains.
      */
     suspend fun registerDevice(fcmToken: String) {
-        val targets = listOfNotNull(primary(), fallback())
+        val targets = listOfNotNull(
+            primary()?.let { ConnectionSlot.RELAY to it },
+            fallback()?.let { ConnectionSlot.DIRECT to it },
+        )
         if (targets.isEmpty()) throw BridgeException(0, "not configured")
         var registered = false
         var lastFailure: IOException? = null
-        for (target in targets) {
-            try {
+        for ((slot, target) in targets) {
+            val outcome = try {
                 target.registerDevice(fcmToken)
                 registered = true
+                RegistrationOutcome.ACCEPTED
             } catch (e: IOException) {
                 lastFailure = e
+                e.registrationOutcome()
             }
+            onRegistrationOutcome(slot, outcome)
         }
         if (!registered) throw lastFailure ?: BridgeException(0, "not configured")
     }
@@ -190,3 +207,38 @@ internal fun IOException.describeForUser(): String =
     (message ?: this::class.simpleName ?: "unreachable").take(MAX_CAUSE_CHARS)
 
 private const val MAX_CAUSE_CHARS = 120
+
+/**
+ * What one server said when this device offered its bearer token to
+ * [FallbackBridgeClient.registerDevice].
+ *
+ * The three are not interchangeable and must never be collapsed. [UNREACHABLE]
+ * in particular says nothing at all about the credential: a relay outage read
+ * as "the relay credential is gone" would send the user off to re-pair a slot
+ * that is perfectly fine. It is the client-side twin of the rule the agent's
+ * shared-secret reaper already follows when it abandons a whole round rather
+ * than mistake an unanswered server for an empty one.
+ */
+enum class RegistrationOutcome {
+    /** The credential is live on that server. */
+    ACCEPTED,
+
+    /** 401: that server has no device row for this token any more -- it was
+     *  revoked, or its store was rebuilt. */
+    REJECTED,
+
+    /** The server could not be asked (transport error, or a 5xx). */
+    UNREACHABLE,
+}
+
+/** Deliberately only 401, never 403: neither server issues a 403 on these
+ *  routes today, so treating a hypothetical future one as "your credential
+ *  was destroyed" would be a guess dressed up as a diagnosis. */
+private fun IOException.registrationOutcome(): RegistrationOutcome =
+    if (this is BridgeException && code == HTTP_UNAUTHORIZED) {
+        RegistrationOutcome.REJECTED
+    } else {
+        RegistrationOutcome.UNREACHABLE
+    }
+
+private const val HTTP_UNAUTHORIZED = 401

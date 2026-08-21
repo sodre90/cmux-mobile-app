@@ -467,4 +467,106 @@ class FallbackBridgeClientTest {
             assertEquals(0, e.code)
         }
     }
+
+    private fun registerRecordingOutcomes(
+        primary: () -> BridgeClient?,
+        fallback: () -> BridgeClient?,
+    ): Map<ConnectionSlot, RegistrationOutcome> {
+        val outcomes = mutableMapOf<ConnectionSlot, RegistrationOutcome>()
+        val fb = FallbackBridgeClient(
+            primary = primary,
+            fallback = fallback,
+            onRegistrationOutcome = { slot, outcome -> outcomes[slot] = outcome },
+        )
+        runCatching { runBlocking { fb.registerDevice("fcm-token-abc") } }
+        return outcomes
+    }
+
+    /** The exact signal that was collected on every launch for eight days and
+     *  discarded (cmux-app-hr1): a 401 on one slot while the other is happily
+     *  accepting the token. Asserts the reported outcomes, not just that the
+     *  call returned -- returning is what it did before, too. */
+    @Test
+    fun registerDeviceReportsA401AsRejectedWhileTheOtherSlotIsAccepted() {
+        primaryServer.enqueue(MockResponse())
+        fallbackServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+
+        val outcomes = registerRecordingOutcomes(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+        )
+
+        assertEquals(RegistrationOutcome.ACCEPTED, outcomes[ConnectionSlot.RELAY])
+        assertEquals(RegistrationOutcome.REJECTED, outcomes[ConnectionSlot.DIRECT])
+    }
+
+    /** The false-alarm case, and the one that matters most: a server that
+     *  cannot be reached says nothing whatsoever about the credential. */
+    @Test
+    fun registerDeviceReportsAnUnreachableSlotAsUnreachableNotRejected() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse())
+
+        val outcomes = registerRecordingOutcomes(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer) },
+        )
+
+        assertEquals(RegistrationOutcome.UNREACHABLE, outcomes[ConnectionSlot.RELAY])
+        assertEquals(RegistrationOutcome.ACCEPTED, outcomes[ConnectionSlot.DIRECT])
+    }
+
+    @Test
+    fun registerDeviceReportsA5xxAsUnreachableNotRejected() {
+        primaryServer.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"tunnel_down"}"""))
+        fallbackServer.enqueue(MockResponse())
+
+        val outcomes = registerRecordingOutcomes(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+        )
+
+        assertEquals(RegistrationOutcome.UNREACHABLE, outcomes[ConnectionSlot.RELAY])
+        assertEquals(RegistrationOutcome.ACCEPTED, outcomes[ConnectionSlot.DIRECT])
+    }
+
+    /** Reported through a callback rather than a return value precisely so
+     *  this case still reports: no slot accepted, so the call throws, and this
+     *  is the total lockout the rejections are the explanation for. */
+    @Test
+    fun registerDeviceStillReportsBothRejectionsWhenItThrows() {
+        primaryServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        fallbackServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        val outcomes = mutableMapOf<ConnectionSlot, RegistrationOutcome>()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+            onRegistrationOutcome = { slot, outcome -> outcomes[slot] = outcome },
+        )
+
+        try {
+            runBlocking { fb.registerDevice("fcm-token-abc") }
+            fail("expected registerDevice to report that no slot took the token")
+        } catch (e: IOException) {
+            // expected
+        }
+
+        assertEquals(RegistrationOutcome.REJECTED, outcomes[ConnectionSlot.RELAY])
+        assertEquals(RegistrationOutcome.REJECTED, outcomes[ConnectionSlot.DIRECT])
+    }
+
+    /** A 409 stale_pairing is not a destroyed credential -- only a 401 is. */
+    @Test
+    fun registerDeviceReportsANon401FourXxAsUnreachable() {
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
+        fallbackServer.enqueue(MockResponse())
+
+        val outcomes = registerRecordingOutcomes(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+        )
+
+        assertEquals(RegistrationOutcome.UNREACHABLE, outcomes[ConnectionSlot.RELAY])
+        assertEquals(RegistrationOutcome.ACCEPTED, outcomes[ConnectionSlot.DIRECT])
+    }
 }
