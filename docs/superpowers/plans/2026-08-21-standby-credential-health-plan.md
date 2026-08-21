@@ -168,23 +168,28 @@ an outage:
 8. Confirm `cmux-bridge.log` carries one rejection line per revoked device,
    with a 12-char prefix and no token material.
 
-## Open decisions
+## Decisions taken during implementation
 
 **Should the normal call path also mark a slot rejected, not just the launch
-probe?** A 401 is unambiguous per slot wherever it appears — on DIRECT it is
+probe? — TAKEN, as a fifth commit.** Marking only: a 401 still propagates
+without failing over and still sets no `RelayHealth` penalty, so `call`'s
+write-safety rule is untouched. cmux-app-ml1's 401-*failover* carve-out is a
+separate change and did not land, because ml1 is parked. The original argument
+follows.
+
+A 401 is unambiguous per slot wherever it appears — on DIRECT it is
 the agent's `auth.Require`, on RELAY it is the relay's own auth — so
 `FallbackBridgeClient.call` could write `rejected` on any per-slot 401, with no
 schedule and no new endpoint. That closes the gap the launch probe leaves: a
 credential revoked *after* the last launch, discovered only when the other
 transport dies.
 
-It is not folded in by default because it widens commit 1 from "report what
+It was not folded into commit 1 because it widens that commit from "report what
 registerDevice already learned" to "classify every 401 the app ever sees",
 which is a larger blast radius across every read and write call and wants its
-own tests. Take it during review or leave it; the four commits stand either
-way.
+own tests. It got them.
 
-**cmux-app-ml1 forces the answer to yes.** Once DIRECT is preferred rather than
+**cmux-app-ml1 would have forced the answer to yes anyway.** Once DIRECT is preferred rather than
 held in reserve, `FallbackBridgeClient`'s "a 4xx from the primary never fails
 over" rule turns a dead direct credential into a total outage while RELAY sits
 healthy behind it. The fix there is to fail over on 401 specifically — safe
