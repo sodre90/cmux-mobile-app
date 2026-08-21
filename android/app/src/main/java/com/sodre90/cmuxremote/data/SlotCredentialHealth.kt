@@ -90,7 +90,7 @@ class SlotCredentialHealth(
     fun record(slot: ConnectionSlot, outcome: RegistrationOutcome) {
         when (outcome) {
             RegistrationOutcome.ACCEPTED -> markLive(slot)
-            RegistrationOutcome.REJECTED -> markRejected(slot)
+            RegistrationOutcome.REJECTED -> recordRejection(slot)
             RegistrationOutcome.UNREACHABLE -> return
         }
     }
@@ -101,7 +101,10 @@ class SlotCredentialHealth(
         reportLog.setRejectionReported(slot, false)
     }
 
-    private fun markRejected(slot: ConnectionSlot) {
+    /** Records a 401 seen anywhere -- the launch probe above, or an ordinary
+     *  call ([FallbackBridgeClient]). Same fact either way: that server has no
+     *  device row for this slot's token. */
+    fun recordRejection(slot: ConnectionSlot) {
         statuses.getValue(slot).value = CredentialStatus.REJECTED
         if (reportLog.wasRejectionReported(slot)) return
         reportLog.setRejectionReported(slot, true)

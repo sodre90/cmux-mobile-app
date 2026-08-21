@@ -555,6 +555,83 @@ class FallbackBridgeClientTest {
         assertEquals(RegistrationOutcome.REJECTED, outcomes[ConnectionSlot.DIRECT])
     }
 
+    /** Marks the slot and nothing else: a 401 must leave [call]'s "4xx never
+     *  fails over" rule exactly as it was, or a non-idempotent write could
+     *  run twice on the way to being reported. */
+    @Test
+    fun a401FromPrimaryMarksRelayWithoutFailingOverOrSettingAPenalty() {
+        primaryServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        primaryServer.enqueue(MockResponse()) // must be consumed by the 2nd call, i.e. no penalty was set
+        val rejected = mutableListOf<ConnectionSlot>()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+            onCredentialRejected = { rejected += it },
+        )
+
+        try {
+            runBlocking { fb.renameWorkspace("ws-1", "new title") }
+            fail("expected the primary's 401 to propagate instead of failing over")
+        } catch (e: BridgeException) {
+            assertEquals(401, e.code)
+        }
+        runBlocking { fb.renameWorkspace("ws-1", "new title") }
+
+        assertEquals(listOf(ConnectionSlot.RELAY), rejected)
+        assertEquals("the write must never be re-run on the other slot", 0, fallbackServer.requestCount)
+        assertEquals("a 401 is not a reachability failure, so no penalty", 2, primaryServer.requestCount)
+    }
+
+    /** The 2026-08-21 shape exactly: relay unreachable, direct answers 401.
+     *  Both are reported, and the slot named is the one that answered. */
+    @Test
+    fun a401FromTheFallbackMarksDirect() {
+        primaryServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        fallbackServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        val rejected = mutableListOf<ConnectionSlot>()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer, connectTimeoutMs = 300) },
+            fallback = { clientFor(fallbackServer) },
+            onCredentialRejected = { rejected += it },
+        )
+
+        runCatching { runBlocking { fb.sessions() } }
+
+        assertEquals(listOf(ConnectionSlot.DIRECT), rejected)
+    }
+
+    /** The same 401 arriving through the skip-primary branch, which picks its
+     *  slot separately and so could get the attribution wrong on its own. */
+    @Test
+    fun a401OnTheOnlyAttemptedSlotMarksThatSlot() {
+        fallbackServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        val rejected = mutableListOf<ConnectionSlot>()
+        val fb = FallbackBridgeClient(
+            primary = { null },
+            fallback = { clientFor(fallbackServer) },
+            onCredentialRejected = { rejected += it },
+        )
+
+        runCatching { runBlocking { fb.sessions() } }
+
+        assertEquals(listOf(ConnectionSlot.DIRECT), rejected)
+    }
+
+    @Test
+    fun aNon401FourXxMarksNothing() {
+        primaryServer.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"stale_pairing"}"""))
+        val rejected = mutableListOf<ConnectionSlot>()
+        val fb = FallbackBridgeClient(
+            primary = { clientFor(primaryServer) },
+            fallback = { clientFor(fallbackServer) },
+            onCredentialRejected = { rejected += it },
+        )
+
+        runCatching { runBlocking { fb.renameWorkspace("ws-1", "new title") } }
+
+        assertEquals(emptyList<ConnectionSlot>(), rejected)
+    }
+
     /** A 409 stale_pairing is not a destroyed credential -- only a 401 is. */
     @Test
     fun registerDeviceReportsANon401FourXxAsUnreachable() {

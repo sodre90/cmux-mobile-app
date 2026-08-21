@@ -208,6 +208,7 @@ class AppContainer(
         relayHealth = sharedRelayHealth,
         monitor = sharedConnectionMonitor,
         onRegistrationOutcome = sharedSlotCredentialHealth::record,
+        onCredentialRejected = sharedSlotCredentialHealth::recordRejection,
     )
 
     /** The fallback-aware entry point most read/write call sites should use

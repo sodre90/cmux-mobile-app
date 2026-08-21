@@ -22,6 +22,8 @@ import java.io.IOException
  * NOT treated as a failover trigger and propagates immediately with no
  * penalty set, so mutating calls (replyFeed/renameWorkspace/setYoloMode/
  * registerDevice) are never silently re-executed against the wrong backend.
+ * A 401 is *reported* to [onCredentialRejected] on top of that -- it names
+ * the one slot whose credential is gone -- but changes none of the above.
  *
  * [registerDevice] is the one exception to the try-primary-then-fallback
  * shape: it fans out to BOTH slots instead, because each keeps its own
@@ -43,7 +45,22 @@ class FallbackBridgeClient(
     private val pairingRetryDelayMs: Long = NOT_PAIRED_RETRY_DELAY_MS,
     private val monitor: ConnectionMonitor = ConnectionMonitor(),
     private val onRegistrationOutcome: (ConnectionSlot, RegistrationOutcome) -> Unit = { _, _ -> },
+    private val onCredentialRejected: (ConnectionSlot) -> Unit = {},
 ) {
+    /**
+     * Reports a 401 as that slot's credential being gone, which is what it
+     * unambiguously means: on DIRECT it is the agent's auth.Require, on RELAY
+     * the relay's own auth, and neither has any other reason to say it.
+     *
+     * Reporting only. A 401 must not change what [call] does, or the
+     * "4xx never fails over" rule that keeps a non-idempotent write from
+     * running twice would have a hole in it. It also sets no [relayHealth]
+     * penalty: a server that answered is not a server that is unreachable.
+     */
+    private fun reportIfRejected(slot: ConnectionSlot, e: IOException) {
+        if (e is BridgeException && e.code == HTTP_UNAUTHORIZED) onCredentialRejected(slot)
+    }
+
     private suspend fun <T> call(block: suspend (BridgeClient) -> T): T {
         val primaryClient = primary()
         val fallbackClient = fallback()
@@ -61,6 +78,7 @@ class FallbackBridgeClient(
                     monitor.connected(slot)
                 }
             } catch (e: IOException) {
+                reportIfRejected(slot, e)
                 // Report the skip: "direct failed" alone reads as though relay
                 // was fine, when in fact it was never tried this time round.
                 if (primaryClient != null && only !== primaryClient) {
@@ -80,6 +98,7 @@ class FallbackBridgeClient(
                 monitor.connected(ConnectionSlot.RELAY)
             }
         } catch (e: IOException) {
+            reportIfRejected(ConnectionSlot.RELAY, e)
             if (fallbackClient == null) throw e
             if (e is BridgeException && e.code in 400..499) throw e
             relayHealth.markDown(now())
@@ -87,6 +106,7 @@ class FallbackBridgeClient(
             try {
                 block(fallbackClient).also { monitor.connected(ConnectionSlot.DIRECT) }
             } catch (fallbackError: IOException) {
+                reportIfRejected(ConnectionSlot.DIRECT, fallbackError)
                 throw BothTransportsFailedException(relayError = e, directError = fallbackError)
                     .also { monitor.failed(it.message.orEmpty()) }
             }
