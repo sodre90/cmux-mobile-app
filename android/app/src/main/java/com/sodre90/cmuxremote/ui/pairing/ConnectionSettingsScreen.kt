@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -33,6 +34,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.CredentialStatus
 import com.sodre90.cmuxremote.ui.terminal.MAX_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.MIN_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.ZOOM_STEP
@@ -49,6 +51,8 @@ import kotlin.math.roundToInt
 fun ConnectionSettingsScreen(
     relayConfigured: Boolean,
     directConfigured: Boolean,
+    relayCredentialStatus: CredentialStatus,
+    directCredentialStatus: CredentialStatus,
     testPushState: TestPushUiState,
     fontZoom: Float,
     onPair: (ConnectionSlot) -> Unit,
@@ -69,6 +73,8 @@ fun ConnectionSettingsScreen(
                 label = relayLabel,
                 description = stringResource(R.string.connection_relay_description),
                 configured = relayConfigured,
+                credentialStatus = relayCredentialStatus,
+                recoveryHint = stringResource(R.string.connection_recovery_relay),
                 onPair = { onPair(ConnectionSlot.RELAY) },
                 onForget = { forgetTarget = ConnectionSlot.RELAY },
             )
@@ -76,6 +82,8 @@ fun ConnectionSettingsScreen(
                 label = directLabel,
                 description = stringResource(R.string.connection_direct_description),
                 configured = directConfigured,
+                credentialStatus = directCredentialStatus,
+                recoveryHint = stringResource(R.string.connection_recovery_direct),
                 onPair = { onPair(ConnectionSlot.DIRECT) },
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },
             )
@@ -102,11 +110,16 @@ fun ConnectionSettingsScreen(
     }
 }
 
+/** [credentialStatus] is what the slot's *server* last said, which is a
+ *  different question from [configured] (whether this phone has credentials
+ *  stored at all) -- a slot can be fully configured and still rejected. */
 @Composable
 private fun ConnectionRow(
     label: String,
     description: String,
     configured: Boolean,
+    credentialStatus: CredentialStatus,
+    recoveryHint: String,
     onPair: () -> Unit,
     onForget: () -> Unit,
 ) {
@@ -114,8 +127,19 @@ private fun ConnectionRow(
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label)
             Text(description)
-            val statusRes = if (configured) R.string.connection_status_paired else R.string.connection_status_not_paired
-            Text(stringResource(statusRes))
+            val rejected = configured && credentialStatus == CredentialStatus.REJECTED
+            val statusRes = when {
+                rejected -> R.string.connection_status_rejected
+                configured -> R.string.connection_status_paired
+                else -> R.string.connection_status_not_paired
+            }
+            Text(
+                stringResource(statusRes),
+                color = if (rejected) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
+            if (rejected) {
+                Text(recoveryHint, color = MaterialTheme.colorScheme.error)
+            }
             Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(if (configured) R.string.action_repair else R.string.action_pair))
             }
@@ -136,6 +160,8 @@ private fun ConnectionRowPreview() {
             label = "Relay",
             description = "Reaches your Mac from anywhere, via the home server.",
             configured = false,
+            credentialStatus = CredentialStatus.UNKNOWN,
+            recoveryHint = "",
             onPair = {},
             onForget = {},
         )
@@ -150,6 +176,24 @@ private fun ConnectionRowPairedPreview() {
             label = "Tailscale (direct)",
             description = "Reaches your Mac directly over your tailnet.",
             configured = true,
+            credentialStatus = CredentialStatus.LIVE,
+            recoveryHint = "",
+            onPair = {},
+            onForget = {},
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Rejected")
+@Composable
+private fun ConnectionRowRejectedPreview() {
+    CmuxTheme {
+        ConnectionRow(
+            label = "Tailscale (direct)",
+            description = "Reaches your Mac directly over your tailnet.",
+            configured = true,
+            credentialStatus = CredentialStatus.REJECTED,
+            recoveryHint = "Run `cmux-bridge pair-device -direct` on the Mac, then tap Re-pair.",
             onPair = {},
             onForget = {},
         )

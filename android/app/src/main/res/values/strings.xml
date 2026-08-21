@@ -91,6 +91,9 @@
     <string name="connection_direct_description">Reaches your Mac directly over your tailnet -- used automatically if the relay is unreachable.</string>
     <string name="connection_status_paired">Paired</string>
     <string name="connection_status_not_paired">Not paired</string>
+    <string name="connection_status_rejected">Rejected — needs re-pairing</string>
+    <string name="connection_recovery_relay">The relay no longer recognises this device. Tap Re-pair and scan a new code.</string>
+    <string name="connection_recovery_direct">The Mac no longer recognises this device over Tailscale. Run `cmux-bridge pair-device -direct` on the Mac, then tap Re-pair.</string>
     <string name="action_repair">Re-pair</string>
     <string name="action_forget">Forget</string>
     <string name="forget_connection_dialog_title">Forget %1$s connection?</string>
@@ -107,6 +110,11 @@
     <string name="test_push_send_button">Send test notification</string>
     <string name="test_push_success">Sent — check your notification shade</string>
     <string name="test_push_failure_prefix">Failed: %1$s</string>
+
+    <!-- Rejected-credential notification -->
+    <string name="credential_rejected_title">%1$s connection needs re-pairing</string>
+    <string name="credential_rejected_body_relay">The relay no longer recognises this device. Open Connections and re-pair it before the other connection is all you have left.</string>
+    <string name="credential_rejected_body_direct">The Mac no longer recognises this device over Tailscale. Run `cmux-bridge pair-device -direct` on the Mac and re-pair, before the relay is all you have left.</string>
 
     <!-- Terminal screen -->
     <string name="terminal_title">Terminal</string>

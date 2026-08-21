@@ -168,10 +168,14 @@ fun CmuxNavHost(
                 },
             )
             val testPushState by testPushVm.testPushState.collectAsState()
+            val relayCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.RELAY).collectAsState()
+            val directCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.DIRECT).collectAsState()
             var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
             ConnectionSettingsScreen(
                 relayConfigured = relayConfigured,
                 directConfigured = directConfigured,
+                relayCredentialStatus = relayCredentialStatus,
+                directCredentialStatus = directCredentialStatus,
                 testPushState = testPushState,
                 fontZoom = fontZoom,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },

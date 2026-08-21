@@ -4,8 +4,10 @@ import com.sodre90.cmuxremote.data.BridgeClient
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.CredentialStatus
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
+import com.sodre90.cmuxremote.data.RegistrationOutcome
 import com.sodre90.cmuxremote.data.RelayHealth
 import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
@@ -29,6 +31,7 @@ import java.util.concurrent.TimeUnit
  *  which only ever calls [BridgeGateway.activeBridge]. */
 private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient?) : BridgeGateway {
     val monitor = ConnectionMonitor()
+    val credentialHealth = SlotCredentialHealth()
     override fun activeBridge(): FallbackBridgeClient? = bridge
     override fun anyBridgeConfigured(): Boolean = bridge != null
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = null
@@ -36,7 +39,7 @@ private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient
     override fun relayHealth(): RelayHealth = RelayHealth()
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
-    override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
+    override fun slotCredentialHealth(): SlotCredentialHealth = credentialHealth
 }
 
 /** These tests only exercise the test-push flow, never font zoom -- a fixed
@@ -141,6 +144,20 @@ class ConnectionSettingsViewModelTest {
 
         assertEquals(TestPushUiState.Sending, vm.testPushState.value)
         waitUntil { vm.testPushState.value !is TestPushUiState.Sending }
+    }
+
+    /** The Connections screen has to be able to show a rejected standby while
+     *  the other slot is still serving -- per slot, and never conflated. */
+    @Test
+    fun credentialStatusIsExposedPerSlot() {
+        val gateway = FakeTestPushBridgeGateway(null)
+        val vm = testPushViewModel(gateway)
+
+        gateway.credentialHealth.record(ConnectionSlot.RELAY, RegistrationOutcome.ACCEPTED)
+        gateway.credentialHealth.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+
+        assertEquals(CredentialStatus.LIVE, vm.credentialStatus(ConnectionSlot.RELAY).value)
+        assertEquals(CredentialStatus.REJECTED, vm.credentialStatus(ConnectionSlot.DIRECT).value)
     }
 
     @Test

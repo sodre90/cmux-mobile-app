@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.E2eInterceptor
 import com.sodre90.cmuxremote.data.pairing.PairingClient
+import com.sodre90.cmuxremote.push.showCredentialRejectedNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,7 +26,9 @@ import java.util.concurrent.TimeUnit
  * constructible in a plain JVM test -- this class's init does
  * EncryptedSharedPreferences + Keystore I/O and can't be.
  */
-class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, PairingGateway, TerminalDisplayGateway {
+class AppContainer(
+    private val appContext: Context,
+) : BridgeGateway, WorkspaceOrderGateway, PairingGateway, TerminalDisplayGateway {
 
     val settings = Settings(appContext)
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
@@ -190,8 +193,12 @@ class AppContainer(appContext: Context) : BridgeGateway, WorkspaceOrderGateway, 
 
     // Shared for the same reason again, and written from exactly one place:
     // the registerDevice fan-out below, which is the only call that asks both
-    // slots about this device on every launch.
-    private val sharedSlotCredentialHealth = SlotCredentialHealth()
+    // slots about this device on every launch. Settings supplies the one bit
+    // that must survive process death -- see RejectionReportLog.
+    private val sharedSlotCredentialHealth = SlotCredentialHealth(
+        reportLog = settings,
+        onNewRejection = { slot -> showCredentialRejectedNotification(appContext, slot) },
+    )
 
     override fun slotCredentialHealth(): SlotCredentialHealth = sharedSlotCredentialHealth
 

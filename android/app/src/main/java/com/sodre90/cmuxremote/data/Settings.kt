@@ -10,8 +10,12 @@ import androidx.security.crypto.MasterKey
  * (including base URLs and tokens) lives in [EncryptedSharedPreferences] so
  * device certificates and bearer tokens are encrypted at rest; nothing here is
  * ever logged.
+ *
+ * Also the durable half of [SlotCredentialHealth]: the rest of that state is
+ * in-memory and starts over each process, but whether the user has already
+ * been told about a rejection has to outlive one (see [RejectionReportLog]).
  */
-class Settings(context: Context) {
+class Settings(context: Context) : RejectionReportLog {
 
     private val prefs: SharedPreferences = run {
         val masterKey = MasterKey.Builder(context)
@@ -46,12 +50,20 @@ class Settings(context: Context) {
         prefs.edit().putString(key(slot, KEY_TOKEN), value).apply()
     }
 
+    override fun wasRejectionReported(slot: ConnectionSlot): Boolean =
+        prefs.getBoolean(key(slot, KEY_REJECTION_REPORTED), false)
+
+    override fun setRejectionReported(slot: ConnectionSlot, reported: Boolean) {
+        prefs.edit().putBoolean(key(slot, KEY_REJECTION_REPORTED), reported).apply()
+    }
+
     /** Wipes [slot]'s stored base URL and device token -- used by "Forget" in
      *  ConnectionSettingsScreen. The other slot is untouched. */
     fun clearSlot(slot: ConnectionSlot) {
         prefs.edit()
             .remove(key(slot, KEY_BASE_URL))
             .remove(key(slot, KEY_TOKEN))
+            .remove(key(slot, KEY_REJECTION_REPORTED))
             .apply()
     }
 
@@ -98,6 +110,7 @@ class Settings(context: Context) {
         const val KEY_BASE_URL = "base_url"
         const val KEY_TOKEN = "device_token"
         const val KEY_P12 = "client_p12_b64"
+        const val KEY_REJECTION_REPORTED = "credential_rejection_reported"
     }
 }
 

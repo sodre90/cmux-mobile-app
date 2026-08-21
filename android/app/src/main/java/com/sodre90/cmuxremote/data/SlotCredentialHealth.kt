@@ -21,6 +21,37 @@ enum class CredentialStatus {
 }
 
 /**
+ * The one bit of [SlotCredentialHealth] that has to outlive the process:
+ * whether the user has already been told about a slot's current rejection.
+ *
+ * Without it the "notify on the transition into rejected" rule cannot be
+ * honoured at all. In-memory status starts at [CredentialStatus.UNKNOWN] in
+ * every process, so on a phone whose credential is already dead *every* launch
+ * looks like a fresh unknown-to-rejected transition, and the notification
+ * would fire on every one of them -- the nag it exists to avoid.
+ *
+ * [Settings] is the real implementation; tests use a plain in-memory one so
+ * [SlotCredentialHealth] stays constructible without Android.
+ */
+interface RejectionReportLog {
+    fun wasRejectionReported(slot: ConnectionSlot): Boolean
+    fun setRejectionReported(slot: ConnectionSlot, reported: Boolean)
+}
+
+/** The default [RejectionReportLog]: enough to make [SlotCredentialHealth]
+ *  usable on its own, but it forgets on process death, so production must
+ *  supply the persisted one. */
+private class InMemoryRejectionReportLog : RejectionReportLog {
+    private val reportedSlots = mutableSetOf<ConnectionSlot>()
+
+    override fun wasRejectionReported(slot: ConnectionSlot): Boolean = slot in reportedSlots
+
+    override fun setRejectionReported(slot: ConnectionSlot, reported: Boolean) {
+        if (reported) reportedSlots += slot else reportedSlots -= slot
+    }
+}
+
+/**
  * Remembers, per [ConnectionSlot], what that slot's server last said about
  * this device's credential -- the standby half of which the app otherwise has
  * no way to see, since a slot nothing exercises is indistinguishable from a
@@ -34,8 +65,15 @@ enum class CredentialStatus {
  * Deliberately not folded into [ConnectionMonitor], which holds a single
  * process-wide "what am I doing right now" that flickers with every request;
  * this is a durable per-slot fact about a credential.
+ *
+ * [onNewRejection] fires once per rejection rather than once per observation,
+ * and the "once" is enforced here rather than trusted to callers, because the
+ * [reportLog] that makes it possible lives here too.
  */
-class SlotCredentialHealth {
+class SlotCredentialHealth(
+    private val reportLog: RejectionReportLog = InMemoryRejectionReportLog(),
+    private val onNewRejection: (ConnectionSlot) -> Unit = {},
+) {
 
     private val statuses = ConnectionSlot.entries.associateWith { MutableStateFlow(CredentialStatus.UNKNOWN) }
 
@@ -50,12 +88,24 @@ class SlotCredentialHealth {
      * relay" would be inventing a diagnosis out of a network failure.
      */
     fun record(slot: ConnectionSlot, outcome: RegistrationOutcome) {
-        val status = when (outcome) {
-            RegistrationOutcome.ACCEPTED -> CredentialStatus.LIVE
-            RegistrationOutcome.REJECTED -> CredentialStatus.REJECTED
+        when (outcome) {
+            RegistrationOutcome.ACCEPTED -> markLive(slot)
+            RegistrationOutcome.REJECTED -> markRejected(slot)
             RegistrationOutcome.UNREACHABLE -> return
         }
-        statuses.getValue(slot).value = status
+    }
+
+    private fun markLive(slot: ConnectionSlot) {
+        statuses.getValue(slot).value = CredentialStatus.LIVE
+        // So a credential that dies a second time is announced a second time.
+        reportLog.setRejectionReported(slot, false)
+    }
+
+    private fun markRejected(slot: ConnectionSlot) {
+        statuses.getValue(slot).value = CredentialStatus.REJECTED
+        if (reportLog.wasRejectionReported(slot)) return
+        reportLog.setRejectionReported(slot, true)
+        onNewRejection(slot)
     }
 
     /** Forgets what was known about [slot], because its credential has just
@@ -66,5 +116,6 @@ class SlotCredentialHealth {
      *  has been asked about it yet. */
     fun reset(slot: ConnectionSlot) {
         statuses.getValue(slot).value = CredentialStatus.UNKNOWN
+        reportLog.setRejectionReported(slot, false)
     }
 }

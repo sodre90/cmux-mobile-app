@@ -3,6 +3,20 @@ package com.sodre90.cmuxremote.data
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+/** Stands in for [com.sodre90.cmuxremote.data.Settings], which cannot be
+ *  constructed in a plain JVM test. Deliberately survives being handed to a
+ *  second [SlotCredentialHealth], which is how the tests below model the app
+ *  being relaunched. */
+private class FakeRejectionReportLog : RejectionReportLog {
+    private val reportedSlots = mutableSetOf<ConnectionSlot>()
+
+    override fun wasRejectionReported(slot: ConnectionSlot): Boolean = slot in reportedSlots
+
+    override fun setRejectionReported(slot: ConnectionSlot, reported: Boolean) {
+        if (reported) reportedSlots += slot else reportedSlots -= slot
+    }
+}
+
 class SlotCredentialHealthTest {
 
     /** Nothing has been asked yet, and "nothing asked" must not read as
@@ -80,5 +94,76 @@ class SlotCredentialHealthTest {
 
         assertEquals(CredentialStatus.LIVE, health.status(ConnectionSlot.RELAY).value)
         assertEquals(CredentialStatus.REJECTED, health.status(ConnectionSlot.DIRECT).value)
+    }
+
+    private fun healthReporting(
+        log: RejectionReportLog,
+        rejections: MutableList<ConnectionSlot>,
+    ) = SlotCredentialHealth(reportLog = log, onNewRejection = { rejections += it })
+
+    @Test
+    fun aRejectionIsAnnouncedOnceWithinAProcess() {
+        val rejections = mutableListOf<ConnectionSlot>()
+        val health = healthReporting(FakeRejectionReportLog(), rejections)
+
+        repeat(3) { health.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED) }
+
+        assertEquals(listOf(ConnectionSlot.DIRECT), rejections)
+    }
+
+    /**
+     * The case in-memory state alone gets wrong, and the reason
+     * [RejectionReportLog] exists: a phone whose credential is already dead
+     * sees a fresh UNKNOWN -> REJECTED transition on every single launch.
+     * Asserted against a report log that outlives the holder, not a re-created
+     * one, because a re-created one would pass while the app nagged daily.
+     */
+    @Test
+    fun aRejectionIsNotAnnouncedAgainInAFreshProcess() {
+        val log = FakeRejectionReportLog()
+        val rejections = mutableListOf<ConnectionSlot>()
+        healthReporting(log, rejections).record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+
+        healthReporting(log, rejections).record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+
+        assertEquals(listOf(ConnectionSlot.DIRECT), rejections)
+    }
+
+    @Test
+    fun aCredentialThatRecoversAndDiesAgainIsAnnouncedAgain() {
+        val log = FakeRejectionReportLog()
+        val rejections = mutableListOf<ConnectionSlot>()
+        val health = healthReporting(log, rejections)
+
+        health.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+        health.record(ConnectionSlot.DIRECT, RegistrationOutcome.ACCEPTED)
+        health.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+
+        assertEquals(listOf(ConnectionSlot.DIRECT, ConnectionSlot.DIRECT), rejections)
+    }
+
+    /** Re-pairing (or forgetting) clears the suppression too, so the same slot
+     *  dying again after a repair is announced rather than swallowed. */
+    @Test
+    fun resetClearsTheSuppressionAsWellAsTheStatus() {
+        val log = FakeRejectionReportLog()
+        val rejections = mutableListOf<ConnectionSlot>()
+        val health = healthReporting(log, rejections)
+
+        health.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+        health.reset(ConnectionSlot.DIRECT)
+        health.record(ConnectionSlot.DIRECT, RegistrationOutcome.REJECTED)
+
+        assertEquals(listOf(ConnectionSlot.DIRECT, ConnectionSlot.DIRECT), rejections)
+    }
+
+    @Test
+    fun anUnreachableServerAnnouncesNothing() {
+        val rejections = mutableListOf<ConnectionSlot>()
+        val health = healthReporting(FakeRejectionReportLog(), rejections)
+
+        health.record(ConnectionSlot.RELAY, RegistrationOutcome.UNREACHABLE)
+
+        assertEquals(emptyList<ConnectionSlot>(), rejections)
     }
 }
