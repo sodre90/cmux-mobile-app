@@ -48,9 +48,18 @@ class FallbackBridgeClient(
     private val onCredentialRejected: (ConnectionSlot) -> Unit = {},
 ) {
     /**
-     * Reports a 401 as that slot's credential being gone, which is what it
-     * unambiguously means: on DIRECT it is the agent's auth.Require, on RELAY
-     * the relay's own auth, and neither has any other reason to say it.
+     * Reports a 401 as that slot's credential being gone. On DIRECT that is
+     * exact -- the agent's auth.Require is the only thing that can say it.
+     *
+     * On RELAY there is one other source, and it is a known limitation rather
+     * than a bug worth machinery: the relay proxies these routes to the agent's
+     * TrustedHandler, whose RequireRelayToken (server/trusted.go) answers 401
+     * for a mismatched relay<->agent shared token, and the relay forwards that
+     * verbatim. So a misconfigured shared token would be reported as "re-pair
+     * the relay", which would not fix it. Rare -- that token is set once at
+     * setup and everything else is broken too when it is wrong -- and the
+     * report still points a human at the right machine. The launch probe is
+     * unaffected: /devices/register is not mounted on the trusted route set.
      *
      * Reporting only. A 401 must not change what [call] does, or the
      * "4xx never fails over" rule that keeps a non-idempotent write from
