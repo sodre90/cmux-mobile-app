@@ -153,4 +153,43 @@ class RenderGridDecoderTest {
     fun noModesMeansNormalCursorKeys() {
         assertFalse(RenderGridDecoder.decode(grid()).applicationCursorKeys)
     }
+
+    // -- mouse reporting (see mouseReportingEnabled): swipes become wheel events --
+
+    @Test
+    fun detectsMouseReportingFromAnyTrackingModeOn() {
+        assertTrue(decodeWithModes("""[{"ansi":false,"code":1000,"on":true}]""").mouseReporting)
+        assertTrue(decodeWithModes("""[{"ansi":false,"code":1002,"on":true}]""").mouseReporting)
+        assertTrue(decodeWithModes("""[{"ansi":false,"code":1003,"on":true}]""").mouseReporting)
+    }
+
+    @Test
+    fun opencodesFullMouseModeSetIsDetected() {
+        val modes = """[{"ansi":false,"code":1000,"on":true},{"ansi":false,"code":1002,"on":true},
+            {"ansi":false,"code":1003,"on":true},{"ansi":false,"code":1006,"on":true}]"""
+        assertTrue(decodeWithModes(modes).mouseReporting)
+    }
+
+    @Test
+    fun mouseTrackingOffMeansLocalScrolling() {
+        assertFalse(decodeWithModes("""[{"ansi":false,"code":1000,"on":false}]""").mouseReporting)
+        assertFalse(decodeWithModes("""[{"ansi":false,"code":1002,"on":false}]""").mouseReporting)
+    }
+
+    @Test
+    fun ansiMouseCodesDoNotCountAsDecMouseReporting() {
+        // 1000+ exist as ANSI (not DEC-private) modes too; only the DEC form counts.
+        assertFalse(decodeWithModes("""[{"ansi":true,"code":1000,"on":true}]""").mouseReporting)
+    }
+
+    @Test
+    fun sgrEncodingAloneIsNotMouseReporting() {
+        // 1006 only changes the wheel-sequence ENCODING; a tracking mode must be on too.
+        assertFalse(decodeWithModes("""[{"ansi":false,"code":1006,"on":true}]""").mouseReporting)
+    }
+
+    @Test
+    fun noModesMeansNoMouseReporting() {
+        assertFalse(RenderGridDecoder.decode(grid()).mouseReporting)
+    }
 }

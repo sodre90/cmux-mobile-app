@@ -93,6 +93,12 @@ data class DecodedGrid(
     val scrollbackLines: List<DecodedLine> = emptyList(),
     // DECCKM state, so the key bar can send the right arrow/Home/End encoding.
     val applicationCursorKeys: Boolean = false,
+    // Mouse-reporting state (DECSET 1000/1002/1003): when on, the TUI wants
+    // scroll input forwarded to it instead of the client scrolling its own
+    // buffer -- opencode runs this way, which is why its PTY scrollback stays
+    // empty and swiping must become PgUp/PgDn keys (see TerminalScreen; its
+    // parser ignores synthetic wheel events, verified live).
+    val mouseReporting: Boolean = false,
 )
 
 /**
@@ -108,6 +114,24 @@ internal fun applicationCursorKeysEnabled(modes: List<JsonElement>): Boolean =
         val code = (obj["code"] as? JsonPrimitive)?.intOrNull
         val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
         !ansi && code == 1 && on
+    }
+
+/**
+ * True when the TUI has requested mouse reporting (DEC private modes 1000
+ * normal tracking, 1002 button-event, or 1003 any-event): vertical swipes must
+ * be forwarded to the application rather than scrolling local scrollback. This
+ * mirrors how a trackpad behaves over such panes in cmux itself -- the wheel
+ * goes to the application, not the terminal viewport. (What we actually forward
+ * is PgUp/PgDn: synthetic wheel events are not reliably parsed by these TUIs --
+ * opencode prints them as text -- while the page keys scroll its history.)
+ */
+internal fun mouseReportingEnabled(modes: List<JsonElement>): Boolean =
+    modes.any { element ->
+        val obj = element as? JsonObject ?: return@any false
+        val ansi = (obj["ansi"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val code = (obj["code"] as? JsonPrimitive)?.intOrNull
+        val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
+        !ansi && (code == 1000 || code == 1002 || code == 1003) && on
     }
 
 object RenderGridDecoder {
@@ -134,6 +158,7 @@ object RenderGridDecoder {
             grid.cursor,
             scrollback,
             applicationCursorKeys = applicationCursorKeysEnabled(grid.modes),
+            mouseReporting = mouseReportingEnabled(grid.modes),
         )
     }
 

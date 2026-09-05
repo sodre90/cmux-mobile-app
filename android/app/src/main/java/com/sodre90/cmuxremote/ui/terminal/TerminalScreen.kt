@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import android.util.Log
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
@@ -60,6 +61,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -75,12 +77,15 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.sodre90.cmuxremote.BuildConfig
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import kotlinx.coroutines.delay
+
+private const val TAG = "TerminalSwipe"
 
 // Reference size for the surface-viewport resize math (decoupled from the display
 // zoom so pinching never re-resizes the surface).
@@ -290,6 +295,49 @@ fun TerminalScreen(
                                 detectTapGestures {
                                     focusRequester.requestFocus()
                                     keyboardController?.show()
+                                }
+                            }
+                            // Mouse-reporting panes (opencode et al.) own their scroll: a TUI
+                            // that enabled DECSET 1000/1002/1003 keeps its PTY scrollback empty,
+                            // so there is nothing local to swipe. Forwarding synthetic wheel
+                            // events is NOT the answer -- verified live: opencode enables the
+                            // modes but prints SGR/X10 sequences as literal text instead of
+                            // parsing them. What its parser DOES consume is PgUp/PgDn, which
+                            // scrolls its message history -- so vertical swipes become those
+                            // (see [SwipePager] for the accumulate/arm/throttle rules). Sent via
+                            // vm.sendText so the Ctrl chip's arming is not involved.
+                            //
+                            // Lives HERE, on the ancestor of the whole grid surface -- a
+                            // sibling Box layered underneath RenderGridView never sees a
+                            // single event (hit-testing picks the topmost path only),
+                            // which is exactly how the first attempt silently no-op'd.
+                            // Ancestors observe every event regardless of who consumes it,
+                            // same reason the pinch above works.
+                            .pointerInput(grid.mouseReporting) {
+                                if (!grid.mouseReporting) return@pointerInput
+                                if (BuildConfig.DEBUG) Log.d(TAG, "swipe handler armed (mouseReporting=true)")
+                                val pager = SwipePager(
+                                    armThresholdPx = 24.dp.toPx(),
+                                    pageStepPx = 72.dp.toPx(),
+                                    onStep = { up ->
+                                        if (BuildConfig.DEBUG) Log.d(TAG, "page step up=$up")
+                                        vm.sendText(if (up) "$ESC[5~" else "$ESC[6~")
+                                    },
+                                )
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    if (BuildConfig.DEBUG) Log.d(TAG, "down id=${down.id}")
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.count { it.pressed } >= 2) {
+                                            pager.cancel()
+                                            break // pinch owns it
+                                        }
+                                        val change =
+                                            event.changes.firstOrNull { it.id == down.id && it.pressed } ?: break
+                                        val delta = change.positionChange()
+                                        if (pager.onMove(delta.x, delta.y)) change.consume()
+                                    }
                                 }
                             },
                     ) {
