@@ -92,10 +92,39 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// gate on it — instead we forward whenever the render-grid bytes change.
 	lastGrid := fr.Grid
 
-	// Read loop (client input) runs in its own goroutine; it only reads.
-	go s.terminalReadLoop(ctx, cancel, c, id, deviceID, write)
+	// Output poll loop is the sole writer after the initial replay. Besides
+	// the ticker, an input nudge (below) triggers an immediate replay: without
+	// it, every forwarded keystroke/swipe waited out the remaining tick before
+	// its effect became visible, which made remote scrolling feel seconds
+	// behind the finger even though the PTY had already scrolled.
+	nudge := make(chan struct{}, 1)
+	go s.terminalReadLoop(ctx, cancel, c, id, deviceID, write, nudge)
 
-	// Output poll loop is the sole writer after the initial replay.
+	poll := func() bool {
+		next, err := s.fetchReplay(ctx, id)
+		if err != nil {
+			// A cancelled ctx means the connection is already closing
+			// (terminalReadLoop's disconnect handler called cancel,
+			// which SIGKILLs any in-flight `cmux rpc` subprocess via
+			// exec.CommandContext) -- that's an expected side effect
+			// of the disconnect already logged by the read loop, not
+			// a genuine RPC failure worth alarming about.
+			if ctx.Err() == nil {
+				slog.Warn("terminal: poll replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+			}
+			return false
+		}
+		if bytes.Equal(next.Grid, lastGrid) {
+			return true
+		}
+		lastGrid = next.Grid
+		next.Type = "output"
+		if err := write(next); err != nil {
+			slog.Warn("terminal: output write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+			return false
+		}
+		return true
+	}
 	t := time.NewTicker(s.terminalPoll)
 	defer t.Stop()
 	for {
@@ -104,26 +133,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			slog.Info("terminal: closed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds())
 			return
 		case <-t.C:
-			next, err := s.fetchReplay(ctx, id)
-			if err != nil {
-				// A cancelled ctx means the connection is already closing
-				// (terminalReadLoop's disconnect handler called cancel,
-				// which SIGKILLs any in-flight `cmux rpc` subprocess via
-				// exec.CommandContext) -- that's an expected side effect
-				// of the disconnect already logged by the read loop, not
-				// a genuine RPC failure worth alarming about.
-				if ctx.Err() == nil {
-					slog.Warn("terminal: poll replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
-				}
+			if !poll() {
 				return
 			}
-			if bytes.Equal(next.Grid, lastGrid) {
-				continue
+		case <-nudge:
+			// Coalesce any nudges that piled up while this replay was being
+			// considered; one immediate refresh serves them all.
+			for drained := true; drained; {
+				select {
+				case <-nudge:
+				default:
+					drained = false
+				}
 			}
-			lastGrid = next.Grid
-			next.Type = "output"
-			if err := write(next); err != nil {
-				slog.Warn("terminal: output write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+			if !poll() {
 				return
 			}
 		}
@@ -147,7 +170,7 @@ func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.
 	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(wire.TerminalDown) error) {
+func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(wire.TerminalDown) error, nudge chan<- struct{}) {
 	defer cancel()
 	for {
 		var up wire.TerminalUp
@@ -178,6 +201,14 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 		case "input":
 			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.input",
 				map[string]any{"surface_id": id, "text": up.Text})
+			// The PTY just changed (keystroke or page scroll): ask the poll
+			// loop for an immediate replay so the user sees the effect now
+			// rather than on the next tick. Non-blocking: a flood of inputs
+			// leaves at most one pending nudge, which is the point.
+			select {
+			case nudge <- struct{}{}:
+			default:
+			}
 		case "paste":
 			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.paste",
 				map[string]any{"surface_id": id, "text": up.Text})
