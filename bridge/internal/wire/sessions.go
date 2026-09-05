@@ -4,14 +4,17 @@ package wire
 // terminal surfaces (panes). Each pane's ID is a streamable terminal-surface id
 // the app opens via /terminal/{id}.
 type Workspace struct {
-	ID        string         `json:"id"`
-	CWD       string         `json:"cwd"`
-	Title     string         `json:"title"`
-	Preview   string         `json:"preview"`
-	HasUnread bool           `json:"has_unread"`
-	Attention string         `json:"attention,omitempty"`
-	YoloMode  string         `json:"yolo_mode,omitempty"`
-	Terminals []TerminalPane `json:"terminals"`
+	ID        string `json:"id"`
+	CWD       string `json:"cwd"`
+	Title     string `json:"title"`
+	Preview   string `json:"preview"`
+	HasUnread bool   `json:"has_unread"`
+	Attention string `json:"attention,omitempty"`
+	YoloMode  string `json:"yolo_mode,omitempty"`
+	// The user-picked color from cmux ("#rrggbb", "" when unset) — the app
+	// renders it as an identifying dot on the workspace card.
+	CustomColor string         `json:"custom_color,omitempty"`
+	Terminals   []TerminalPane `json:"terminals"`
 }
 
 // TerminalPane is one terminal surface within a workspace. ID is the cmux

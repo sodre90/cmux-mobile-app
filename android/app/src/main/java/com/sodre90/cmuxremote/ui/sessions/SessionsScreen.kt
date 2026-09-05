@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui.sessions
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -73,6 +74,7 @@ import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
+import com.sodre90.cmuxremote.ui.terminal.parseColor
 import com.sodre90.cmuxremote.ui.theme.AppColors
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
@@ -445,6 +447,18 @@ private fun WorkspaceCard(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
+                                // The workspace's cmux-picked color as an identifying
+                                // dot (same shape/size language as the unread dot),
+                                // ringed so pale fills stay visible on the card;
+                                // absent when cmux has no custom color for it.
+                                parseColor(ws.customColor)?.let { accent ->
+                                    Surface(
+                                        color = accent,
+                                        shape = CircleShape,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                        modifier = Modifier.size(10.dp),
+                                    ) {}
+                                }
                                 Text(
                                     // The workspace name, not the agent-status preview — the
                                     // attention stripe already conveys waiting/permission state.

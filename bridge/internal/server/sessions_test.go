@@ -22,12 +22,12 @@ import (
 const fakeWorkspaceList = `{
   "groups": [
     {"workspaces": [
-      {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,
+      {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,"custom_color":"#6A1B9A",
        "terminals":[{"id":"T1","current_directory":"/Users/u/prj/trading","title":"✳ Build options","is_focused":true,"is_ready":true}]}
     ]}
   ],
   "workspaces": [
-    {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,
+    {"id":"882CA6F0","current_directory":"/Users/u/prj/trading","preview":"Build options trading system","title":"✳ Build options","has_unread":true,"custom_color":"#6A1B9A",
      "terminals":[{"id":"T1","current_directory":"/Users/u/prj/trading","title":"✳ Build options","is_focused":true,"is_ready":true}]},
     {"id":"E43BBF04","current_directory":"/Users/u/prj/trading","preview":"shell","title":"~/prj/trading","has_unread":false,
      "terminals":[
@@ -112,6 +112,15 @@ func TestSessionsDedupAndShape(t *testing.T) {
 	if ws.CWD != "/Users/u/prj/trading" || ws.Title != "Build options" ||
 		ws.Preview != "Build options trading system" || !ws.HasUnread {
 		t.Fatalf("workspace 882CA6F0 fields wrong: %+v", ws)
+	}
+	// cmux's user-picked color must survive the bridge's reshaping (the app
+	// renders it as the card dot); a colorless workspace keeps "" and the
+	// wire omits the key entirely (omitempty).
+	if ws.CustomColor != "#6A1B9A" {
+		t.Fatalf("882CA6F0 custom_color = %q, want #6A1B9A", ws.CustomColor)
+	}
+	if empty := byID["EMPTY01"]; empty.CustomColor != "" {
+		t.Fatalf("EMPTY01 custom_color = %q, want empty", empty.CustomColor)
 	}
 	if len(ws.Terminals) != 1 {
 		t.Fatalf("882CA6F0 want 1 pane, got %d", len(ws.Terminals))

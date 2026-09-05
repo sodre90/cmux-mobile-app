@@ -88,12 +88,13 @@ func parseWorkspaces(raw []byte) ([]wire.Workspace, error) {
 					// Canonicalized so it matches feed.list's cwd byte-for-byte
 					// (see canonicalizeFeedCWDs) -- cmux reports the two
 					// symlinked differently for the same location.
-					CWD:       canonicalPath(cwd),
-					Title:     cleanTitle(firstString(v, "title")),
-					Preview:   preview,
-					HasUnread: hasUnread,
-					Attention: classifyAttention(preview),
-					Terminals: parsePanes(terms),
+					CWD:         canonicalPath(cwd),
+					Title:       cleanTitle(firstString(v, "title")),
+					Preview:     preview,
+					HasUnread:   hasUnread,
+					Attention:   classifyAttention(preview),
+					CustomColor: firstString(v, "custom_color"),
+					Terminals:   parsePanes(terms),
 				})
 			}
 			for _, child := range v {

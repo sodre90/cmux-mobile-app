@@ -14,7 +14,7 @@ class DtosTest {
     fun parsesWorkspaceWithInlinePanesAndUnknownKeys() {
         val js = """
             {"id":"ws-1","cwd":"/Users/p/proj","title":"build","preview":"Claude is waiting",
-             "has_unread":true,"future_field":42,
+             "has_unread":true,"custom_color":"#6A1B9A","future_field":42,
              "terminals":[
                {"id":"t-1","cwd":"/Users/p/proj","title":"build","focused":true,"ready":true,"kind":"agent"},
                {"id":"t-2","cwd":"/Users/p/proj","title":"~/proj","focused":false,"ready":false,"kind":"terminal"}
@@ -25,6 +25,7 @@ class DtosTest {
         assertEquals("/Users/p/proj", w.cwd)
         assertEquals("Claude is waiting", w.preview)
         assertTrue(w.hasUnread)
+        assertEquals("#6A1B9A", w.customColor)
         assertEquals(2, w.terminals.size)
         assertEquals("t-1", w.terminals[0].id)
         assertTrue(w.terminals[0].focused)
@@ -37,6 +38,8 @@ class DtosTest {
         assertEquals("ws-2", w.id)
         assertEquals("", w.preview)
         assertFalse(w.hasUnread)
+        // cmux omits custom_color for workspaces the user never colored.
+        assertEquals("", w.customColor)
         assertTrue(w.terminals.isEmpty())
     }
 

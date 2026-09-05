@@ -30,6 +30,9 @@ data class Workspace(
     val attention: String = "",
     /** This workspace's YOLO auto-reply mode (see [YoloMode]); "" means off. */
     @SerialName("yolo_mode") val yoloMode: String = "",
+    /** The workspace's user-picked color in cmux (`#rrggbb`); "" when unset.
+     *  Rendered as an identifying dot on the sessions card. */
+    @SerialName("custom_color") val customColor: String = "",
     val terminals: List<TerminalPane> = emptyList(),
 )
 
