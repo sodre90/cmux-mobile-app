@@ -372,12 +372,13 @@ fun TerminalScreen(
                             value = input,
                             onValueChange = { new ->
                                 val diff = diffToKeystrokes(input, new)
-                                android.util.Log.d(
-                                    "TerminalInput",
-                                    "onValueChange old=${describeForLog(
-                                        input
-                                    )} new=${describeForLog(new)} diff=${describeForLog(diff)}",
-                                )
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(
+                                        "TerminalInput",
+                                        "onValueChange old=${describeForLog(input)} " +
+                                            "new=${describeForLog(new)} diff=${describeForLog(diff)}",
+                                    )
+                                }
                                 if (diff.isNotEmpty()) sendKey(diff)
                                 input = new
                             },
