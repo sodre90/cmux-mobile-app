@@ -21,6 +21,8 @@ import com.sodre90.cmuxremote.data.e2e.ReplayWindow
 import com.sodre90.cmuxremote.data.e2e.nonce
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -80,6 +82,11 @@ private class FakeSessionsBridgeGateway : BridgeGateway {
     var bridge: FallbackBridgeClient? = null
     var events: EventsSocket? = null
     val monitor = ConnectionMonitor()
+
+    // Mutable so tests can drive the background/foreground transitions the
+    // real app gets from MainActivity's onStart/onStop.
+    val foreground = MutableStateFlow(true)
+
     override fun activeBridge(): FallbackBridgeClient? = bridge
     override fun anyBridgeConfigured(): Boolean = bridge != null
     override fun eventsSocket(slot: ConnectionSlot): EventsSocket? = if (slot == ConnectionSlot.RELAY) events else null
@@ -88,6 +95,7 @@ private class FakeSessionsBridgeGateway : BridgeGateway {
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
     override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
+    override fun appForeground(): StateFlow<Boolean> = foreground
 }
 
 /**
@@ -326,6 +334,76 @@ class SessionsViewModelTest {
         socket.send(frameFor("""{"type":"feed","name":"feed.updated"}""", 1L))
         waitUntil(timeoutMs = 3_000) { requestCount.get() == blockedAt + 1 }
         assertTrue(vm.state.value is UiState.Ready)
+    }
+
+    @Test
+    fun eventsSocketStaysDownWhileBackgroundedAndResumesOnForeground() {
+        val requestCount = AtomicInteger(0)
+        val openCount = AtomicInteger(0)
+        val socketRef = AtomicReference<WebSocket>()
+        val socketOpened = CountDownLatch(1)
+        val socketClosed = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/events" -> MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            openCount.incrementAndGet()
+                            socketRef.set(webSocket)
+                            socketOpened.countDown()
+                        }
+
+                        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                            socketClosed.countDown()
+                        }
+
+                        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                            socketClosed.countDown()
+                        }
+
+                        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                            socketClosed.countDown()
+                        }
+                    },
+                )
+                "/sessions" -> {
+                    requestCount.incrementAndGet()
+                    MockResponse().setBody("""{"workspaces":[]}""")
+                }
+                else -> MockResponse().setResponseCode(404) // /feed/pending; its failure is swallowed
+            }
+        }
+
+        val gw = FakeSessionsBridgeGateway().apply {
+            bridge = bridgeFor(server)
+            events = EventsSocket(OkHttpClient(), server.url("/").toString(), RecordingSession(secret), cipher)
+        }
+        gw.foreground.value = false // pocketed before the VM even exists
+
+        sessionsViewModel(gw, orderGateway)
+
+        // Backgrounded: the subscription must not dial /events at all -- this
+        // is what stops keepalive pings and event refetches burning cellular
+        // data with the screen off.
+        Thread.sleep(500)
+        assertEquals(0, openCount.get())
+
+        // Coming to the foreground opens the socket and event-driven refresh works.
+        gw.foreground.value = true
+        assertTrue(socketOpened.await(5, TimeUnit.SECONDS))
+        waitUntil { requestCount.get() >= 1 } // init's own refresh()
+        val baseline = requestCount.get()
+        socketRef.get().send(frameFor("""{"type":"feed","name":"feed.updated"}""", 0L))
+        waitUntil(timeoutMs = 3_000) { requestCount.get() == baseline + 1 }
+
+        // Backgrounding again tears the socket down...
+        gw.foreground.value = false
+        assertTrue(socketClosed.await(5, TimeUnit.SECONDS))
+
+        // ...and nothing re-dials while backgrounded: a still-running loop
+        // would have redialled well within its 5s backoff cap.
+        Thread.sleep(6_000)
+        assertEquals(1, openCount.get())
     }
 
     @Test

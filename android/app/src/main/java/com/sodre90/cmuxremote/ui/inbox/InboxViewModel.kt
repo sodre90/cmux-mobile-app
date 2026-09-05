@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -88,16 +89,21 @@ class InboxViewModel(
         // Re-fetch whenever the pending set may have changed -- see
         // [isPendingSetChangeSignal] for why that is every feed frame and not
         // just the attention-flagged ones. The socket is dropped when the app
-        // is backgrounded, so reconnect with backoff and re-sync pending items
-        // after each gap instead of dying on the first disconnect.
+        // is backgrounded (the subscription below is keyed on foreground --
+        // see SessionsViewModel.subscribeToEvents for the data-usage rationale),
+        // so reconnect with backoff and re-sync pending items after each gap
+        // instead of dying on the first disconnect.
         if (bridge.anyBridgeConfigured()) {
             viewModelScope.launch {
-                reconnector.run(
-                    openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
-                    onBeforeReconnect = { refresh() },
-                ) { frame ->
-                    if (isPendingSetChangeSignal(frame.type)) refreshRequests.tryEmit(Unit)
-                    true
+                bridge.appForeground().collectLatest { foreground ->
+                    if (!foreground) return@collectLatest
+                    reconnector.run(
+                        openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
+                        onBeforeReconnect = { refresh() },
+                    ) { frame ->
+                        if (isPendingSetChangeSignal(frame.type)) refreshRequests.tryEmit(Unit)
+                        true
+                    }
                 }
             }
         }

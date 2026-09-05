@@ -19,6 +19,8 @@ import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -57,6 +59,7 @@ class ViewModelConstructionTest {
         override fun connectionMonitor(): ConnectionMonitor = monitor
         override fun slotCredentials(): SlotCredentials = SlotCredentials()
         override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
+        override fun appForeground(): StateFlow<Boolean> = MutableStateFlow(true)
     }
 
     private class FakeWorkspaceOrderGateway : WorkspaceOrderGateway {

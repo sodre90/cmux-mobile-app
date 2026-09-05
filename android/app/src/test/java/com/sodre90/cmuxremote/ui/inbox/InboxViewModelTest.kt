@@ -14,6 +14,8 @@ import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -41,6 +43,7 @@ private class FakeInboxBridgeGateway(private val bridge: FallbackBridgeClient?) 
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
     override fun slotCredentialHealth(): SlotCredentialHealth = SlotCredentialHealth()
+    override fun appForeground(): StateFlow<Boolean> = MutableStateFlow(true)
 }
 
 /**

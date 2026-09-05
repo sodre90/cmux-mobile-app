@@ -11,6 +11,9 @@ import com.sodre90.cmuxremote.push.showCredentialRejectedNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
@@ -201,6 +204,21 @@ class AppContainer(
     )
 
     override fun slotCredentialHealth(): SlotCredentialHealth = sharedSlotCredentialHealth
+
+    // Starts true: a process alive with no activity yet (a push waking a
+    // service, tests) behaves like the old always-on app rather than a
+    // permanently-backgrounded one whose subscriptions would never start.
+    private val appForeground = MutableStateFlow(true)
+
+    /** Read by every streaming subscription (see [BridgeGateway.appForeground]);
+     *  written only by MainActivity's onStart/onStop -- single-activity app,
+     *  so activity STARTED/STOPPED is exactly "user has the app in front of
+     *  them". */
+    override fun appForeground(): StateFlow<Boolean> = appForeground.asStateFlow()
+
+    fun setAppForeground(value: Boolean) {
+        appForeground.value = value
+    }
 
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },

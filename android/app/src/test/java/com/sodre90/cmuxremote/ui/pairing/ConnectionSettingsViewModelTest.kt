@@ -14,6 +14,8 @@ import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -40,6 +42,7 @@ private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient
     override fun connectionMonitor(): ConnectionMonitor = monitor
     override fun slotCredentials(): SlotCredentials = SlotCredentials()
     override fun slotCredentialHealth(): SlotCredentialHealth = credentialHealth
+    override fun appForeground(): StateFlow<Boolean> = MutableStateFlow(true)
 }
 
 /** These tests only exercise the test-push flow, never font zoom -- a fixed

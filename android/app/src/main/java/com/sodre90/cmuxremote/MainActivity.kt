@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
+import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,10 @@ class MainActivity : ComponentActivity() {
     // this token, re-tapping such a notification silently did nothing.
     private var pendingDeepLinkToken by mutableIntStateOf(0)
 
+    // Held so onStart/onStop can flip the process-wide foreground flag the
+    // streaming subscriptions pause on (see AppContainer.setAppForeground).
+    private lateinit var container: AppContainer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -49,7 +54,7 @@ class MainActivity : ComponentActivity() {
             requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val container = (application as CmuxApp).container
+        container = (application as CmuxApp).container
         registerFcmToken()
 
         applyDeepLink(intent)
@@ -69,6 +74,20 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyDeepLink(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        container.setAppForeground(true)
+    }
+
+    // Pauses every streaming socket subscription and its event-driven
+    // refetches for as long as the user is away -- the single biggest lever
+    // on cellular data usage, since viewModelScope alone keeps them running
+    // with the screen off. Push notifications cover attention while paused.
+    override fun onStop() {
+        super.onStop()
+        container.setAppForeground(false)
     }
 
     private fun applyDeepLink(intent: Intent) {

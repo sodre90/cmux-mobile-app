@@ -1,5 +1,7 @@
 package com.sodre90.cmuxremote.data
 
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * The bridge-networking surface ViewModels consume -- narrow enough to fake
  * in a plain JVM test, unlike the concrete [AppContainer] (EncryptedSharedPreferences
@@ -7,6 +9,12 @@ package com.sodre90.cmuxremote.data
  */
 interface BridgeGateway {
     fun activeBridge(): FallbackBridgeClient?
+
+    /** True while any activity of this app is at least STARTED -- the signal
+     *  streaming subscriptions use to pause themselves when the user leaves
+     *  the app, so an idle phone stops paying keepalive pings and event-driven
+     *  refetch traffic on cellular. Push (FCM) covers attention while paused. */
+    fun appForeground(): StateFlow<Boolean>
     fun anyBridgeConfigured(): Boolean
     fun eventsSocket(slot: ConnectionSlot): EventsSocket?
     fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket?

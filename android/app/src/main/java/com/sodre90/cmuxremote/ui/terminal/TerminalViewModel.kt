@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -135,23 +136,32 @@ class TerminalViewModel(
         // leaving the user to tap Reconnect. A disconnect keeps the last grid
         // on screen — no jarring error page — while reconnection runs.
         job = viewModelScope.launch {
-            reconnector.run(
-                openSocket = { slot, onOpen ->
-                    bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect(onOpen)
-                },
-                onConnected = tracker::onConnected,
-                onDisconnected = tracker::onDisconnected,
-                onFrame = onFrame@{ frame ->
-                    if (frame.type == TerminalDownType.ACK) {
-                        tracker.onAck(frame.seq, frame.ok)
-                        return@onFrame false
-                    }
-                    val rg = frame.grid ?: return@onFrame false
-                    val content = TerminalContent(grid = RenderGridDecoder.decode(rg), styles = rg.styles)
-                    _state.value = UiState.Ready(content)
-                    true
-                },
-            )
+            // Keyed on app foreground (see SessionsViewModel.subscribeToEvents
+            // for the data rationale): backgrounded mid-session, the socket
+            // tears down instead of streaming output nobody is watching, and
+            // the replay snapshot resyncs it on return. A disconnect keeps
+            // the last grid on screen -- no jarring error page -- while the
+            // loop is down or reconnecting.
+            bridge.appForeground().collectLatest { foreground ->
+                if (!foreground) return@collectLatest
+                reconnector.run(
+                    openSocket = { slot, onOpen ->
+                        bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect(onOpen)
+                    },
+                    onConnected = tracker::onConnected,
+                    onDisconnected = tracker::onDisconnected,
+                    onFrame = onFrame@{ frame ->
+                        if (frame.type == TerminalDownType.ACK) {
+                            tracker.onAck(frame.seq, frame.ok)
+                            return@onFrame false
+                        }
+                        val rg = frame.grid ?: return@onFrame false
+                        val content = TerminalContent(grid = RenderGridDecoder.decode(rg), styles = rg.styles)
+                        _state.value = UiState.Ready(content)
+                        true
+                    },
+                )
+            }
         }
     }
 

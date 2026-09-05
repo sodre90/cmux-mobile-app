@@ -11,12 +11,14 @@ import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.inbox.isPendingInboxKind
+import com.sodre90.cmuxremote.ui.inbox.isPendingSetChangeSignal
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
@@ -67,6 +69,13 @@ class SessionsViewModel(
     private val refreshRequests =
         MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
+    // Like [refreshRequests] but only the badge-count refetch (GET /feed/pending),
+    // and only for `feed` frames -- the pending count cannot move on any other
+    // frame type, so non-feed agent activity (terminal output churn etc.)
+    // costs one /sessions fetch instead of two full-body requests per burst.
+    private val badgeRefreshRequests =
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     private val reconnector = SocketReconnector<EventFrame>(
         bridge.relayHealth(),
         monitor = bridge.connectionMonitor(),
@@ -83,6 +92,9 @@ class SessionsViewModel(
         refresh()
         viewModelScope.launch {
             refreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { autoRefresh() }
+        }
+        viewModelScope.launch {
+            badgeRefreshRequests.debounce(EVENT_REFRESH_DEBOUNCE_MS).collect { refreshPendingCount() }
         }
         subscribeToEvents()
     }
@@ -215,19 +227,47 @@ class SessionsViewModel(
             ?: _pendingCount.value
     }
 
+    /** Event-driven badge refetch -- same shape as [refreshPendingCount] but
+     *  resolving its own client, so the debounced collector can call it
+     *  without re-checking pairing. */
+    private suspend fun refreshPendingCount() {
+        val client = bridge.activeBridge() ?: return
+        refreshPendingCount(client)
+    }
+
     // Re-fetch on cmux agent activity: SessionStart/SessionEnd change which
     // workspaces exist, Notification/Stop change attention + preview. Mirrors
     // InboxViewModel's reconnect-with-backoff loop over the same /events
     // socket.
+    //
+    // The whole subscription is keyed on app foreground: viewModelScope keeps
+    // running with the screen off, and without this gate the open socket's
+    // 20s keepalive pings plus a /sessions+/feed/pending refetch pair per
+    // event burst would burn cellular data all day in the user's pocket.
+    // collectLatest tears the reconnect loop (and its socket, via the flow's
+    // awaitClose) down on background and rebuilds it on return; push covers
+    // attention meanwhile. Tests default [BridgeGateway.appForeground] to
+    // true, so they exercise the foreground branch unchanged.
     private fun subscribeToEvents() {
         if (!bridge.anyBridgeConfigured()) return
         viewModelScope.launch {
-            reconnector.run(
-                openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
-                onBeforeReconnect = { refreshRequests.tryEmit(Unit) }, // catch up on anything missed while disconnected
-            ) { frame ->
-                if (frame.type != "heartbeat") refreshRequests.tryEmit(Unit)
-                true
+            bridge.appForeground().collectLatest { foreground ->
+                if (!foreground) return@collectLatest
+                reconnector.run(
+                    openSocket = { slot, onOpen -> bridge.eventsSocket(slot)?.connect(onOpen) },
+                    // catch up on anything missed while disconnected -- including
+                    // the whole background gap, so both fetches re-run here.
+                    onBeforeReconnect = {
+                        refreshRequests.tryEmit(Unit)
+                        badgeRefreshRequests.tryEmit(Unit)
+                    },
+                ) { frame ->
+                    if (frame.type != "heartbeat") {
+                        refreshRequests.tryEmit(Unit)
+                        if (isPendingSetChangeSignal(frame.type)) badgeRefreshRequests.tryEmit(Unit)
+                    }
+                    true
+                }
             }
         }
     }
