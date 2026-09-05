@@ -4,9 +4,11 @@ import androidx.compose.ui.graphics.Color
 import com.sodre90.cmuxremote.model.Cell
 import com.sodre90.cmuxremote.model.DecodedLine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RenderGridViewTest {
@@ -103,6 +105,24 @@ class RenderGridViewTest {
         val capped = cappedScrollback(lines, max = 3)
         assertEquals(3, capped.size)
         assertEquals(lines.takeLast(3), capped)
+    }
+
+    @Test fun sticksToBottomOnlyWhenNearPreviousBottomAndNotUserScrolling() {
+        // At (or within tolerance of) the previous bottom, hands off: pin.
+        assertTrue(shouldStickToBottom(currentValue = 996, previousMax = 1000, userScrolling = false))
+        assertTrue(shouldStickToBottom(currentValue = 1000, previousMax = 1000, userScrolling = false))
+        assertTrue(shouldStickToBottom(currentValue = 0, previousMax = 0, userScrolling = false))
+
+        // Scrolled up beyond the tolerance: leave the position alone.
+        assertFalse(shouldStickToBottom(currentValue = 500, previousMax = 1000, userScrolling = false))
+        assertFalse(shouldStickToBottom(currentValue = 990, previousMax = 1000, userScrolling = false))
+
+        // The regression this guards: a streaming pane restarts the effect every
+        // frame; even "at the bottom" must NOT yank while a drag/fling is live.
+        assertFalse(shouldStickToBottom(currentValue = 1000, previousMax = 1000, userScrolling = true))
+
+        // First frame after composition: prevMax=0, and a live gesture still wins.
+        assertFalse(shouldStickToBottom(currentValue = 0, previousMax = 0, userScrolling = true))
     }
 
     // RenderGridView's per-row `remember(rendered, styleMap, colors, cur)` key relies on

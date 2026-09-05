@@ -95,12 +95,19 @@ fun RenderGridView(
     // Keyed on scroll.maxValue too, not just buffer -- maxValue also moves when the
     // viewport itself shrinks with no new content at all (e.g. the IME's own
     // suggestion strip growing taller as you type), and without that key this stayed
-    // pinned to the *old* bottom, leaving the real bottom (and the cursor) below the
-    // fold until you manually swiped down.
+    // pinned to the *old* bottom, leaving the real bottom (and the cursor) below
+    // the fold until you manually swiped down.
+    //
+    // Never pins while the user's own drag/fling is in progress: an actively
+    // streaming pane (an agent TUI redrawing many times a second) restarts this
+    // effect on every frame, and without that guard each restart snapped back
+    // to the bottom before an upward swipe could escape the 4px window -- the
+    // pane felt unscrollable whenever output was flowing.
     var prevMax by remember { mutableStateOf(0) }
     LaunchedEffect(buffer, scroll.maxValue) {
-        val wasAtBottom = scroll.value >= prevMax - 4
-        if (wasAtBottom) scroll.scrollTo(scroll.maxValue)
+        if (shouldStickToBottom(scroll.value, prevMax, scroll.isScrollInProgress)) {
+            scroll.scrollTo(scroll.maxValue)
+        }
         prevMax = scroll.maxValue
     }
     // The user has scrolled up from the live screen → show the jump-to-bottom FAB.
@@ -182,6 +189,19 @@ private val RuleChars = setOf(
 /** Keeps only the most recent [max] scrollback lines, oldest history dropped. */
 internal fun cappedScrollback(scrollbackLines: List<DecodedLine>, max: Int = MaxScrollbackLines): List<DecodedLine> =
     if (scrollbackLines.size <= max) scrollbackLines else scrollbackLines.takeLast(max)
+
+/**
+ * The stick-to-bottom rule, extracted for unit testing: pin to the new bottom
+ * after a frame only when the view was already at (within [tolerance] px of)
+ * the previous bottom AND the user isn't mid-gesture — an in-progress drag or
+ * fling always wins over auto-pinning.
+ */
+internal fun shouldStickToBottom(
+    currentValue: Int,
+    previousMax: Int,
+    userScrolling: Boolean,
+    tolerance: Int = 4,
+): Boolean = !userScrolling && currentValue >= previousMax - tolerance
 
 /** True if the row's only non-blank glyphs are box-drawing/ASCII rule characters. */
 internal fun isHorizontalRule(line: DecodedLine): Boolean {
