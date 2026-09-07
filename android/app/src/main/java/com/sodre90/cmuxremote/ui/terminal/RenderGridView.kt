@@ -83,11 +83,13 @@ fun RenderGridView(
     val hScroll = rememberScrollState()
     val scope = rememberCoroutineScope()
 
-    val buffer = remember(grid) { cappedScrollback(grid.scrollbackLines) + grid.lines }
     val cursorRow = grid.cursor?.takeIf { it.visible }?.let {
         it.row + minOf(grid.scrollbackLines.size, MaxScrollbackLines)
     }
     val cursorCol = grid.cursor?.column
+    val buffer = remember(grid, cursorRow) {
+        trimTrailingBlankRows(cappedScrollback(grid.scrollbackLines) + grid.lines, cursorRow)
+    }
 
     // Stick to bottom across frames: if we were at (or near) the previous bottom,
     // re-pin after the new content lays out. prevMax remembers the bottom before
@@ -189,6 +191,28 @@ private val RuleChars = setOf(
 /** Keeps only the most recent [max] scrollback lines, oldest history dropped. */
 internal fun cappedScrollback(scrollbackLines: List<DecodedLine>, max: Int = MaxScrollbackLines): List<DecodedLine> =
     if (scrollbackLines.size <= max) scrollbackLines else scrollbackLines.takeLast(max)
+
+/** True when the row is nothing but the decoder's unstyled padding — the same
+ *  "blank" [trimTrailingBlanks] uses, so the row and column trims agree. */
+private fun DecodedLine.isPadding(): Boolean = cells.all { it.char == ' ' && it.styleId == 0 }
+
+/**
+ * Drops the buffer's trailing padding rows, never cutting at or above [cursorIndex].
+ *
+ * The visible screen arrives sized to the Mac-side window, so on a phone viewport
+ * -- above all with the IME open, which can leave ~10 visible rows against a 40-row
+ * screen -- the buffer ends in a block of pad rows carrying no output. Sticking to
+ * the bottom then lands the viewport entirely inside that block and the grid reads
+ * as blank, exactly when the user has tapped to type. Ending the buffer at the last
+ * real row (or the cursor, whichever is lower) makes "the bottom" mean the live
+ * screen again.
+ */
+internal fun trimTrailingBlankRows(lines: List<DecodedLine>, cursorIndex: Int?): List<DecodedLine> {
+    val keepThrough = ((cursorIndex ?: -1) + 1).coerceIn(0, lines.size)
+    var end = lines.size
+    while (end > keepThrough && lines[end - 1].isPadding()) end--
+    return if (end == lines.size) lines else lines.subList(0, end)
+}
 
 /**
  * The stick-to-bottom rule, extracted for unit testing: pin to the new bottom

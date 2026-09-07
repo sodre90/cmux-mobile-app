@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -31,6 +32,49 @@ class RenderGridViewTest {
         assertNotNull(span)
         assertEquals(colors.cursor, span!!.item.background)
         assertEquals(colors.background, span.item.color)
+    }
+
+    // -- trailing blank ROWS (cmux-app-ury): the Mac-sized screen pads the buffer
+    // with empty rows, and pinning to the bottom used to land inside that padding,
+    // showing an apparently blank grid once the IME shrank the viewport.
+
+    private fun row(text: String) = DecodedLine(text.map { Cell(it, 0) })
+
+    private fun pad(n: Int) = List(n) { row("   ") }
+
+    @Test fun trimsTrailingPaddingRowsBelowTheLastRealRow() {
+        val buffer = listOf(row("$ build"), row("ok")) + pad(30)
+        val trimmed = trimTrailingBlankRows(buffer, cursorIndex = null)
+        assertEquals(listOf("$ build", "ok"), trimmed.map { it.text })
+    }
+
+    @Test fun neverTrimsAboveTheCursorRow() {
+        // Cursor parked on a blank line below the output -- an empty prompt row.
+        // Trimming it away would hide the caret the user is about to type at.
+        val buffer = listOf(row("$ build"), row("   "), row("   ")) + pad(20)
+        val trimmed = trimTrailingBlankRows(buffer, cursorIndex = 2)
+        assertEquals(3, trimmed.size)
+        assertEquals("$ build", trimmed[0].text)
+    }
+
+    @Test fun keepsStyledTrailingRows() {
+        // A colored status bar that runs to the edge is blank by character but not
+        // padding; dropping it would delete the bottom chrome of a full-screen TUI.
+        val statusBar = DecodedLine(listOf(Cell(' ', 7), Cell(' ', 7)))
+        val buffer = listOf(row("output"), statusBar)
+        assertEquals(buffer, trimTrailingBlankRows(buffer, cursorIndex = null))
+    }
+
+    @Test fun returnsSameInstanceWhenNothingToTrim() {
+        val buffer = listOf(row("a"), row("b"))
+        assertSame(buffer, trimTrailingBlankRows(buffer, cursorIndex = null))
+    }
+
+    @Test fun handlesAnAllBlankBufferAndOutOfRangeCursor() {
+        assertTrue(trimTrailingBlankRows(pad(5), cursorIndex = null).isEmpty())
+        // Cursor index past the end must not blow up or over-keep.
+        assertEquals(5, trimTrailingBlankRows(pad(5), cursorIndex = 99).size)
+        assertTrue(trimTrailingBlankRows(emptyList(), cursorIndex = 0).isEmpty())
     }
 
     @Test fun trimDropsTrailingDefaultBlanks() {
