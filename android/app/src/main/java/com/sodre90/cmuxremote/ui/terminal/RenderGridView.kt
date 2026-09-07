@@ -297,6 +297,7 @@ internal fun buildLine(
     colors: TerminalColors,
     cursorColumn: Int?,
 ): AnnotatedString = buildAnnotatedString {
+    val defaultBackground = defaultBackgroundOf(styles)
     val cells = line.cells
     var i = 0
     while (i < cells.size) {
@@ -315,7 +316,7 @@ internal fun buildLine(
             run.append(cells[i].char)
             i++
         }
-        val r = resolveSpan(styles[styleId], colors)
+        val r = resolveSpan(styles[styleId], colors, defaultBackground)
         withStyle(
             SpanStyle(
                 color = r.fg,
