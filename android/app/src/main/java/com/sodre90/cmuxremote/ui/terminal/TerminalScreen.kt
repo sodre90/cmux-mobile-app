@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import android.util.Log
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -36,6 +38,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -76,6 +79,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,6 +118,7 @@ fun TerminalScreen(
 ) {
     val state by vm.state.collectAsState()
     val yoloMode by vm.yoloMode.collectAsState()
+    val paneLabel by vm.paneLabel.collectAsState()
     val deliveryStatus by vm.deliveryStatus.collectAsState()
     val lostInputNotice by vm.lostInputNotice.collectAsState()
     // Not rendered anywhere -- kept only so diffToKeystrokes has an old value
@@ -187,7 +192,33 @@ fun TerminalScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(stringResource(R.string.terminal_title))
+                        // The workspace's color, same as its dot on the sessions
+                        // list, so the identity carries across the navigation.
+                        parseColor(paneLabel.color)?.let { accent ->
+                            Surface(
+                                color = accent,
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                modifier = Modifier.size(10.dp),
+                            ) {}
+                        }
+                        Column(modifier = Modifier.weight(1f, fill = false)) {
+                            Text(
+                                text = paneLabel.workspace.ifBlank { stringResource(R.string.terminal_title) },
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (paneLabel.pane.isNotBlank()) {
+                                Text(
+                                    text = paneLabel.pane,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                         yoloModeLabel(yoloMode)?.let { YoloBadge(it) }
                     }
                 },

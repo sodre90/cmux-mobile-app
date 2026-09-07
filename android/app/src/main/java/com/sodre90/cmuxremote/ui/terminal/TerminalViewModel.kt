@@ -13,6 +13,7 @@ import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
 import com.sodre90.cmuxremote.model.TerminalDown
 import com.sodre90.cmuxremote.model.TerminalDownType
+import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +38,32 @@ data class TerminalContent(
      *  but without this flag a frozen frame is pixel-identical to an idle agent. */
     val stale: Boolean = false,
 )
+
+/** Names the pane in the terminal's top bar: which workspace, which pane within
+ *  it, and the workspace's color so the identity carries over from the sessions
+ *  list. Blank fields render nothing, so a pane whose workspace could not be
+ *  resolved falls back to the plain "Terminal" title. */
+data class PaneLabel(
+    val workspace: String = "",
+    val pane: String = "",
+    val color: String = "",
+)
+
+/**
+ * Builds the top-bar label. The pane's own title is dropped when it merely
+ * repeats the workspace's -- cmux gives the agent pane the workspace name, so
+ * showing both would just print it twice.
+ */
+internal fun paneLabelOf(workspace: Workspace?, surfaceId: String): PaneLabel {
+    val ws = workspace ?: return PaneLabel()
+    val name = ws.title.ifBlank { ws.cwd.substringAfterLast('/') }
+    val pane = ws.terminals.firstOrNull { it.id == surfaceId }?.title.orEmpty()
+    return PaneLabel(
+        workspace = name,
+        pane = if (pane == name || pane.isBlank()) "" else pane,
+        color = ws.customColor,
+    )
+}
 
 /**
  * Flags the on-screen grid as the last known one rather than the live one.
@@ -97,6 +124,13 @@ class TerminalViewModel(
     private val _yoloMode = MutableStateFlow("")
     val yoloMode: StateFlow<String> = _yoloMode.asStateFlow()
 
+    // Which agent this pane belongs to. The bar said "Terminal" on every pane,
+    // so with several workspaces of 2-3 panes each -- and pushes deep-linking
+    // straight into one -- there was no way to tell what you were looking at
+    // without scrolling back to find a prompt.
+    private val _paneLabel = MutableStateFlow(PaneLabel())
+    val paneLabel: StateFlow<PaneLabel> = _paneLabel.asStateFlow()
+
     // The seq/ack bookkeeping behind the never-double-send guarantee for
     // non-idempotent terminal input -- see DeliveryTracker. Its log lines
     // carry only dispatch metadata (seq/type/sent-flag) plus a redacted text
@@ -135,6 +169,7 @@ class TerminalViewModel(
             try {
                 val ws = client.sessions().firstOrNull { ws -> ws.terminals.any { it.id == surfaceId } }
                 _yoloMode.value = ws?.yoloMode.orEmpty()
+                _paneLabel.value = paneLabelOf(ws, surfaceId)
                 ws?.let { cancelAttentionNotification(it.id) }
             } catch (_: Exception) {
                 // Best-effort display only; leave it blank on failure.
