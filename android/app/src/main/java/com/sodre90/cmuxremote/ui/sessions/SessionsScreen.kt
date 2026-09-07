@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -102,8 +104,19 @@ fun SessionsScreen(
                     ) {
                         TextButton(onClick = onOpenInbox) { Text(stringResource(R.string.sessions_inbox_button)) }
                     }
-                    TextButton(onClick = { vm.userRefresh() }) { Text(stringResource(R.string.action_refresh)) }
-                    TextButton(onClick = onSettings) { Text(stringResource(R.string.sessions_settings_button)) }
+                    // Icons, not labels: three text actions left so little room that
+                    // "cmux sessions" wrapped to two lines on a 360dp phone, so the
+                    // home screen looked broken from the first frame. Inbox keeps its
+                    // label because it anchors the pending badge above.
+                    IconButton(onClick = { vm.userRefresh() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_refresh))
+                    }
+                    IconButton(onClick = onSettings) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.sessions_settings_button),
+                        )
+                    }
                 },
             )
         },
@@ -462,21 +475,43 @@ private fun WorkspaceCard(
                                 Text(
                                     // The workspace name, not the agent-status preview — the
                                     // attention stripe already conveys waiting/permission state.
+                                    // Two lines: the name is the one thing this card exists to
+                                    // show, and at 360dp a single line ellipsised most of them.
                                     text = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
                                     style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
                                 )
                                 yoloModeLabel(ws.yoloMode)?.let { YoloBadge(it) }
                             }
-                            Text(
-                                text = ws.cwd,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = ws.cwd,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    // Ellipsise the HEAD, not the tail: sibling workspaces share
+                                    // a long parent path, so trimming the end dropped the only
+                                    // part that told them apart.
+                                    overflow = TextOverflow.StartEllipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                // Secondary chrome, moved off the title's line so it stops
+                                // competing with the name for the card's width.
+                                Text(
+                                    text = pluralStringResource(
+                                        R.plurals.pane_count,
+                                        ws.terminals.size,
+                                        ws.terminals.size,
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         if (ws.hasUnread) {
                             Surface(
@@ -485,11 +520,6 @@ private fun WorkspaceCard(
                                 modifier = Modifier.size(10.dp),
                             ) {}
                         }
-                        Text(
-                            text = pluralStringResource(R.plurals.pane_count, ws.terminals.size, ws.terminals.size),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                         // Long-press already opens this same menu (power-user shortcut);
                         // this icon is the discoverable affordance for everyone else.
                         IconButton(onClick = { showActionMenu = true }) {

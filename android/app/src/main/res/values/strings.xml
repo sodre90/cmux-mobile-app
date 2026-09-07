@@ -15,7 +15,7 @@
     <!-- Sessions screen -->
     <string name="sessions_title">cmux sessions</string>
     <string name="sessions_inbox_button">Inbox</string>
-    <string name="sessions_settings_button">Re-pair device</string>
+    <string name="sessions_settings_button">Connections</string>
     <string name="sessions_empty">No sessions</string>
     <string name="sessions_waiting_first_label">Waiting first</string>
     <string name="sessions_workspace_actions_description">Workspace actions</string>
