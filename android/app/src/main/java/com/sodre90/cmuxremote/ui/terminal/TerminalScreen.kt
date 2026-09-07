@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import android.util.Log
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -424,7 +426,43 @@ fun TerminalScreen(
                     }
                 }
             }
+            // Overlaid rather than laid out above the grid on purpose: the grid's
+            // measured height is what the resize RPC reports to the Mac, so a
+            // banner taking part in the layout would resize the real terminal
+            // every time the socket blipped.
+            if ((state as? UiState.Ready)?.data?.stale == true) {
+                StaleScreenBanner(modifier = Modifier.align(Alignment.TopCenter))
+            }
         }
+    }
+}
+
+/**
+ * Says the grid is the last known screen, not the live one. The terminal
+ * deliberately keeps the old frame through a reconnect instead of showing an
+ * error page -- which leaves a frozen frame looking exactly like an idle agent
+ * unless something says otherwise.
+ */
+@Composable
+private fun StaleScreenBanner(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .padding(8.dp)
+            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(10.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
+        Text(
+            text = stringResource(R.string.terminal_reconnecting_stale),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
     }
 }
 

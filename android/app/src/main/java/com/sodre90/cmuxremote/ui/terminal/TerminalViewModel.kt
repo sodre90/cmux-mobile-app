@@ -32,7 +32,28 @@ private const val TAG = "TerminalInput"
 data class TerminalContent(
     val grid: DecodedGrid,
     val styles: List<Style> = emptyList(),
+    /** The socket behind this grid is down, so it is the last known screen rather
+     *  than the live one. Keeping the grid on screen avoids a jarring error page,
+     *  but without this flag a frozen frame is pixel-identical to an idle agent. */
+    val stale: Boolean = false,
 )
+
+/**
+ * Flags the on-screen grid as the last known one rather than the live one.
+ *
+ * Only meaningful once something is rendered: before the first frame the screen
+ * is [UiState.Loading], which already says the same thing, and an [UiState.Error]
+ * is not showing a grid to caveat. Extracted from the ViewModel so the transition
+ * is testable without standing up a socket harness (same split as
+ * [com.sodre90.cmuxremote.ui.connectionStatusStrip]). A fresh frame carries the
+ * default `stale = false`, so arriving output clears this on its own.
+ */
+internal fun staleMarked(shown: UiState<TerminalContent>): UiState<TerminalContent> =
+    if (shown is UiState.Ready && !shown.data.stale) {
+        UiState.Ready(shown.data.copy(stale = true))
+    } else {
+        shown
+    }
 
 // [bridgeNotConfiguredMessage] is pre-resolved `strings.xml` text passed in by
 // the caller (see CmuxNavHost) rather than resolved here: a ViewModel has no
@@ -149,7 +170,10 @@ class TerminalViewModel(
                         bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect(onOpen)
                     },
                     onConnected = tracker::onConnected,
-                    onDisconnected = tracker::onDisconnected,
+                    onDisconnected = {
+                        tracker.onDisconnected()
+                        markScreenStale()
+                    },
                     onFrame = onFrame@{ frame ->
                         if (frame.type == TerminalDownType.ACK) {
                             tracker.onAck(frame.seq, frame.ok)
@@ -163,6 +187,10 @@ class TerminalViewModel(
                 )
             }
         }
+    }
+
+    private fun markScreenStale() {
+        _state.value = staleMarked(_state.value)
     }
 
     fun dismissLostInputNotice() = tracker.dismissLostInputNotice()

@@ -121,6 +121,7 @@
     <string name="terminal_wrap_on">Wrap: on</string>
     <string name="terminal_wrap_off">Wrap: off</string>
     <string name="action_reconnect">Reconnect</string>
+    <string name="terminal_reconnecting_stale">Reconnecting — last known screen</string>
     <string name="terminal_paste">Paste</string>
     <string name="terminal_ctrl_chip">Ctrl</string>
     <string name="terminal_ctrl_content_description">Ctrl modifier key</string>
