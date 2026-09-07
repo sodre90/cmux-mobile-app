@@ -188,9 +188,20 @@ fun CmuxNavHost(
                     fontZoom = it
                     testPushVm.saveFontZoom(it)
                 },
+                // Two ways in, and they need opposite exits. Opened from Sessions
+                // the stack is [SESSIONS, SETTINGS], so Done is just a pop --
+                // navigating instead pushed a SECOND Sessions entry, leaving two
+                // SessionsViewModels polling and a Back press that looked dead
+                // because it only swapped one identical screen for another. On
+                // first run SETTINGS is the start destination and there is no
+                // Sessions to go back to, so that path still has to navigate.
                 onDone = {
-                    navController.navigate(Routes.SESSIONS) {
-                        popUpTo(Routes.SETTINGS) { inclusive = true }
+                    if (navController.previousBackStackEntry?.destination?.route == Routes.SESSIONS) {
+                        navController.popBackStack()
+                    } else {
+                        navController.navigate(Routes.SESSIONS) {
+                            popUpTo(Routes.SETTINGS) { inclusive = true }
+                        }
                     }
                 },
             )
