@@ -159,6 +159,16 @@
     <string name="connection_relay_skipped">Relay recently unreachable — using Tailscale</string>
     <string name="connection_failed">No connection</string>
 
+    <!-- Failed-to-load states (see BridgeFailure / ErrorState): the sentence shown in
+         place of the raw `bridge HTTP 503: {"error":"agent_offline"}` text, which is
+         still reachable behind Details. -->
+    <string name="error_bridge_agent_offline">Your Mac\'s bridge is offline</string>
+    <string name="error_bridge_unauthorized">This device is no longer paired with your Mac</string>
+    <string name="error_bridge_unreachable">Couldn\'t reach your Mac</string>
+    <string name="error_bridge_unknown">Something went wrong</string>
+    <string name="action_retry">Retry</string>
+    <string name="action_details">Details</string>
+
     <!-- ViewModel-owned error/status fallback strings: injected into each ViewModel's
          constructor pre-resolved (see e.g. SessionsViewModel), since a ViewModel has no
          @Composable context to call stringResource() itself. Wired up in CmuxNavHost. -->
