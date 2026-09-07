@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import android.content.res.Configuration
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -42,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -68,6 +70,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
@@ -110,6 +113,8 @@ const val MIN_ZOOM = 1f
 const val MAX_ZOOM = 6f
 const val ZOOM_STEP = 0.25f
 
+private val LandscapeTopBarHeight = 40.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(
@@ -119,6 +124,7 @@ fun TerminalScreen(
     val state by vm.state.collectAsState()
     val yoloMode by vm.yoloMode.collectAsState()
     val paneLabel by vm.paneLabel.collectAsState()
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val deliveryStatus by vm.deliveryStatus.collectAsState()
     val lostInputNotice by vm.lostInputNotice.collectAsState()
     // Not rendered anywhere -- kept only so diffToKeystrokes has an old value
@@ -205,11 +211,15 @@ fun TerminalScreen(
                         Column(modifier = Modifier.weight(1f, fill = false)) {
                             Text(
                                 text = paneLabel.workspace.ifBlank { stringResource(R.string.terminal_title) },
-                                style = MaterialTheme.typography.titleLarge,
+                                style = if (landscape) {
+                                    MaterialTheme.typography.titleMedium
+                                } else {
+                                    MaterialTheme.typography.titleLarge
+                                },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            if (paneLabel.pane.isNotBlank()) {
+                            if (!landscape && paneLabel.pane.isNotBlank()) {
                                 Text(
                                     text = paneLabel.pane,
                                     style = MaterialTheme.typography.labelSmall,
@@ -231,16 +241,28 @@ fun TerminalScreen(
                         Text(stringResource(if (wrap) R.string.terminal_wrap_on else R.string.terminal_wrap_off))
                     }
                 },
+                // Landscape on a phone leaves ~360dp of height; the stock 64dp bar
+                // plus the status bar took a third of it, and the rows it cost are
+                // the whole reason to rotate. The pane subtitle drops with it.
+                expandedHeight = if (landscape) {
+                    LandscapeTopBarHeight
+                } else {
+                    TopAppBarDefaults.TopAppBarExpandedHeight
+                },
             )
         },
         bottomBar = {
             // A custom bottomBar (plain Column) does not consume insets the way
             // NavigationBar/BottomAppBar do, so apply them here: lift the bar above
             // the system navigation bar, and above the IME when it opens. Union (not
-            // chained padding) so the two bottom insets don't stack.
+            // chained padding) so the two bottom insets don't stack. Horizontal is
+            // included because a landscape 3-button nav bar sits on one *side*, and
+            // dropping that inset put Paste and PgDn underneath it -- misaligned with
+            // the grid above, which respects the side inset already.
             Column(
                 modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom),
+                    WindowInsets.navigationBars.union(WindowInsets.ime)
+                        .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
                 ),
             ) {
                 val appCursorKeys = (state as? UiState.Ready)?.data?.grid?.applicationCursorKeys ?: false
