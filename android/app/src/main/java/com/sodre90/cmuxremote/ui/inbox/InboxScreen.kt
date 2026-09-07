@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -39,6 +40,7 @@ import com.sodre90.cmuxremote.model.FeedQuestion
 import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
+import com.sodre90.cmuxremote.ui.ErrorState
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
@@ -81,14 +83,16 @@ fun InboxScreen(
                     actionError?.let {
                         Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                     }
-                    // Loading/Error deliberately render exactly like an empty Ready
-                    // list (see InboxViewModel's [_state] doc comment): this
-                    // preserves the pre-unification look (a plain "No pending
-                    // prompts" with the actionError banner above it, if any) --
-                    // InboxViewModel never actually reaches UiState.Error today.
                     when (val s = state) {
-                        is UiState.Loading, is UiState.Error -> Box(Modifier.fillMaxSize()) {
-                            Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
+                        is UiState.Loading -> Box(Modifier.fillMaxSize()) {
+                            CircularProgressIndicator(Modifier.align(Alignment.Center))
+                        }
+                        is UiState.Error -> Box(Modifier.fillMaxSize()) {
+                            ErrorState(
+                                rawMessage = s.message,
+                                onRetry = vm::retry,
+                                modifier = Modifier.align(Alignment.Center),
+                            )
                         }
                         is UiState.Ready -> if (s.data.isEmpty()) {
                             Box(Modifier.fillMaxSize()) {

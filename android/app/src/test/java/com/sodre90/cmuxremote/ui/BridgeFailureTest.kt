@@ -33,6 +33,10 @@ class BridgeFailureTest {
         ).forEach { assertEquals(it, BridgeFailure.Unreachable, classifyBridgeFailure(it)) }
     }
 
+    @Test fun recognisesTheNotConfiguredFallbackTheViewModelsInject() {
+        assertEquals(BridgeFailure.NotConfigured, classifyBridgeFailure("Bridge not configured"))
+    }
+
     @Test fun anythingElseFallsThroughToUnknown() {
         assertEquals(BridgeFailure.Unknown, classifyBridgeFailure("bridge HTTP 500: boom"))
         assertEquals(BridgeFailure.Unknown, classifyBridgeFailure(""))

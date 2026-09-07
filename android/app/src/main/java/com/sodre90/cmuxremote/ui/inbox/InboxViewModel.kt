@@ -50,13 +50,12 @@ class InboxViewModel(
 
     private val client = bridge.activeBridge()
 
-    // [UiState.Error] is never set here (see [refresh]) -- kept as the shared
-    // UiState<T> type for consistency with the other screens, but InboxScreen
-    // deliberately renders Loading and Error the same as an empty Ready list
-    // (see its doc comment) so this internal-modeling unification introduces
-    // no observable UI change: a failed fetch always surfaced as an error
-    // banner over the (possibly still-empty) list before this refactor too,
-    // never a full loading spinner or a full-screen error page.
+    // [UiState.Error] is set only when the *first* load fails, i.e. while there
+    // is still no list to blow away -- a later failed refresh keeps the list and
+    // surfaces itself through [actionError] instead. Before that distinction
+    // existed, a first-load failure left this on Loading forever, which
+    // InboxScreen rendered as "No pending prompts": an empty inbox asserted over
+    // a request that had never returned, on the very screen a push sends you to.
     private val _state = MutableStateFlow<UiState<List<PendingFeedItem>>>(UiState.Loading)
     val state: StateFlow<UiState<List<PendingFeedItem>>> = _state.asStateFlow()
 
@@ -111,6 +110,9 @@ class InboxViewModel(
 
     fun refresh() {
         val c = client ?: run {
+            // Same as SessionsViewModel: with no bridge there is nothing to wait
+            // for, so this is a settled failure rather than a load in progress.
+            if (_state.value is UiState.Loading) _state.value = UiState.Error(bridgeNotConfiguredMessage)
             _actionError.value = bridgeNotConfiguredMessage
             return
         }
@@ -120,11 +122,22 @@ class InboxViewModel(
                 _state.value = UiState.Ready(items)
                 _actionError.value = null
             } catch (ex: Exception) {
-                // Never demotes [state] to Error, whether or not a list was
-                // already showing -- see [_state]'s doc comment for why.
-                _actionError.value = ex.message ?: loadInboxFailedMessage
+                // Demotes to Error only while nothing has loaded yet; once a
+                // list is showing it stays -- see [_state]'s doc comment.
+                val message = ex.message ?: loadInboxFailedMessage
+                if (_state.value is UiState.Loading) _state.value = UiState.Error(message)
+                _actionError.value = message
             }
         }
+    }
+
+    /** Retry after a failed first load. Unlike [refresh] this drops back to
+     *  Loading so the button visibly does something -- safe because it is only
+     *  reachable from the error screen, where there is no list to lose. */
+    fun retry() {
+        _state.value = UiState.Loading
+        _actionError.value = null
+        refresh()
     }
 
     /** Answer a question item with the labels of the chosen options. */

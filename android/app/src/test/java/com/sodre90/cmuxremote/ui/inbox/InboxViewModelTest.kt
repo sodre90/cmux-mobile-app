@@ -47,13 +47,11 @@ private class FakeInboxBridgeGateway(private val bridge: FallbackBridgeClient?) 
 }
 
 /**
- * Covers the sealed-UiState rework of InboxViewModel: the previous
- * `_items`+`_error` split is now a single `state: StateFlow<UiState<List<PendingFeedItem>>>`
- * (internal typing only -- see [InboxViewModel]'s `_state` doc comment for
- * why this is deliberately *not* observably different: a fetch failure,
- * whether before or after anything has ever loaded, always surfaces through
- * [InboxViewModel.actionError] only, exactly like the old `_error` flow did,
- * never a full loading spinner or full-screen error page).
+ * Covers `state: StateFlow<UiState<List<PendingFeedItem>>>` and its interplay
+ * with [InboxViewModel.actionError]. The load that matters here is the *first*
+ * one: it settles on Error rather than sitting on Loading, so the screen stops
+ * asserting an empty inbox over a request that never returned. Once a list is
+ * showing, a later failed refresh keeps it and speaks through actionError only.
  */
 class InboxViewModelTest {
 
@@ -97,20 +95,34 @@ class InboxViewModelTest {
     )
 
     @Test
-    fun bridgeNotConfiguredSetsActionErrorAndLeavesStateAtLoading() {
+    fun bridgeNotConfiguredSettlesOnError() {
         val vm = inboxViewModel(FakeInboxBridgeGateway(null))
         assertEquals("Bridge not configured", vm.actionError.value)
-        assertTrue(vm.state.value is UiState.Loading)
+        assertEquals("Bridge not configured", (vm.state.value as UiState.Error).message)
     }
 
     @Test
-    fun firstLoadFailureSetsActionErrorAndLeavesStateAtLoading() {
+    fun firstLoadFailureSettlesOnErrorRatherThanLoadingForever() {
         server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
         val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
 
         waitUntil { vm.actionError.value != null }
 
-        assertTrue(vm.state.value is UiState.Loading)
+        assertTrue(vm.state.value is UiState.Error)
+    }
+
+    @Test
+    fun retryAfterAFailedFirstLoadGoesBackThroughLoadingToReady() {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+        server.enqueue(MockResponse().setBody("""{"items":[{"id":"i1","kind":"question"}]}"""))
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Error }
+
+        vm.retry()
+
+        waitUntil { vm.state.value is UiState.Ready }
+        assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })
+        assertEquals(null, vm.actionError.value)
     }
 
     @Test

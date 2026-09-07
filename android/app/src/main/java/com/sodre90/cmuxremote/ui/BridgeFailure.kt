@@ -13,6 +13,7 @@ import com.sodre90.cmuxremote.R
  * every one of these strings pre-resolved through its constructor.
  */
 enum class BridgeFailure(@StringRes val message: Int) {
+    NotConfigured(R.string.error_bridge_not_configured),
     AgentOffline(R.string.error_bridge_agent_offline),
     Unauthorized(R.string.error_bridge_unauthorized),
     Unreachable(R.string.error_bridge_unreachable),
@@ -31,6 +32,7 @@ enum class BridgeFailure(@StringRes val message: Int) {
 fun classifyBridgeFailure(raw: String): BridgeFailure {
     val text = raw.lowercase()
     return when {
+        "bridge not configured" in text -> BridgeFailure.NotConfigured
         "agent_offline" in text || "bridge http 503" in text -> BridgeFailure.AgentOffline
         "bridge http 401" in text || "bridge http 403" in text -> BridgeFailure.Unauthorized
         UnreachableMarkers.any { it in text } -> BridgeFailure.Unreachable
