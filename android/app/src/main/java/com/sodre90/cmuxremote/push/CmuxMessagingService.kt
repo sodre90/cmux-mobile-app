@@ -135,6 +135,16 @@ class CmuxMessagingService : FirebaseMessagingService() {
             .setContentIntent(pending)
             .addAction(R.drawable.ic_stat_cmux, getString(R.string.notification_open_inbox), openInbox)
             .setAutoCancel(true)
+            // Updating the tile must not buzz again. Repeat pushes for one
+            // pending prompt are ordinary here -- cmux emits more than one
+            // NeedsAttention frame for it, and a phone paired on both slots
+            // gets the relay's copy and the agent's own, out of two stores
+            // neither of which can see the other (cmux-app-17r). On a
+            // high-importance channel every one of those re-alerted: one
+            // prompt, a burst of buzzes. This suppresses only the re-alert of
+            // a notification already on screen; once it is dismissed or
+            // tapped, the next push alerts normally.
+            .setOnlyAlertOnce(true)
             .build()
 
         nm.notify(notificationId, notification)
