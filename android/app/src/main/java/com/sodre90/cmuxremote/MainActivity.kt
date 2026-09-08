@@ -62,7 +62,12 @@ class MainActivity : ComponentActivity() {
         container = (application as CmuxApp).container
         registerFcmToken()
 
-        applyDeepLink(intent)
+        // Only on a genuine start. A configuration change recreates the Activity
+        // with the SAME intent, so re-applying it re-navigates -- rotating in a
+        // pane threw the user back to whatever the notification had pointed at,
+        // however far they had navigated since. Later taps arrive via
+        // onNewIntent, which is the only other place a deep link comes from.
+        if (savedInstanceState == null) applyDeepLink(intent)
         setContent {
             CmuxTheme {
                 CmuxNavHost(
