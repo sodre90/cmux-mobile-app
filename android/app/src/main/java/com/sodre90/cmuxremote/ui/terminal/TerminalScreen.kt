@@ -212,6 +212,12 @@ fun TerminalScreen(
         }
     }
 
+    // Paste goes through sendKey like everything else, so the Ctrl chip still
+    // disarms on it, but is bracketed first when the pane asked for that.
+    val sendPaste: (String) -> Unit = { text ->
+        sendKey(bracketPaste(text, (state as? UiState.Ready)?.data?.grid?.bracketedPaste == true))
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -293,7 +299,7 @@ fun TerminalScreen(
                     onKey = sendKey,
                     onPaste = {
                         clipboard.getText()?.text?.let { text ->
-                            if (needsPasteConfirmation(text)) pendingPaste = text else sendKey(text)
+                            if (needsPasteConfirmation(text)) pendingPaste = text else sendPaste(text)
                         }
                     },
                 )
@@ -520,7 +526,7 @@ fun TerminalScreen(
             text = text,
             onConfirm = {
                 pendingPaste = null
-                sendKey(text)
+                sendPaste(text)
             },
             onDismiss = { pendingPaste = null },
         )
@@ -542,6 +548,24 @@ internal fun needsPasteConfirmation(text: String): Boolean =
 
 /** A line count for the dialog: trailing newlines are the copy's terminator,
  *  not empty lines the user needs warning about. */
+/**
+ * Wraps [text] in the bracketed-paste markers when the pane has DEC private
+ * mode 2004 on, so the receiving application takes it as one paste rather than
+ * as typing -- without which a multi-line paste runs a line at a time as it
+ * lands (cmux-app-ybb).
+ *
+ * The end marker is stripped from the payload first. Text carrying its own
+ * ESC[201~ would otherwise close the bracket early and let whatever followed
+ * arrive as ordinary typed input -- the point of bracketing is that the
+ * receiver decides what to do with the block, and that guarantee cannot be
+ * left to the contents of someone's clipboard.
+ */
+internal fun bracketPaste(text: String, enabled: Boolean): String =
+    if (enabled) BRACKETED_PASTE_START + text.replace(BRACKETED_PASTE_END, "") + BRACKETED_PASTE_END else text
+
+private val BRACKETED_PASTE_START = ESC + "[200~"
+private val BRACKETED_PASTE_END = ESC + "[201~"
+
 internal fun pasteLineCount(text: String): Int = text.trimEnd('\n').count { it == '\n' } + 1
 
 @Composable

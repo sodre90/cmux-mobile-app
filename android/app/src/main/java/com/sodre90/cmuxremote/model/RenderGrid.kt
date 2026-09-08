@@ -99,6 +99,9 @@ data class DecodedGrid(
     // empty and swiping must become PgUp/PgDn keys (see TerminalScreen; its
     // parser ignores synthetic wheel events, verified live).
     val mouseReporting: Boolean = false,
+    // DEC private mode 2004. Decides whether a paste is wrapped in
+    // ESC[200~ ... ESC[201~ -- see [bracketedPasteEnabled].
+    val bracketedPaste: Boolean = false,
 )
 
 /**
@@ -134,6 +137,25 @@ internal fun mouseReportingEnabled(modes: List<JsonElement>): Boolean =
         !ansi && (code == 1000 || code == 1002 || code == 1003) && on
     }
 
+/**
+ * True when DEC private mode 2004 (bracketed paste) is set: pasted text must
+ * then be wrapped in `ESC[200~ ... ESC[201~` so the receiving application takes
+ * the whole block as one paste instead of as typing. Without it a multi-line
+ * paste reaches a shell or an agent prompt as text plus newlines, and each line
+ * runs as it lands (cmux-app-ybb).
+ *
+ * Conditioned on the mode rather than sent unconditionally: a pane with
+ * bracketed paste OFF would receive the literal `ESC[200~` as input.
+ */
+internal fun bracketedPasteEnabled(modes: List<JsonElement>): Boolean =
+    modes.any { element ->
+        val obj = element as? JsonObject ?: return@any false
+        val ansi = (obj["ansi"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val code = (obj["code"] as? JsonPrimitive)?.intOrNull
+        val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
+        !ansi && code == 2004 && on
+    }
+
 object RenderGridDecoder {
     private const val BLANK = ' '
 
@@ -159,6 +181,7 @@ object RenderGridDecoder {
             scrollback,
             applicationCursorKeys = applicationCursorKeysEnabled(grid.modes),
             mouseReporting = mouseReportingEnabled(grid.modes),
+            bracketedPaste = bracketedPasteEnabled(grid.modes),
         )
     }
 
