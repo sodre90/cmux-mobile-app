@@ -51,11 +51,32 @@ func Dial(ctx context.Context, relayURL string, tlsCfg *tls.Config, header http.
 		HandshakeTimeout: 15 * time.Second,
 		NetDialContext:   attempted.dialer().DialContext,
 	}
-	ws, _, err := d.DialContext(ctx, relayURL, header)
+	ws, resp, err := d.DialContext(ctx, relayURL, header)
 	if err != nil {
-		return nil, attempted.annotate(err)
+		return nil, attempted.annotate(withHandshakeStatus(err, resp))
 	}
 	return yamux.Server(newWSConn(ws), yamuxCfg())
+}
+
+// withHandshakeStatus adds the HTTP status the relay actually answered with,
+// which "websocket: bad handshake" on its own throws away.
+//
+// That bare message is what a 502 from the relay's nginx looks like when its
+// backend is down, and it is also what a 401, a 404 and a redirect look like
+// -- so the agent log said only "something answered and it was not a 101",
+// and diagnosing an outage meant reproducing the request by hand. Costing an
+// hour of DNS archaeology on 2026-09-08 to arrive at "nginx returned 502
+// because the relay was down" is what prompted this.
+//
+// The status line only, never the body: a proxy error page is not this
+// agent's to relay into its log, and the code alone separates every case that
+// matters.
+func withHandshakeStatus(err error, resp *http.Response) error {
+	if resp == nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return fmt.Errorf("%w (relay answered HTTP %s)", err, resp.Status)
 }
 
 // dialAttempts records every address net.Dialer actually tried.

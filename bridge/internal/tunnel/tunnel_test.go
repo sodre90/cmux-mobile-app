@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestSessionStreamRoundTrip(t *testing.T) {
@@ -91,5 +93,48 @@ func TestDialAttemptsAnnotatePreservesCause(t *testing.T) {
 		if !strings.Contains(got.Error(), want) {
 			t.Errorf("annotated error missing %q: %v", want, got)
 		}
+	}
+}
+
+// cmux-app-to8: an agent log full of bare "websocket: bad handshake" says
+// only that something answered and it was not a 101. The status separates a
+// relay whose backend is down from one that refused the agent's credential.
+func TestDialErrorCarriesTheStatusTheRelayAnswered(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"backend down", http.StatusBadGateway, "502"},
+		{"credential refused", http.StatusUnauthorized, "401"},
+		{"wrong path", http.StatusNotFound, "404"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+
+			_, err := Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"), nil, nil)
+			if err == nil {
+				t.Fatal("want a dial error when the relay does not upgrade")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error should carry HTTP %s, got: %v", tc.want, err)
+			}
+			if !errors.Is(err, websocket.ErrBadHandshake) {
+				t.Errorf("annotating must not lose the cause, got: %v", err)
+			}
+		})
+	}
+}
+
+// A dial that never got a response at all has no status to report, and must
+// not pretend otherwise.
+func TestDialErrorWithNoResponseIsUnchanged(t *testing.T) {
+	cause := errors.New("connection refused")
+
+	if got := withHandshakeStatus(cause, nil); got != cause {
+		t.Errorf("want the error passed through unchanged, got %v", got)
 	}
 }
