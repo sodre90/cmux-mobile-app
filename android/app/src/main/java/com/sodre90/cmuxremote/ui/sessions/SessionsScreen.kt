@@ -1,6 +1,8 @@
 package com.sodre90.cmuxremote.ui.sessions
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -60,11 +63,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -421,7 +426,7 @@ private fun WorkspaceCard(
             attentionAccent(ws.attention)?.let { accent ->
                 Box(Modifier.fillMaxHeight().width(5.dp).background(accent))
             }
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f).animateContentSize()) {
                 Box {
                     // The attention stripe and unread dot below are color/shape-only
                     // (see attentionAccent) -- fold what they mean into this row's own
@@ -489,6 +494,11 @@ private fun WorkspaceCard(
                                     // show, and at 360dp a single line ellipsised most of them.
                                     text = ws.title.ifBlank { ws.preview.ifBlank { ws.cwd } },
                                     style = MaterialTheme.typography.titleMedium,
+                                    // Weight, the way a mail client marks an unread row. The
+                                    // dot this replaces was a second 10dp circle inches from
+                                    // the identity dot, so a workspace whose cmux colour is
+                                    // red read as unread when it was not.
+                                    fontWeight = if (ws.hasUnread) FontWeight.Bold else null,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
@@ -521,14 +531,26 @@ private fun WorkspaceCard(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                // Only cards that actually toggle get a chevron: a
+                                // single-pane card opens its pane on tap instead of
+                                // expanding (see singlePaneTarget), so an arrow there would
+                                // promise something the tap does not do.
+                                if (singlePaneTarget(ws) == null && ws.terminals.isNotEmpty()) {
+                                    val chevronTurn by animateFloatAsState(
+                                        targetValue = if (expanded) 180f else 0f,
+                                        label = "paneChevron",
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowDown,
+                                        // The row's own tap does the expanding and its state
+                                        // is already announced; a description here would add
+                                        // a second, redundant TalkBack stop.
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp).rotate(chevronTurn),
+                                    )
+                                }
                             }
-                        }
-                        if (ws.hasUnread) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.error,
-                                shape = CircleShape,
-                                modifier = Modifier.size(10.dp),
-                            ) {}
                         }
                         // Long-press already opens this same menu (power-user shortcut);
                         // this icon is the discoverable affordance for everyone else.
