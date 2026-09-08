@@ -24,6 +24,16 @@ import okio.ByteString.Companion.toByteString
  * Every frame is XChaCha20-Poly1305-encrypted binary (see data/e2e/Frame.kt) --
  * plaintext JSON-over-WS is no longer the wire format.
  */
+/**
+ * The bridge's `wire.CloseSurfaceGone`: this surface does not exist and never
+ * will again, so stop reconnecting to it. Mirrored from
+ * `bridge/internal/wire/terminal.go` -- keep the two in step.
+ *
+ * 4404 is in RFC 6455's private application range. It arrives with an empty
+ * reason string on purpose; the number carries the whole message.
+ */
+internal const val CLOSE_SURFACE_GONE = 4404
+
 class TerminalSocket(
     private val http: OkHttpClient,
     baseUrl: String,
@@ -62,7 +72,12 @@ class TerminalSocket(
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     webSocket.close(code, reason)
-                    close()
+                    // Closing with a cause rather than gracefully is what makes
+                    // the reconnect loop see this at all: a flow that simply
+                    // completes is indistinguishable from a dropped connection,
+                    // which is how the phone retried a dead surface every 5s
+                    // behind a spinner (cmux-app-34c).
+                    close(if (code == CLOSE_SURFACE_GONE) SubscriptionGoneException() else null)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {

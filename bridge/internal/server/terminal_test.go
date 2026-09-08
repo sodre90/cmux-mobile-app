@@ -1,12 +1,16 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -263,5 +267,95 @@ func TestTerminalMissingIDRejected(t *testing.T) {
 	_, _, err := websocket.DefaultDialer.Dial(u, map[string][]string{"Authorization": {"Bearer " + tok}})
 	if err == nil {
 		t.Fatal("expected dial to fail for empty surface id")
+	}
+}
+
+// closeGoneProbe stands a WebSocket up and hands closeIfSurfaceGone the given
+// error on the server side, returning the close code the client observes.
+// gorilla reports a peer that just hangs up as CloseAbnormalClosure (1006),
+// which is what "no close frame was sent" looks like from here.
+func closeGoneProbe(t *testing.T, serverErr error) int {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		closeIfSurfaceGone(c, serverErr)
+	}))
+	defer srv.Close()
+
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	armReadDeadline(t, c)
+	_, _, readErr := c.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(readErr, &closeErr) {
+		t.Fatalf("want a close error, got %v", readErr)
+	}
+	return closeErr.Code
+}
+
+// cmux-app-34c. Without this the socket just ended, which is indistinguishable
+// from a dropped connection, so the app backed off and reconnected to the same
+// dead surface every 5s -- showing a spinner the whole time.
+func TestASurfaceCmuxNoLongerHasIsClosedAsGone(t *testing.T) {
+	gone := &cmux.RPCError{Method: "mobile.terminal.replay", Code: "not_found", Message: "Terminal surface not found"}
+
+	if got := closeGoneProbe(t, gone); got != wire.CloseSurfaceGone {
+		t.Fatalf("close code = %d, want %d", got, wire.CloseSurfaceGone)
+	}
+}
+
+// Everything else can succeed on the next attempt, so it must keep closing the
+// old way and be retried. Telling a live pane it is gone is the worse failure.
+func TestARetryableFailureIsNotClosedAsGone(t *testing.T) {
+	cases := map[string]error{
+		"a different cmux refusal": &cmux.RPCError{Method: "mobile.terminal.replay", Code: "internal", Message: "boom"},
+		"cmux unreachable":         errors.New("dial /tmp/cmux.sock: connection refused"),
+		"a timeout":                context.DeadlineExceeded,
+	}
+	for name, err := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := closeGoneProbe(t, err); got == wire.CloseSurfaceGone {
+				t.Fatalf("%v was closed as surface-gone", err)
+			}
+		})
+	}
+}
+
+// The reason string stays empty: the relay is deliberately blind, and a close
+// code it can already infer from the connection ending tells it nothing new,
+// while text about the surface would.
+func TestTheGoneCloseCarriesNoReasonText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		closeIfSurfaceGone(c, &cmux.RPCError{Method: "m", Code: "not_found", Message: "Terminal surface not found"})
+	}))
+	defer srv.Close()
+
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	armReadDeadline(t, c)
+	_, _, readErr := c.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(readErr, &closeErr) {
+		t.Fatalf("want a close error, got %v", readErr)
+	}
+	if closeErr.Text != "" {
+		t.Fatalf("close reason = %q, want empty", closeErr.Text)
 	}
 }

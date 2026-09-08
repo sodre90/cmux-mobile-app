@@ -593,4 +593,92 @@ class SocketReconnectorTest {
         assertEquals(ConnectionStatus.Connecting(ConnectionSlot.RELAY), monitor.status.value)
         job.cancelAndJoin()
     }
+
+    // -- a subscription target that is gone (cmux-app-34c)
+
+    // The bug: an ended socket was an ended socket, so a surface cmux no longer
+    // had was retried every 5s for as long as the screen stayed open.
+    @Test
+    fun stopsForGoodWhenTheSubscriptionTargetIsGone() = runTest {
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
+        var attempts = 0
+        var gone = 0
+
+        val job = launch {
+            reconnector.run(
+                openSocket = { _, _ ->
+                    attempts++
+                    flow<Int> { throw SubscriptionGoneException() }
+                },
+                onGone = { gone++ },
+            ) { true }
+        }
+
+        delay(60_000)
+
+        assertEquals("must not retry a target that no longer exists", 1, attempts)
+        assertEquals(1, gone)
+        assertFalse("run() must return rather than keep looping", job.isActive)
+    }
+
+    // The transport was fine -- it delivered the news. Penalizing RELAY here
+    // would push every other subscription in the app onto DIRECT because one
+    // pane was closed on the Mac.
+    @Test
+    fun aGoneTargetDoesNotPenalizeRelay() = runTest {
+        val health = RelayHealth()
+        val reconnector = SocketReconnector<Int>(health, now = { currentTime })
+
+        val job = launch {
+            reconnector.run(openSocket = { _, _ -> flow<Int> { throw SubscriptionGoneException() } }) { true }
+        }
+        delay(1_000)
+
+        assertFalse("RELAY must not be marked down", health.isDown(currentTime))
+        job.cancelAndJoin()
+    }
+
+    // Ordinary failures must keep retrying: the whole point of separating the
+    // two is that a reachable-again bridge still comes back on its own.
+    @Test
+    fun anOrdinaryFailureStillRetriesForever() = runTest {
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
+        var attempts = 0
+        var gone = 0
+
+        val job = launch {
+            reconnector.run(
+                openSocket = { _, _ ->
+                    attempts++
+                    flow<Int> { throw IOException("relay unreachable") }
+                },
+                onGone = { gone++ },
+            ) { true }
+        }
+
+        delay(60_000)
+
+        assertTrue("want many retries, got $attempts", attempts > 5)
+        assertEquals(0, gone)
+        job.cancelAndJoin()
+    }
+
+    // onDisconnected fires for a gone target too, so whatever a caller tears
+    // down on disconnect is not left dangling by the loop ending.
+    @Test
+    fun disconnectStillReportedBeforeGone() = runTest {
+        val reconnector = SocketReconnector<Int>(RelayHealth(), now = { currentTime })
+        val order = mutableListOf<String>()
+
+        launch {
+            reconnector.run(
+                openSocket = { _, _ -> flow<Int> { throw SubscriptionGoneException() } },
+                onDisconnected = { order.add("disconnected") },
+                onGone = { order.add("gone") },
+            ) { true }
+        }
+        delay(1_000)
+
+        assertEquals(listOf("disconnected", "gone"), order)
+    }
 }

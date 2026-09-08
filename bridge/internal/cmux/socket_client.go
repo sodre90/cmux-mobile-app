@@ -281,7 +281,7 @@ func (sc *socketConn) attemptLocked(ctx context.Context, method, id string, line
 		if resp.Error != nil {
 			code, msg = resp.Error.Code, resp.Error.Message
 		}
-		return nil, true, fmt.Errorf("cmux rpc %s: %s: %s", method, code, msg)
+		return nil, true, &RPCError{Method: method, Code: code, Message: msg}
 	}
 	return resp.Result, true, nil
 }

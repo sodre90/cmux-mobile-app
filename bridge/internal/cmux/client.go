@@ -9,11 +9,42 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"sync"
 )
+
+// CodeNotFound is cmux's error code for a surface, workspace or other object
+// it does not have. Unlike a transport failure it is terminal for that id:
+// retrying the same call can only fail the same way (cmux-app-34c).
+const CodeNotFound = "not_found"
+
+// RPCError is a refusal from cmux itself -- a well-formed response saying no --
+// as opposed to a failure to reach it. Code is cmux's own error code, which is
+// what callers should branch on rather than matching text in Error().
+//
+// Only the fast-path socket transport produces one. The `cmux rpc` subprocess
+// fallback has nothing but the CLI's stderr to go on, so a caller that must
+// distinguish codes should not assume every failure is typed.
+type RPCError struct {
+	Method  string
+	Code    string
+	Message string
+}
+
+// Error keeps the exact wording the untyped fmt.Errorf produced, so log lines
+// and any test matching on them are unchanged.
+func (e *RPCError) Error() string {
+	return fmt.Sprintf("cmux rpc %s: %s: %s", e.Method, e.Code, e.Message)
+}
+
+// IsNotFound reports whether err is cmux telling us the object is gone.
+func IsNotFound(err error) bool {
+	var rpcErr *RPCError
+	return errors.As(err, &rpcErr) && rpcErr.Code == CodeNotFound
+}
 
 // Client invokes the cmux CLI. The zero value uses "cmux" from PATH.
 type Client struct {

@@ -30,6 +30,7 @@ import okio.ByteString.Companion.toByteString
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -118,6 +119,49 @@ class TerminalSocketTest {
             assertTrue(String(opened, Charsets.UTF_8).contains("\"type\":\"input\""))
 
             job.cancelAndJoin()
+        }
+    }
+
+    /** Connects and returns whatever ended the flow, or null for a clean end. */
+    private fun collectUntilClosedBy(closeCode: Int): Throwable? = runBlocking {
+        server.enqueue(
+            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    webSocket.close(closeCode, "")
+                }
+            }),
+        )
+        val ts = TerminalSocket(
+            OkHttpClient(),
+            server.url("/").toString(),
+            "surface-1",
+            SharedSecretSession(secret),
+            cipher,
+        )
+        withTimeout(5_000) {
+            withContext(Dispatchers.IO) {
+                runCatching { ts.connect().collect { } }.exceptionOrNull()
+            }
+        }
+    }
+
+    // cmux-app-34c: onClosing threw the close code away, so a surface the
+    // bridge had just declared gone ended the flow exactly like a dropped
+    // connection -- and the reconnect loop dutifully dialled it again.
+    @Test
+    fun surfaceGoneCloseCodeEndsTheFlowWithADistinguishableFailure() {
+        assertTrue(
+            "want SubscriptionGoneException",
+            collectUntilClosedBy(CLOSE_SURFACE_GONE) is SubscriptionGoneException,
+        )
+    }
+
+    // Any other close is still a plain end-of-stream, which the reconnect loop
+    // treats as a disconnect and retries. That is the behaviour to preserve.
+    @Test
+    fun anOrdinaryCloseStillEndsTheFlowCleanly() {
+        for (code in listOf(1000, 1001, 1011)) {
+            assertNull("close $code must not look like a gone surface", collectUntilClosedBy(code))
         }
     }
 }

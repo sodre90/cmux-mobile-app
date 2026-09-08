@@ -21,6 +21,18 @@ private const val RELAY_STABLE_MS = 2_000L
 private const val RELAY_DROP_THRESHOLD = 3
 
 /**
+ * Thrown by a socket flow to say the thing it subscribes to is gone for good,
+ * as opposed to unreachable. [SocketReconnector.run] returns instead of backing
+ * off, and does not penalize [RelayHealth] -- the transport was fine.
+ *
+ * Only [TerminalSocket] raises one today, on the bridge's CLOSE_SURFACE_GONE.
+ * The workspace-events and inbox subscriptions are unaffected: they subscribe
+ * to the bridge itself, which cannot go missing the way one pane can, so
+ * nothing on those paths can throw this.
+ */
+class SubscriptionGoneException : Exception("subscription target no longer exists")
+
+/**
  * Shared reconnect loop for the app's streaming socket subscriptions
  * (terminal output, workspace events, inbox events). Owns: slot selection
  * that prefers DIRECT while RELAY is in [relayHealth]'s penalty window,
@@ -60,7 +72,8 @@ class SocketReconnector<T>(
 
     /**
      * Runs until the enclosing coroutine is cancelled ([CancellationException]
-     * always rethrows). Each iteration: picks a primary [ConnectionSlot],
+     * always rethrows) or the subscription target is gone (see [onGone] below).
+     * Each iteration: picks a primary [ConnectionSlot],
      * opens it via [openSocket] (falling back to the other slot if the
      * primary returns null, e.g. not configured), and collects frames
      * through [onFrame] -- whose return value says whether this frame
@@ -69,6 +82,10 @@ class SocketReconnector<T>(
      * connection arrives; [onDisconnected] fires once the socket ends
      * (gracefully or not); [onBeforeReconnect] fires right before the next
      * connect attempt, after the backoff delay.
+     *
+     * The one other way this returns is [SubscriptionGoneException] from the
+     * flow: [onGone] fires (after [onDisconnected]) and the loop ends for good,
+     * because retrying something that no longer exists can only fail again.
      *
      * [openSocket] is handed a callback to invoke when its socket actually
      * opens, which is what promotes [monitor] from connecting to connected.
@@ -82,6 +99,7 @@ class SocketReconnector<T>(
         onConnected: () -> Unit = {},
         onDisconnected: () -> Unit = {},
         onBeforeReconnect: () -> Unit = {},
+        onGone: (SubscriptionGoneException) -> Unit = {},
         onFrame: suspend (T) -> Boolean,
     ) {
         var backoff = initialBackoffMs
@@ -151,6 +169,14 @@ class SocketReconnector<T>(
                 // caller being cancelled, or the flow cancelling itself --
                 // must propagate.
                 if (!((relayRecovered || credentialsReplaced) && currentCoroutineContext().isActive)) throw e
+            } catch (e: SubscriptionGoneException) {
+                // Caught ahead of the generic handler below so RelayHealth is
+                // left alone: a surface that no longer exists says nothing
+                // about the slot that carried the news, and penalizing RELAY
+                // for it would push every other subscription onto DIRECT.
+                onDisconnected()
+                onGone(e)
+                return
             } catch (e: Exception) {
                 monitor.failed(if (e is IOException) e.describeForUser() else e.message.orEmpty())
                 if (primarySlot == ConnectionSlot.RELAY) {

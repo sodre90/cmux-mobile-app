@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/metrics"
 	"github.com/sodre90/cmux-bridge/internal/wire"
@@ -80,6 +81,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if ctx.Err() == nil {
 			slog.Warn("terminal: initial replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+			closeIfSurfaceGone(c, err)
 		}
 		return
 	}
@@ -111,6 +113,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// a genuine RPC failure worth alarming about.
 			if ctx.Err() == nil {
 				slog.Warn("terminal: poll replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+				closeIfSurfaceGone(c, err)
 			}
 			return false
 		}
@@ -151,6 +154,32 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// closeWriteTimeout bounds the close control frame's write. Short on purpose:
+// the connection is being abandoned either way, so waiting on a peer that has
+// already stopped reading buys nothing.
+const closeWriteTimeout = time.Second
+
+// closeIfSurfaceGone answers a replay failure that means "this surface does not
+// exist" with wire.CloseSurfaceGone, so the client stops reconnecting to an id
+// cmux will never have again. Anything else -- a timeout, a cmux restart, a
+// transport fault -- is left to close ordinarily and be retried, because it can
+// succeed next time.
+//
+// The close frame goes out via WriteControl, which gorilla permits concurrently
+// with the poll loop's data writes, so it does not take writeMu. A failure to
+// send it is ignored on purpose: the socket is already going away, and the
+// pre-existing behaviour (client retries) is the fallback.
+func closeIfSurfaceGone(c *websocket.Conn, err error) {
+	if !cmux.IsNotFound(err) {
+		return
+	}
+	_ = c.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(wire.CloseSurfaceGone, ""),
+		time.Now().Add(closeWriteTimeout),
+	)
 }
 
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is

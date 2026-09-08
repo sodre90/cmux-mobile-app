@@ -94,6 +94,7 @@ class ViewModelConstructionTest {
                 FakeTerminalDisplayGateway(),
                 surfaceId = "surface-1",
                 bridgeNotConfiguredMessage = "unused",
+                surfaceGoneMessage = "unused",
             )
         }
     }

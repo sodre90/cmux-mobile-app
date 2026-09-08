@@ -289,6 +289,7 @@ fun CmuxNavHost(
         ) { entry ->
             val id = entry.arguments?.getString("id").orEmpty()
             val bridgeNotConfigured = stringResource(R.string.error_bridge_not_configured)
+            val surfaceGone = stringResource(R.string.error_terminal_surface_gone)
             val context = LocalContext.current
             val vm: TerminalViewModel = viewModel(
                 factory = viewModelFactory {
@@ -298,6 +299,7 @@ fun CmuxNavHost(
                             container,
                             id,
                             bridgeNotConfigured,
+                            surfaceGone,
                             cancelAttentionNotification = { workspaceId ->
                                 context.getSystemService(NotificationManager::class.java)
                                     ?.cancel(attentionNotificationId(workspaceId, surfaceId = null))

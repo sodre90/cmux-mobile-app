@@ -112,14 +112,16 @@ internal fun staleMarked(shown: UiState<TerminalContent>): UiState<TerminalConte
         shown
     }
 
-// [bridgeNotConfiguredMessage] is pre-resolved `strings.xml` text passed in by
-// the caller (see CmuxNavHost) rather than resolved here: a ViewModel has no
-// @Composable context to call `stringResource()` itself.
+// [bridgeNotConfiguredMessage] and [surfaceGoneMessage] are pre-resolved
+// `strings.xml` text passed in by the caller (see CmuxNavHost) rather than
+// resolved here: a ViewModel has no @Composable context to call
+// `stringResource()` itself.
 class TerminalViewModel(
     private val bridge: BridgeGateway,
     private val terminalDisplay: TerminalDisplayGateway,
     private val surfaceId: String,
     private val bridgeNotConfiguredMessage: String,
+    private val surfaceGoneMessage: String,
     private val cancelAttentionNotification: (workspaceId: String) -> Unit = {},
 ) : ViewModel() {
 
@@ -248,6 +250,13 @@ class TerminalViewModel(
                         tracker.onDisconnected()
                         markScreenStale()
                     },
+                    // Replaces the grid outright rather than caveating it as
+                    // stale: a pane that no longer exists is not coming back,
+                    // and the spinner this used to leave up said nothing at
+                    // all (cmux-app-34c). UiState.Error's Reconnect button is
+                    // still the way out, now one deliberate tap instead of a
+                    // silent retry every 5s.
+                    onGone = { _state.value = UiState.Error(surfaceGoneMessage) },
                     onFrame = onFrame@{ frame ->
                         if (frame.type == TerminalDownType.ACK) {
                             tracker.onAck(frame.seq, frame.ok)

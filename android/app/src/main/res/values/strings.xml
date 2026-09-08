@@ -183,6 +183,7 @@
          constructor pre-resolved (see e.g. SessionsViewModel), since a ViewModel has no
          @Composable context to call stringResource() itself. Wired up in CmuxNavHost. -->
     <string name="error_bridge_not_configured">Bridge not configured</string>
+    <string name="error_terminal_surface_gone">This pane was closed on the Mac, so there is nothing left to show. Go back to pick another one.</string>
     <string name="error_rename_failed">Rename failed</string>
     <string name="error_set_yolo_mode_failed">Setting YOLO mode failed</string>
     <string name="error_load_sessions_failed">Failed to load sessions</string>

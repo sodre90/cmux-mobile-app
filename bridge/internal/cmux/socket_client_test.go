@@ -443,3 +443,75 @@ exit 1
 		t.Fatalf("an unreachable cmux must not be reported as a slow one: %v", err)
 	}
 }
+
+// cmux-app-34c: the phone reconnected to a surface cmux no longer had, every
+// 5s, because "the object is gone" was indistinguishable from "the call
+// failed". The code was on the response all along and fmt.Errorf flattened it.
+func TestANotFoundResponseIsTypedAsSuch(t *testing.T) {
+	startFakeCmuxSocket(t, fakeSocketPassword, func(string, json.RawMessage) (json.RawMessage, string, string) {
+		return nil, "not_found", "Terminal surface not found"
+	})
+	c := &Client{Bin: testutil.WriteFakeCmux(t, "#!/bin/sh\nexit 1\n"), FastPath: true}
+
+	_, err := c.Rpc(context.Background(), "mobile.terminal.replay", nil)
+
+	if !IsNotFound(err) {
+		t.Fatalf("IsNotFound(%v) = false, want true", err)
+	}
+}
+
+// Every other refusal must stay retryable: treating one as terminal would
+// strand a live pane on an error screen.
+func TestOtherRefusalsAreNotNotFound(t *testing.T) {
+	for _, code := range []string{"internal", "invalid_params", "unauthorized", "unknown"} {
+		t.Run(code, func(t *testing.T) {
+			startFakeCmuxSocket(t, fakeSocketPassword, func(string, json.RawMessage) (json.RawMessage, string, string) {
+				return nil, code, "nope"
+			})
+			c := &Client{Bin: testutil.WriteFakeCmux(t, "#!/bin/sh\nexit 1\n"), FastPath: true}
+
+			_, err := c.Rpc(context.Background(), "mobile.terminal.replay", nil)
+
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if IsNotFound(err) {
+				t.Fatalf("IsNotFound(%v) = true, want false", err)
+			}
+		})
+	}
+}
+
+// The wording is what appears in the agent log and in existing assertions;
+// typing the error must not change a byte of it.
+func TestTypingTheErrorDidNotChangeItsText(t *testing.T) {
+	err := &RPCError{Method: "mobile.terminal.replay", Code: "not_found", Message: "Terminal surface not found"}
+
+	const want = "cmux rpc mobile.terminal.replay: not_found: Terminal surface not found"
+	if err.Error() != want {
+		t.Fatalf("Error() = %q, want %q", err.Error(), want)
+	}
+}
+
+// A known gap, asserted so it is a decision and not a surprise: the `cmux rpc`
+// subprocess fallback has only the CLI's stderr, with no code in it. Guessing
+// at that text would be exactly the brittle matching the typed error exists to
+// avoid, so a surface that goes missing while the fast path is unavailable
+// keeps today's retry behaviour.
+func TestTheSubprocessFallbackCannotTypeItsErrors(t *testing.T) {
+	t.Setenv("CMUX_SOCKET_PATH", filepath.Join(t.TempDir(), "does-not-exist.sock"))
+	c := &Client{Bin: testutil.WriteFakeCmux(t, `#!/bin/sh
+echo "not_found: Terminal surface not found" >&2
+exit 1
+`), FastPath: true}
+
+	_, err := c.Rpc(context.Background(), "mobile.terminal.replay", nil)
+
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	var rpcErr *RPCError
+	if errors.As(err, &rpcErr) {
+		t.Fatal("the subprocess path produced a typed error; if that is now possible, teach IsNotFound about it")
+	}
+}
