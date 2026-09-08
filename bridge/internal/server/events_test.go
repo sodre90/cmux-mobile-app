@@ -138,11 +138,11 @@ func TestWSEventsDeliversBroadcast(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForSubscribers(t, s.hub, 1)
 
 	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
@@ -173,13 +173,13 @@ func TestIngestEventsBroadcastsClassified(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond)
+	waitForSubscribers(t, s.hub, 1)
 
 	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-9","payload":{"hook_event_name":"AskUserQuestion","phase":"received","cwd":"/Users/perdos/prj/cmux-app"}}`
 	noise := `{"type":"event","name":"pane.focused","category":"pane","payload":{}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(noise+"\n"+feed+"\n"))
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
@@ -230,12 +230,12 @@ func TestIngestEventsEnrichesAttentionTitle(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond)
+	waitForSubscribers(t, s.hub, 1)
 
 	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-9","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/Users/u/prj/trading","workspace_id":"882CA6F0"}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
@@ -353,12 +353,12 @@ func TestIngestEventsKeepsFallbackTitleWhenWorkspaceNotFound(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond)
+	waitForSubscribers(t, s.hub, 1)
 
 	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-10","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/x/y","workspace_id":"UNKNOWN"}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
@@ -384,12 +384,12 @@ func TestIngestEventsAutoResolvesWhenYoloEnabled(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond)
+	waitForSubscribers(t, s.hub, 1)
 
 	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-11","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/tmp/proj","workspace_id":"WS1"}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)
@@ -418,12 +418,12 @@ func TestIngestEventsDoesNotAutoResolveWhenYoloOff(t *testing.T) {
 
 	c := wsDial(t, srv.URL, tok)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond)
+	waitForSubscribers(t, s.hub, 1)
 
 	feed := `{"type":"event","name":"feed.item.received","category":"feed","id":"BOOT-12","payload":{"hook_event_name":"Notification","phase":"received","cwd":"/tmp/proj","workspace_id":"WS1"}}`
 	go s.ingestEvents(context.Background(), strings.NewReader(feed+"\n"))
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatal(err)

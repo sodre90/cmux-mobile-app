@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -43,11 +42,11 @@ func TestEventsBroadcastEncryptedWhenSessionsSet(t *testing.T) {
 
 	c := wsDialEncrypted(t, srv.URL, relayTok, deviceID)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForSubscribers(t, s.hub, 1)
 
 	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	msgType, raw, err := c.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
@@ -97,11 +96,11 @@ func TestEventsServesPlaintextForRelayPushWhenSessionsSet(t *testing.T) {
 		t.Fatalf("ws dial failed (status %d): %v", code, err)
 	}
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForSubscribers(t, s.hub, 1)
 
 	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X", NeedsAttention: true})
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatalf("expected a plaintext JSON frame for the relay's push subscription, got: %v", err)
@@ -137,7 +136,7 @@ func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 		t.Fatalf("ws dial failed (status %d): %v", code, err)
 	}
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForSubscribers(t, s.hub, 1)
 
 	s.hub.broadcast(wire.EventFrame{
 		Type:           "feed",
@@ -149,7 +148,7 @@ func TestEventsRedactsContentForRelayPushWhenSessionsSet(t *testing.T) {
 		EncryptedPush:  map[string]string{"dev1": "ciphertext-blob"},
 	})
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatalf("expected a plaintext JSON frame for the relay's push subscription, got: %v", err)

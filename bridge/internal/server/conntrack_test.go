@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -119,7 +118,7 @@ func TestSweepDisconnectsAnUnpairedDevicesTerminal(t *testing.T) {
 
 	c := wsConnectEncrypted(t, srv.URL, "/terminal/SURF1", relayTok, deviceID)
 	defer c.Close()
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	if _, _, err := c.ReadMessage(); err != nil { // replay frame: the handler is past registration
 		t.Fatalf("initial replay: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestSweepDisconnectsAnUnpairedDevicesTerminal(t *testing.T) {
 	if closed := s.sockets.closeUnpaired(neverPaired); closed != 1 {
 		t.Fatalf("closed %d sockets, want the live terminal", closed)
 	}
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	if _, _, err := c.ReadMessage(); err == nil {
 		t.Fatal("the terminal socket should have been closed under the client")
 	}
@@ -145,12 +144,12 @@ func TestSweepDisconnectsAnUnpairedDevicesEventStream(t *testing.T) {
 
 	c := wsDialEncrypted(t, srv.URL, relayTok, deviceID)
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForTrackedSockets(t, s.sockets, 1)
 
 	if closed := s.sockets.closeUnpaired(neverPaired); closed != 1 {
 		t.Fatalf("closed %d sockets, want the live event stream", closed)
 	}
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	if _, _, err := c.ReadMessage(); err == nil {
 		t.Fatal("the event stream should have been closed under the client")
 	}
@@ -175,13 +174,13 @@ func TestSweepNeverTouchesTheRelaysPushSubscription(t *testing.T) {
 		t.Fatalf("ws dial failed: %v", err)
 	}
 	defer c.Close()
-	time.Sleep(100 * time.Millisecond) // let the handler register with the hub
+	waitForSubscribers(t, s.hub, 1)
 
 	if closed := s.sockets.closeUnpaired(neverPaired); closed != 0 {
 		t.Fatalf("the relay's push subscription must not be tracked, %d closed", closed)
 	}
 	s.hub.broadcast(wire.EventFrame{Type: "feed", FeedID: "X"})
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var got wire.EventFrame
 	if err := c.ReadJSON(&got); err != nil {
 		t.Fatalf("push subscription should still be delivering frames: %v", err)

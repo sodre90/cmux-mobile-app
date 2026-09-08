@@ -2,10 +2,8 @@ package server
 
 import (
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -67,7 +65,7 @@ func TestTerminalReplayOnConnect(t *testing.T) {
 	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
 	defer c.Close()
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
@@ -94,7 +92,7 @@ func TestTerminalInputDispatched(t *testing.T) {
 	defer c.Close()
 
 	// Drain the initial replay frame.
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
@@ -104,19 +102,7 @@ func TestTerminalInputDispatched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait until the fake records the input rpc.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(logPath)
-		if strings.Contains(string(data), "mobile.terminal.input") &&
-			strings.Contains(string(data), "SURF1") &&
-			strings.Contains(string(data), "ls") {
-			return // success
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	data, _ := os.ReadFile(logPath)
-	t.Fatalf("input rpc not dispatched; log:\n%s", data)
+	waitForRPCLog(t, logPath, "mobile.terminal.input", "SURF1", "ls")
 }
 
 // fakeTerminalFailingInputScript replays fine but fails every
@@ -148,7 +134,7 @@ func TestTerminalInputAcked(t *testing.T) {
 	defer c.Close()
 
 	// Drain the initial replay frame.
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
@@ -158,7 +144,7 @@ func TestTerminalInputAcked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
@@ -178,7 +164,7 @@ func TestTerminalInputAckReflectsRpcFailure(t *testing.T) {
 	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
 	defer c.Close()
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
@@ -188,7 +174,7 @@ func TestTerminalInputAckReflectsRpcFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
@@ -208,7 +194,7 @@ func TestTerminalNoAckWhenSeqUnset(t *testing.T) {
 	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
 	defer c.Close()
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var down wire.TerminalDown
 	if err := c.ReadJSON(&down); err != nil {
 		t.Fatal(err)
@@ -222,7 +208,7 @@ func TestTerminalNoAckWhenSeqUnset(t *testing.T) {
 	if err := c.WriteJSON(wire.TerminalUp{Type: "resize", Columns: 81, Rows: 24, Seq: 1}); err != nil {
 		t.Fatal(err)
 	}
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var ack wire.TerminalDown
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
@@ -243,7 +229,7 @@ func TestTerminalForwardsContentChange(t *testing.T) {
 	defer c.Close()
 
 	// First frame: the full replay.
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	var replay wire.TerminalDown
 	if err := c.ReadJSON(&replay); err != nil {
 		t.Fatal(err)
@@ -254,7 +240,7 @@ func TestTerminalForwardsContentChange(t *testing.T) {
 
 	// The screen content changes on the next poll while seq stays 0. The poll
 	// loop must forward it as an output frame rather than freezing on seq.
-	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	armReadDeadline(t, c)
 	var out wire.TerminalDown
 	if err := c.ReadJSON(&out); err != nil {
 		t.Fatalf("expected an output frame after content change, got: %v", err)

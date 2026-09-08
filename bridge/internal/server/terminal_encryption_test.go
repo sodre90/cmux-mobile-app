@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -47,7 +45,7 @@ func TestTerminalReplayEncryptedWhenSessionsSet(t *testing.T) {
 	c := wsConnectEncrypted(t, srv.URL, "/terminal/SURF1", relayTok, deviceID)
 	defer c.Close()
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	msgType, raw, err := c.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +85,7 @@ func TestTerminalInputDispatchedWhenEncrypted(t *testing.T) {
 	defer c.Close()
 
 	// Drain the initial encrypted replay frame.
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	if _, _, err := c.ReadMessage(); err != nil {
 		t.Fatal(err)
 	}
@@ -104,18 +102,7 @@ func TestTerminalInputDispatchedWhenEncrypted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(logPath)
-		if strings.Contains(string(data), "mobile.terminal.input") &&
-			strings.Contains(string(data), "SURF1") &&
-			strings.Contains(string(data), "ls") {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	data, _ := os.ReadFile(logPath)
-	t.Fatalf("input rpc not dispatched; log:\n%s", data)
+	waitForRPCLog(t, logPath, "mobile.terminal.input", "SURF1", "ls")
 }
 
 func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
@@ -134,7 +121,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 	defer c.Close()
 
 	// Drain the initial encrypted replay frame (agent->device counter 0).
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	if _, _, err := c.ReadMessage(); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +138,7 @@ func TestTerminalInputAckedWhenEncrypted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	armReadDeadline(t, c)
 	_, raw, err := c.ReadMessage()
 	if err != nil {
 		t.Fatalf("expected an encrypted ack frame, got: %v", err)
