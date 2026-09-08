@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui.terminal
 import android.content.res.Configuration
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
@@ -32,6 +34,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,10 +61,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -74,12 +83,14 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
@@ -114,6 +125,13 @@ const val MAX_ZOOM = 6f
 const val ZOOM_STEP = 0.25f
 
 private val LandscapeTopBarHeight = 40.dp
+
+/** Longer than this, a single-line paste is worth confirming too: it is well
+ *  past anything you would type by hand into a prompt. */
+private const val PASTE_CONFIRM_CHARS = 200
+
+/** Enough of the clipboard to judge it by without building a whole viewer. */
+private const val PASTE_PREVIEW_CHARS = 2000
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -181,6 +199,10 @@ fun TerminalScreen(
     // consumes the arm, since the user's next key press is the one it applies
     // to regardless of whether that key had a Ctrl form.
     var ctrlArmed by rememberSaveable { mutableStateOf(false) }
+
+    // Clipboard content held back for confirmation -- see [needsPasteConfirmation].
+    var pendingPaste by rememberSaveable { mutableStateOf<String?>(null) }
+
     val sendKey: (String) -> Unit = { text ->
         if (ctrlArmed) {
             vm.sendText(applyCtrlArm(text))
@@ -269,7 +291,11 @@ fun TerminalScreen(
                 ArrowPad(
                     applicationCursorKeys = appCursorKeys,
                     onKey = sendKey,
-                    onPaste = { clipboard.getText()?.text?.let { sendKey(it) } },
+                    onPaste = {
+                        clipboard.getText()?.text?.let { text ->
+                            if (needsPasteConfirmation(text)) pendingPaste = text else sendKey(text)
+                        }
+                    },
                 )
                 KeyBar(
                     applicationCursorKeys = appCursorKeys,
@@ -488,6 +514,63 @@ fun TerminalScreen(
             }
         }
     }
+
+    pendingPaste?.let { text ->
+        PasteConfirmationDialog(
+            text = text,
+            onConfirm = {
+                pendingPaste = null
+                sendKey(text)
+            },
+            onDismiss = { pendingPaste = null },
+        )
+    }
+}
+
+/**
+ * Whether [text] is enough of a commitment to ask about before it reaches the
+ * shell. Paste used to send the clipboard straight through, so a multi-line
+ * copy ran line by line as commands with nothing shown first -- and the phone's
+ * clipboard is rarely full of things you meant to execute.
+ *
+ * A single short line is left alone: that is the ordinary case (a path, a
+ * branch name, a token) and a dialog on every one of them would be worse than
+ * the risk it guards.
+ */
+internal fun needsPasteConfirmation(text: String): Boolean =
+    '\n' in text.trimEnd('\n') || text.length > PASTE_CONFIRM_CHARS
+
+/** A line count for the dialog: trailing newlines are the copy's terminator,
+ *  not empty lines the user needs warning about. */
+internal fun pasteLineCount(text: String): Int = text.trimEnd('\n').count { it == '\n' } + 1
+
+@Composable
+private fun PasteConfirmationDialog(text: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.terminal_paste_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val lines = pasteLineCount(text)
+                Text(pluralStringResource(R.plurals.terminal_paste_dialog_lines, lines, lines))
+                // The clipboard itself, so the decision is made on what will
+                // actually be sent rather than on a line count alone.
+                Text(
+                    text = text.take(PASTE_PREVIEW_CHARS),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.terminal_paste)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
 }
 
 /**
@@ -618,8 +701,13 @@ private fun KeyBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         CtrlChip(armed = ctrlArmed, onClick = onToggleCtrl)
+        val keyScroll = rememberScrollState()
         Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            // At 360dp only a sliver of the next key peeked past the edge, which
+            // reads as the bar simply ending -- PgUp/PgDn/^D/^Z and the F-keys
+            // went undiscovered. The fade says the row continues, and it appears
+            // only on a side that actually has more.
+            modifier = Modifier.scrollEdgeFade(keyScroll).horizontalScroll(keyScroll),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TerminalKeys.forEach { key ->
@@ -634,6 +722,43 @@ private fun KeyBar(
         }
     }
 }
+
+/** Width of the fade at each end of a scrollable row. */
+private val ScrollEdgeFadeWidth = 24.dp
+
+/**
+ * Fades whichever end of a horizontally scrollable row still has content past
+ * it. Must sit *before* [horizontalScroll] in the chain so it wraps the clipped
+ * viewport rather than the scrolling content, and needs an offscreen
+ * compositing layer because [BlendMode.DstIn] has to see the row's own pixels
+ * to erase them.
+ */
+private fun Modifier.scrollEdgeFade(scroll: ScrollState): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        val fade = ScrollEdgeFadeWidth.toPx()
+        if (scroll.value > 0) {
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    listOf(Color.Transparent, Color.Black),
+                    startX = 0f,
+                    endX = fade,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+        if (scroll.value < scroll.maxValue) {
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    listOf(Color.Black, Color.Transparent),
+                    startX = size.width - fade,
+                    endX = size.width,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
 
 /**
  * The general Ctrl modifier: tapping it arms sending the next key as its

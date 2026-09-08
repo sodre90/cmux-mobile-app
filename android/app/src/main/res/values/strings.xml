@@ -124,6 +124,11 @@
     <string name="action_reconnect">Reconnect</string>
     <string name="terminal_reconnecting_stale">Reconnecting — last known screen</string>
     <string name="terminal_paste">Paste</string>
+    <string name="terminal_paste_dialog_title">Paste into the terminal?</string>
+    <plurals name="terminal_paste_dialog_lines">
+        <item quantity="one">%1$d line will be sent to the shell.</item>
+        <item quantity="other">%1$d lines will be sent to the shell, and a shell runs each one as it arrives.</item>
+    </plurals>
     <string name="terminal_ctrl_chip">Ctrl</string>
     <string name="terminal_ctrl_content_description">Ctrl modifier key</string>
     <string name="terminal_ctrl_state_armed">Armed, next key sends as Ctrl combination</string>
