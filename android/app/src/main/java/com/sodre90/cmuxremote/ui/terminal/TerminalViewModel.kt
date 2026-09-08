@@ -15,18 +15,48 @@ import com.sodre90.cmuxremote.model.TerminalDown
 import com.sodre90.cmuxremote.model.TerminalDownType
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.UiState
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val DELIVERY_CHECK_INTERVAL_MS = 500L
 
 private const val TAG = "TerminalInput"
+
+/** How long the measured viewport must hold still before it is worth telling
+ *  the Mac about. Long enough to outlast inset/IME settling, short enough that
+ *  a real rotation still feels immediate. */
+internal const val RESIZE_SETTLE_MS = 150L
+
+/** A measured surface viewport, in terminal cells. */
+data class GridSize(val columns: Int, val rows: Int)
+
+/**
+ * Collapses a burst of viewport measurements into the one it settles on.
+ *
+ * BoxWithConstraints re-measures as the status/nav insets and the IME resolve,
+ * and every distinct (columns, rows) along the way used to become its own
+ * resize RPC -- twelve within a second of opening a pane, observed on device.
+ * Each one makes cmux re-layout the surface and ship back a whole replay frame,
+ * which is the most expensive call the bridge makes.
+ *
+ * [distinctUntilChanged] then drops a settled size equal to the last one sent,
+ * so a measurement that ends where it began costs nothing at all.
+ */
+@OptIn(FlowPreview::class)
+internal fun Flow<GridSize>.settledSizes(settleMs: Long = RESIZE_SETTLE_MS): Flow<GridSize> =
+    debounce(settleMs).distinctUntilChanged()
 
 /** The decoded render-grid snapshot + its style palette -- [TerminalViewModel]'s
  *  [UiState.Ready] payload. */
@@ -145,9 +175,18 @@ class TerminalViewModel(
     val deliveryStatus: StateFlow<DeliveryStatus> = tracker.deliveryStatus
     val lostInputNotice: StateFlow<Boolean> = tracker.lostInputNotice
 
+    // Every viewport measurement the screen makes; only the settled ones reach
+    // the wire (see [settledSizes]). DROP_OLDEST because a superseded
+    // measurement has no value -- the newest one is the only one that is true.
+    private val measuredSizes =
+        MutableSharedFlow<GridSize>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
     init {
         connect()
         loadWorkspaceContext()
+        viewModelScope.launch {
+            measuredSizes.settledSizes().collect { tracker.resize(it.columns, it.rows) }
+        }
         viewModelScope.launch {
             while (isActive) {
                 delay(DELIVERY_CHECK_INTERVAL_MS)
@@ -232,7 +271,9 @@ class TerminalViewModel(
 
     fun sendText(text: String) = tracker.sendText(text)
 
-    fun resize(columns: Int, rows: Int) = tracker.resize(columns, rows)
+    fun resize(columns: Int, rows: Int) {
+        measuredSizes.tryEmit(GridSize(columns, rows))
+    }
 
     override fun onCleared() {
         activeSocket?.close()
