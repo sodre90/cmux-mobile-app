@@ -13,6 +13,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/backoff"
 	"github.com/sodre90/cmux-bridge/internal/metrics"
+	pushpkg "github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -76,7 +77,7 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	sent, failed, encrypted := 0, 0, 0
+	sent, failed, encrypted, dropped := 0, 0, 0, 0
 	for _, dev := range devices {
 		data := map[string]string{
 			"type":         "attention",
@@ -92,6 +93,9 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) 
 		}
 		if err := push.Send(ctx, dev.FCMToken, "", "", data); err != nil {
 			failed++
+			if pushpkg.DropDeadToken(store, dev.FCMToken, err) {
+				dropped++
+			}
 			slog.Warn("relay: attention push failed", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "err", err)
 			continue
 		}
@@ -99,5 +103,5 @@ func fanout(tenantID string, store *auth.Store, push Pusher, f wire.EventFrame) 
 	}
 	metrics.PushSentTotal.Add(int64(sent))
 	metrics.PushFailedTotal.Add(int64(failed))
-	slog.Info("relay: attention push sent", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "sent", sent, "failed", failed, "encrypted", encrypted)
+	slog.Info("relay: attention push sent", "tenant_id", tenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "sent", sent, "failed", failed, "dropped", dropped, "encrypted", encrypted)
 }

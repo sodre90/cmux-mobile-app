@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
+	pushpkg "github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -218,4 +221,83 @@ func TestMonitorAgentScopesPushToOwnTenant(t *testing.T) {
 			t.Fatalf("push reached a token outside tenantA: %q", tok)
 		}
 	}
+}
+
+// deadTokenPusher rejects one specific token the way FCM rejects an
+// unregistered one, and accepts every other.
+type deadTokenPusher struct {
+	mu    sync.Mutex
+	dead  string
+	sent  []string
+	tried []string
+}
+
+func (p *deadTokenPusher) Send(_ context.Context, tok, _, _ string, _ map[string]string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tried = append(p.tried, tok)
+	if tok == p.dead {
+		return fmt.Errorf("fcm status 404 (UNREGISTERED): %w", pushpkg.ErrTokenDead)
+	}
+	p.sent = append(p.sent, tok)
+	return nil
+}
+
+// cmux-app-6u7: a token FCM reports unregistered must be dropped, or every
+// attention event keeps pushing into the void with nothing to show for it.
+func TestFanoutDropsATokenFCMReportsUnregistered(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/d.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := store.CreateTenant()
+	deadTok, _ := store.Issue(tenant, "old-phone", "pubkey-1")
+	liveTok, _ := store.Issue(tenant, "phone", "pubkey-2")
+	if err := store.SetFCMToken(deadTok, "fcm-dead"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFCMToken(liveTok, "fcm-live"); err != nil {
+		t.Fatal(err)
+	}
+	pusher := &deadTokenPusher{dead: "fcm-dead"}
+
+	fanout(tenant, store, pusher, wire.EventFrame{Type: "feed", NeedsAttention: true, FeedID: "F1"})
+
+	left := store.TenantFCMDevices(tenant)
+	if len(left) != 1 || left[0].FCMToken != "fcm-live" {
+		t.Fatalf("remaining FCM devices = %v, want only the live token", left)
+	}
+
+	// The next round must not even attempt the dropped one.
+	pusher.tried = nil
+	fanout(tenant, store, pusher, wire.EventFrame{Type: "feed", NeedsAttention: true, FeedID: "F2"})
+	if len(pusher.tried) != 1 || pusher.tried[0] != "fcm-live" {
+		t.Fatalf("second round tried %v, want only the live token", pusher.tried)
+	}
+}
+
+// A relay outage must not be mistaken for every device uninstalling the app.
+func TestFanoutKeepsTokensAfterATransientFailure(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/d.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := store.CreateTenant()
+	tok, _ := store.Issue(tenant, "phone", "pubkey-1")
+	if err := store.SetFCMToken(tok, "fcm-live"); err != nil {
+		t.Fatal(err)
+	}
+	pusher := &failingPusher{err: errors.New("fcm status 503 (UNAVAILABLE)")}
+
+	fanout(tenant, store, pusher, wire.EventFrame{Type: "feed", NeedsAttention: true, FeedID: "F1"})
+
+	if left := store.TenantFCMDevices(tenant); len(left) != 1 {
+		t.Fatalf("a transient failure dropped the token: %v", left)
+	}
+}
+
+type failingPusher struct{ err error }
+
+func (p *failingPusher) Send(context.Context, string, string, string, map[string]string) error {
+	return p.err
 }

@@ -11,6 +11,8 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
+	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -92,8 +94,12 @@ func (s *Server) maybeSendPush(ctx context.Context, f wire.EventFrame) {
 			data["e2e"] = blob
 		}
 		if err := s.pusher.Send(sendCtx, dev.FCMToken, "", "", data); err != nil {
+			metrics.PushFailedTotal.Add(1)
+			push.DropDeadToken(s.store, dev.FCMToken, err)
 			slog.Warn("agent: direct-mode push failed", "tenant_id", s.directTenantID, "kind", f.Kind, "workspace_id", f.WorkspaceID, "err", err)
+			continue
 		}
+		metrics.PushSentTotal.Add(1)
 	}
 }
 

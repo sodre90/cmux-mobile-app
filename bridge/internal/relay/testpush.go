@@ -15,6 +15,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
 	"github.com/sodre90/cmux-bridge/internal/metrics"
+	pushpkg "github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -66,6 +67,7 @@ func (r *Relay) handleTestPush(w http.ResponseWriter, req *http.Request) {
 	defer cancel()
 	if err := r.push.Send(sendCtx, dev.FCM, "", "", data); err != nil {
 		metrics.PushFailedTotal.Add(1)
+		pushpkg.DropDeadToken(r.store, dev.FCM, err)
 		slog.Warn("relay: test push send failed", "tenant_id", dev.TenantID, "device", dev.HashSuffix, "err", err)
 		httpjson.Error(w, http.StatusBadGateway, "push_send_failed")
 		return

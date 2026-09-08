@@ -10,6 +10,8 @@ import (
 
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/httpjson"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
+	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
@@ -79,10 +81,13 @@ func (s *Server) handleTestPushDevice(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	if err := s.pusher.Send(ctx, dev.FCM, "", "", data); err != nil {
+		metrics.PushFailedTotal.Add(1)
+		push.DropDeadToken(s.store, dev.FCM, err)
 		slog.Warn("agent: test push send failed", "tenant_id", dev.TenantID, "device", dev.HashSuffix, "err", err)
 		httpjson.Error(w, http.StatusBadGateway, "push_send_failed")
 		return
 	}
+	metrics.PushSentTotal.Add(1)
 	slog.Info("agent: test push sent", "tenant_id", dev.TenantID, "device", dev.HashSuffix)
 	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }

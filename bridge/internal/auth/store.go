@@ -442,6 +442,30 @@ func (s *Store) SetFCMToken(token, fcm string) error {
 	return nil
 }
 
+// ClearFCMToken drops an FCM registration token FCM has reported as no
+// longer registered, and returns how many device rows held it.
+//
+// Keyed by the FCM token rather than by device, because that is what died:
+// TenantFCMDevices exists precisely because several device rows can share one
+// token, and every one of them is now pushing into the void. The device rows
+// themselves are left alone -- the bearer token still authenticates and the
+// shared secret still decrypts, so this is not a revocation. The phone
+// re-registers on its next launch (see the Android FcmTokenRegistrar), which
+// is the only way back regardless of what is stored here.
+func (s *Store) ClearFCMToken(fcm string) (int, error) {
+	if fcm == "" {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE devices SET fcm_token = '' WHERE fcm_token = ?`, fcm)
+	if err != nil {
+		return 0, fmt.Errorf("clear fcm token: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // FCMDevice pairs a device's e2e deviceID (its bearer-token hash -- the same
 // value the relay's proxy Director injects as X-Device-ID, and the same key
 // e2e.Store.EncryptFrame expects) with its registered FCM token.

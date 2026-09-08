@@ -49,6 +49,13 @@ var (
 	PushSentTotal   = expvar.NewInt("push_sent_total")
 	PushFailedTotal = expvar.NewInt("push_failed_total")
 
+	// PushTokensDroppedTotal counts FCM registration tokens dropped because
+	// FCM reported them UNREGISTERED. Separate from PushFailedTotal, which a
+	// relay outage inflates too: this one only moves when a device has
+	// genuinely stopped being reachable and needs to re-register, which is
+	// the state that used to be invisible (cmux-app-6u7).
+	PushTokensDroppedTotal = expvar.NewInt("push_tokens_dropped_total")
+
 	// E2EDecryptFailuresTotal counts failed e2e decrypt attempts on the
 	// agent, keyed by call site ("terminal_frame", "body").
 	E2EDecryptFailuresTotal = expvar.NewMap("e2e_decrypt_failures_total")

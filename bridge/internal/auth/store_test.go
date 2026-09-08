@@ -788,3 +788,73 @@ func TestListByTenantReturnsOnlyThatTenantsDevices(t *testing.T) {
 		t.Fatal("List must still see across tenants -- it is the operator's inventory")
 	}
 }
+
+// cmux-app-6u7: when FCM reports a registration token unregistered, every
+// device row holding it is pushing into the void -- TenantFCMDevices exists
+// precisely because several rows can share one token.
+func TestClearFCMTokenDropsEveryRowHoldingIt(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	first, _ := s.Issue(tenant, "phone", testPubkey)
+	repaired, _ := s.Issue(tenant, "phone", testPubkey)
+	other, _ := s.Issue(tenant, "tablet", testPubkey)
+	for _, tok := range []string{first, repaired} {
+		if err := s.SetFCMToken(tok, "dead-token"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetFCMToken(other, "live-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.ClearFCMToken("dead-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("cleared %d rows, want both rows that shared the dead token", rows)
+	}
+
+	left := s.TenantFCMDevices(tenant)
+	if len(left) != 1 || left[0].FCMToken != "live-token" {
+		t.Fatalf("remaining FCM devices = %v, want only the live token", left)
+	}
+}
+
+// Clearing the token is not a revocation: the device keeps authenticating and
+// decrypting, it just gets no push until it re-registers.
+func TestClearFCMTokenLeavesTheDeviceItself(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
+	if err := s.SetFCMToken(tok, "dead-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.ClearFCMToken("dead-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Verify(tok); err != nil {
+		t.Fatalf("the device must still authenticate after its FCM token is dropped: %v", err)
+	}
+	if err := s.SetFCMToken(tok, "fresh-token"); err != nil {
+		t.Fatalf("the device must be able to re-register: %v", err)
+	}
+}
+
+func TestClearFCMTokenIgnoresAnEmptyToken(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	tok, _ := s.Issue(tenant, "phone", testPubkey)
+	if err := s.SetFCMToken(tok, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rows with no registration are the ordinary state of a device that has
+	// not registered yet; an empty token must not sweep them.
+	rows, err := s.ClearFCMToken("")
+	if err != nil || rows != 0 {
+		t.Fatalf("rows = %d, err = %v; want 0, nil", rows, err)
+	}
+}
