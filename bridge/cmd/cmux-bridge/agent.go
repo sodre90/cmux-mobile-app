@@ -427,7 +427,15 @@ func runAgent(args []string) int {
 		}
 	}
 	go srv.RunEvents(ctx)
-	go runReaper(ctx, cfg, sessions, reaperFirstRound, reaperPeriod)
+	// Seeded from the snapshot the previous process left behind: a per-slot
+	// "last reached" that resets on restart cannot show a standby that has
+	// been unreachable for days, which is the outage it exists to expose
+	// (cmux-app-t5x).
+	previous, _ := status.Read(cfg.StatusFile)
+	slotReach := status.NewSlotReachability(previous.SlotLastReachedAt)
+	go runReaper(ctx, cfg, sessions, reaperFirstRound, reaperPeriod, func(reached map[string]bool) {
+		slotReach.Record(reached, time.Now())
+	})
 	// `cmux-bridge devices revoke` edits the session store from its own
 	// process, so an already-streaming socket never learns about it; this is
 	// what closes those.
@@ -451,6 +459,7 @@ func runAgent(args []string) int {
 			DirectLastServedAt:        directLastServed,
 			LastCmuxReachedAt:         lastReached,
 			LastEventAt:               srv.LastEventAt(),
+			SlotLastReachedAt:         slotReach.Snapshot(),
 			Counters:                  metrics.Snapshot(),
 		}
 	})

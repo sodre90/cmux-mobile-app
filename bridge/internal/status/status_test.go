@@ -124,3 +124,123 @@ func TestRunWriterWritesImmediatelyAndOnTick(t *testing.T) {
 		t.Fatal("RunWriter did not return after ctx cancellation")
 	}
 }
+
+// -- per-slot reachability (cmux-app-t5x)
+
+// The bug this exists for: the direct standby was unreachable for 14 days and
+// the only health line reset on every agent restart, so nothing could show it.
+func TestAnOutageSurvivesARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	lastGood := time.Now().Add(-14 * 24 * time.Hour).UTC().Round(time.Second)
+
+	before := NewSlotReachability(nil)
+	before.Record(map[string]bool{"relay": true, "direct": true}, lastGood)
+	if err := Write(path, Snapshot{WrittenAt: lastGood, SlotLastReachedAt: before.Snapshot()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new process: seed from what the old one left on disk, then run rounds
+	// where relay answers and direct does not.
+	carried, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := NewSlotReachability(carried.SlotLastReachedAt)
+	now := time.Now().UTC().Round(time.Second)
+	after.Record(map[string]bool{"relay": true, "direct": false}, now)
+
+	got := after.Snapshot()
+	if !got["direct"].Equal(lastGood) {
+		t.Fatalf("direct last-reached = %v, want the pre-restart %v", got["direct"], lastGood)
+	}
+	if !got["relay"].Equal(now) {
+		t.Fatalf("relay last-reached = %v, want %v", got["relay"], now)
+	}
+}
+
+// A slot that does not answer keeps its old timestamp: the gap between that and
+// now IS the outage length, so clearing or advancing it destroys the answer.
+func TestAFailedRoundDoesNotMoveTheTimestamp(t *testing.T) {
+	good := time.Now().Add(-2 * time.Hour)
+	r := NewSlotReachability(map[string]time.Time{"direct": good})
+
+	for range 10 {
+		r.Record(map[string]bool{"direct": false}, time.Now())
+	}
+
+	if got := r.Snapshot()["direct"]; !got.Equal(good) {
+		t.Fatalf("last-reached = %v, want it pinned at %v", got, good)
+	}
+}
+
+// A configured slot that has never once answered must be distinguishable from
+// a slot that was never configured -- "never" and "absent" are different
+// answers, and only one of them is alarming.
+func TestASlotThatHasNeverAnsweredIsRecordedAsNever(t *testing.T) {
+	r := NewSlotReachability(nil)
+
+	r.Record(map[string]bool{"direct": false}, time.Now())
+
+	got := r.Snapshot()
+	at, present := got["direct"]
+	if !present {
+		t.Fatal("a configured slot that failed must still appear")
+	}
+	if !at.IsZero() {
+		t.Fatalf("want the zero time for never-reached, got %v", at)
+	}
+	if _, ok := got["relay"]; ok {
+		t.Fatal("a slot that was never probed must not appear at all")
+	}
+}
+
+func TestSlotReachabilityRoundTripsThroughTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	at := time.Now().UTC().Round(time.Second)
+	if err := Write(path, Snapshot{
+		WrittenAt:         at,
+		SlotLastReachedAt: map[string]time.Time{"relay": at, "direct": {}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SlotLastReachedAt["relay"].Equal(at) {
+		t.Fatalf("relay = %v, want %v", got.SlotLastReachedAt["relay"], at)
+	}
+	if !got.SlotLastReachedAt["direct"].IsZero() {
+		t.Fatalf("direct = %v, want the zero time", got.SlotLastReachedAt["direct"])
+	}
+}
+
+// The reaper goroutine records while the status writer reads.
+func TestSlotReachabilityIsSafeUnderConcurrentUse(t *testing.T) {
+	r := NewSlotReachability(nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			r.Record(map[string]bool{"relay": i%2 == 0, "direct": true}, time.Now())
+		}
+	}()
+	for range 500 {
+		_ = r.Snapshot()
+	}
+	<-done
+}
+
+// Seeding must copy, not alias: the map handed in comes straight off a decoded
+// Snapshot the caller may still be holding.
+func TestSeedingCopiesTheMap(t *testing.T) {
+	seed := map[string]time.Time{"direct": {}}
+	r := NewSlotReachability(seed)
+
+	r.Record(map[string]bool{"direct": true}, time.Now())
+
+	if !seed["direct"].IsZero() {
+		t.Fatal("Record wrote through to the caller's seed map")
+	}
+}

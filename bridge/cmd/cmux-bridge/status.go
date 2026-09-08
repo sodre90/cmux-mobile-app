@@ -48,7 +48,42 @@ func printStatus(w io.Writer, snap status.Snapshot) {
 	}
 	_, _ = fmt.Fprintf(w, "cmux reached:    %s\n", formatTimeOrNever(snap.LastCmuxReachedAt))
 	_, _ = fmt.Fprintf(w, "last event:      %s\n", formatTimeOrNever(snap.LastEventAt))
+	printSlotReachability(w, snap.SlotLastReachedAt)
 	printCounters(w, snap.Counters)
+}
+
+// staleSlotAfter is how long a slot may go unreached before the line says so
+// outright. Two missed hourly rounds: one is a blip, three hours of silence is
+// a transport that is not there.
+const staleSlotAfter = 3 * time.Hour
+
+// printSlotReachability reports when each transport last answered the hourly
+// device listing -- the only end-to-end probe the agent runs against its own
+// slots, and the one that would have shown the direct standby was unreachable
+// for fourteen days instead of leaving it to an hourly WARN (cmux-app-t5x).
+//
+// These timestamps survive restarts, so an age here is a real outage length
+// rather than time since the agent last started.
+func printSlotReachability(w io.Writer, reached map[string]time.Time) {
+	if len(reached) == 0 {
+		_, _ = fmt.Fprintln(w, "slots reached:   no completed device round yet (the first is 2 min after start, then hourly)")
+		return
+	}
+	_, _ = fmt.Fprintln(w, "slots reached:")
+	for _, slot := range slices.Sorted(maps.Keys(reached)) {
+		_, _ = fmt.Fprintf(w, "  %-32s %s\n", slot, describeSlotReach(reached[slot]))
+	}
+}
+
+func describeSlotReach(at time.Time) string {
+	switch {
+	case at.IsZero():
+		return "NEVER -- this transport has not answered once"
+	case time.Since(at) >= staleSlotAfter:
+		return fmt.Sprintf("%s -- UNREACHABLE since then", formatAgo(at))
+	default:
+		return formatAgo(at)
+	}
 }
 
 // printCounters lists the agent's expvar totals, sorted so two readings taken

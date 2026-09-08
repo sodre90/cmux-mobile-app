@@ -93,13 +93,20 @@ func revokeOnServer(srv agentServer, tokenHash string) (existed bool, err error)
 // aborting the whole listing -- the rows that did come back are still worth
 // showing -- so callers that must not act on a partial view check problems
 // before doing anything.
-func collectDevices(servers []agentServer, sessions *e2e.Store) (rows []deviceRow, problems []string) {
+// reached maps each server's kind to whether it answered this listing. It is
+// the only end-to-end reachability probe the agent runs against its own
+// transports, and throwing it away is how the direct standby stayed
+// unreachable for fourteen days with nothing but an hourly WARN to show for it
+// (cmux-app-t5x).
+func collectDevices(servers []agentServer, sessions *e2e.Store) (rows []deviceRow, problems []string, reached map[string]bool) {
 	unclaimedSecrets := make(map[string]bool)
 	for _, id := range sessions.DeviceIDs() {
 		unclaimedSecrets[id] = true
 	}
+	reached = make(map[string]bool, len(servers))
 	for _, srv := range servers {
 		devices, err := fetchDevices(srv)
+		reached[srv.kind] = err == nil
 		if err != nil {
 			problems = append(problems, srv.kind+": "+err.Error())
 			continue
@@ -126,7 +133,7 @@ func collectDevices(servers []agentServer, sessions *e2e.Store) (rows []deviceRo
 			}
 		}
 	}
-	return rows, problems
+	return rows, problems, reached
 }
 
 func printDeviceRows(w io.Writer, rows []deviceRow) {
@@ -198,7 +205,7 @@ func resolveDevicePrefix(rows []deviceRow, prefix string) (deviceRow, error) {
 // token that authenticates into an agent which cannot decrypt for it, which
 // is the exact drift state this command exists to clean up.
 func revokeByPrefix(out io.Writer, servers []agentServer, sessions *e2e.Store, prefix string) error {
-	rows, problems := collectDevices(servers, sessions)
+	rows, problems, _ := collectDevices(servers, sessions)
 	if len(problems) > 0 {
 		return fmt.Errorf("refusing to revoke from a partial device listing (%s) -- a prefix could resolve to the wrong device",
 			strings.Join(problems, "; "))
@@ -269,16 +276,16 @@ func olderThan(createdAt string, now time.Time, age time.Duration) bool {
 // The whole round is abandoned if any server failed to answer. A server that
 // did not reply means its devices are unknown, not absent; without that
 // guard a relay outage would unpair every device on this Mac.
-func reapDriftedCredentials(servers []agentServer, sessions *e2e.Store, now time.Time) (secrets, tokens int, err error) {
-	rows, problems := collectDevices(servers, sessions)
+func reapDriftedCredentials(servers []agentServer, sessions *e2e.Store, now time.Time) (secrets, tokens int, reached map[string]bool, err error) {
+	rows, problems, reached := collectDevices(servers, sessions)
 	if len(problems) > 0 {
-		return 0, 0, fmt.Errorf("skipped: %s", strings.Join(problems, "; "))
+		return 0, 0, reached, fmt.Errorf("skipped: %s", strings.Join(problems, "; "))
 	}
 	for _, row := range rows {
 		if row.server.kind == localSource {
 			removed, err := sessions.RemoveDevice(row.device.TokenHash)
 			if err != nil {
-				return secrets, tokens, fmt.Errorf("remove stranded secret %s: %w", shortHash(row.device.TokenHash), err)
+				return secrets, tokens, reached, fmt.Errorf("remove stranded secret %s: %w", shortHash(row.device.TokenHash), err)
 			}
 			if removed {
 				secrets++
@@ -290,21 +297,23 @@ func reapDriftedCredentials(servers []agentServer, sessions *e2e.Store, now time
 			continue
 		}
 		if _, err := revokeOnServer(row.server, row.device.TokenHash); err != nil {
-			return secrets, tokens, fmt.Errorf("revoke drifted %s token %s: %w",
+			return secrets, tokens, reached, fmt.Errorf("revoke drifted %s token %s: %w",
 				row.server.kind, shortHash(row.device.TokenHash), err)
 		}
 		tokens++
 		slog.Info("devices: revoked a token whose shared secret this agent no longer holds",
 			"device", shortHash(row.device.TokenHash), "source", row.server.kind)
 	}
-	return secrets, tokens, nil
+	return secrets, tokens, reached, nil
 }
 
 // runReaper reaps drifted credentials on a loop until ctx is done. The first
 // round is delayed rather than immediate: at startup the relay tunnel is
 // usually still coming up, and a round that cannot reach a server does
 // nothing anyway.
-func runReaper(ctx context.Context, cfg config.AgentConfig, sessions *e2e.Store, delay, period time.Duration) {
+// observe, when set, is handed each round's per-slot reachability -- see
+// [reaperRound].
+func runReaper(ctx context.Context, cfg config.AgentConfig, sessions *e2e.Store, delay, period time.Duration, observe func(map[string]bool)) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	for {
@@ -313,15 +322,32 @@ func runReaper(ctx context.Context, cfg config.AgentConfig, sessions *e2e.Store,
 			return
 		case <-timer.C:
 		}
-		servers, err := configuredServers(cfg, deviceAdminTimeout)
-		if err != nil {
-			slog.Warn("devices: reaper found no reachable server", "err", err)
-		} else if secrets, tokens, err := reapDriftedCredentials(servers, sessions, time.Now()); err != nil {
-			slog.Warn("devices: reaper round incomplete", "err", err)
-		} else if secrets > 0 || tokens > 0 {
-			slog.Info("devices: reaper removed drifted credentials", "secrets", secrets, "tokens", tokens)
-		}
+		reaperRound(cfg, sessions, observe)
 		timer.Reset(period)
+	}
+}
+
+// reaperRound runs one round and reports which slots answered.
+//
+// observe is called even when the round was abandoned, because a slot that did
+// not answer is the entire reason this is recorded: the hourly listing is the
+// only thing that probes each transport end to end, and until cmux-app-t5x it
+// reported an unreachable standby nowhere but a WARN line.
+func reaperRound(cfg config.AgentConfig, sessions *e2e.Store, observe func(map[string]bool)) {
+	servers, err := configuredServers(cfg, deviceAdminTimeout)
+	if err != nil {
+		slog.Warn("devices: reaper found no reachable server", "err", err)
+		return
+	}
+	secrets, tokens, reached, err := reapDriftedCredentials(servers, sessions, time.Now())
+	if observe != nil {
+		observe(reached)
+	}
+	switch {
+	case err != nil:
+		slog.Warn("devices: reaper round incomplete", "err", err)
+	case secrets > 0 || tokens > 0:
+		slog.Info("devices: reaper removed drifted credentials", "secrets", secrets, "tokens", tokens)
 	}
 }
 
@@ -375,7 +401,7 @@ func runDevices(args []string) int {
 	}
 
 	if sub == "list" {
-		rows, problems := collectDevices(servers, sessions)
+		rows, problems, _ := collectDevices(servers, sessions)
 		printDeviceRows(os.Stdout, rows)
 		for _, problem := range problems {
 			fmt.Fprintln(os.Stderr, "could not list devices on", problem)

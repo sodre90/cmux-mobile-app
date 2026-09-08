@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -67,6 +69,21 @@ type Snapshot struct {
 	// `cmux events --reconnect` stream.
 	LastEventAt time.Time `json:"last_event_at"`
 
+	// SlotLastReachedAt records, per transport slot ("relay", "direct"), when
+	// the hourly device reaper last listed devices on it successfully. That
+	// listing is the only thing the agent does that probes each transport end
+	// to end, over the same name and port a phone uses.
+	//
+	// Unlike every other field here it is CARRIED FORWARD across restarts
+	// (see [NewSlotReachability]), which is the whole point: a gauge that
+	// resets to "never" whenever the agent restarts cannot answer "has the
+	// standby been down for two weeks", and that is exactly the question
+	// nothing could answer while it had been (cmux-app-t5x).
+	//
+	// A slot absent from the map has never been reached since the status file
+	// was created. An empty map means no round has completed yet.
+	SlotLastReachedAt map[string]time.Time `json:"slot_last_reached_at,omitempty"`
+
 	// Counters is metrics.Snapshot() at WrittenAt: running totals since this
 	// agent process started, so they reset on restart and only differences
 	// between two readings mean anything.
@@ -75,6 +92,46 @@ type Snapshot struct {
 	// getting a listener for one -- see this package's doc, and cmux-app-9aa
 	// for how long they went unreadable.
 	Counters map[string]int64 `json:"counters,omitempty"`
+}
+
+// SlotReachability accumulates the reaper's per-slot results across rounds and
+// across restarts. Safe for concurrent use: the reaper goroutine records, the
+// status writer reads.
+//
+// Seed it with [Snapshot.SlotLastReachedAt] from the status file the previous
+// process left behind, or the first restart erases the outage being looked for.
+type SlotReachability struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func NewSlotReachability(seed map[string]time.Time) *SlotReachability {
+	seen := make(map[string]time.Time, len(seed))
+	maps.Copy(seen, seed)
+	return &SlotReachability{seen: seen}
+}
+
+// Record stamps every slot that answered. A slot that did NOT answer keeps
+// whatever timestamp it already had -- the gap between that and now is the
+// outage, so overwriting or clearing it would destroy the measurement.
+func (r *SlotReachability) Record(reached map[string]bool, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for kind, ok := range reached {
+		if ok {
+			r.seen[kind] = at
+		} else if _, known := r.seen[kind]; !known {
+			// Remember that the slot exists and has never answered; the
+			// zero time is what distinguishes it from one never configured.
+			r.seen[kind] = time.Time{}
+		}
+	}
+}
+
+func (r *SlotReachability) Snapshot() map[string]time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return maps.Clone(r.seen)
 }
 
 // Write atomically persists snap to path as JSON: written to a temp file in

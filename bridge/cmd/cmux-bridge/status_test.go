@@ -155,3 +155,99 @@ func TestRunStatusMissingFileFails(t *testing.T) {
 		t.Fatalf("runStatus exit code = %d, want 1 for a status file that was never written", got)
 	}
 }
+
+// -- slot reachability output (cmux-app-t5x)
+
+// The line that would have shown a 14-day standby outage instead of a health
+// gauge that reset on every restart.
+func TestPrintStatusCallsOutAStandbyThatStoppedAnswering(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{
+		WrittenAt: time.Now(),
+		SlotLastReachedAt: map[string]time.Time{
+			"relay":  time.Now().Add(-time.Minute),
+			"direct": time.Now().Add(-14 * 24 * time.Hour),
+		},
+	})
+	out := buf.String()
+
+	if !strings.Contains(out, "UNREACHABLE since then") {
+		t.Fatalf("a 14-day-old slot must be called out: %s", out)
+	}
+	// The healthy one must not be, or the warning means nothing.
+	relayLine := lineContaining(t, out, "relay")
+	if strings.Contains(relayLine, "UNREACHABLE") {
+		t.Fatalf("a slot reached a minute ago must not be flagged: %q", relayLine)
+	}
+}
+
+// "never answered" and "not configured" are different answers and only one is
+// alarming, so they must not print the same.
+func TestPrintStatusDistinguishesNeverReachedFromAbsent(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{
+		WrittenAt:         time.Now(),
+		SlotLastReachedAt: map[string]time.Time{"direct": {}},
+	})
+	out := buf.String()
+
+	if !strings.Contains(out, "NEVER") {
+		t.Fatalf("want the never-reached wording: %s", out)
+	}
+	// Scoped to the slots block: "relay tunnel:" is a different line entirely.
+	if strings.Contains(slotsBlock(out), "relay") {
+		t.Fatalf("an unconfigured slot must not appear at all: %s", out)
+	}
+}
+
+// slotsBlock returns the indented rows under "slots reached:".
+func slotsBlock(out string) string {
+	var block []string
+	inBlock := false
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "slots reached:"):
+			inBlock = true
+		case inBlock && strings.HasPrefix(line, "  "):
+			block = append(block, line)
+		case inBlock:
+			return strings.Join(block, "\n")
+		}
+	}
+	return strings.Join(block, "\n")
+}
+
+func TestPrintStatusSaysSoBeforeTheFirstRound(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{WrittenAt: time.Now()})
+
+	if !strings.Contains(buf.String(), "no completed device round yet") {
+		t.Fatalf("output missing the pre-first-round line: %s", buf.String())
+	}
+}
+
+// A slot inside the grace window reads as ordinary: one missed hourly round is
+// a blip, not an outage, and crying about it would train the reader to ignore
+// the line that matters.
+func TestPrintStatusToleratesASingleMissedRound(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{
+		WrittenAt:         time.Now(),
+		SlotLastReachedAt: map[string]time.Time{"direct": time.Now().Add(-90 * time.Minute)},
+	})
+
+	if strings.Contains(buf.String(), "UNREACHABLE") {
+		t.Fatalf("90 minutes is one missed round, not an outage: %s", buf.String())
+	}
+}
+
+func lineContaining(t *testing.T, out, want string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, want) {
+			return line
+		}
+	}
+	t.Fatalf("no line containing %q in:\n%s", want, out)
+	return ""
+}

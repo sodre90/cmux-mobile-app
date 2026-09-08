@@ -111,7 +111,7 @@ func TestListJoinsServerDevicesToLocalSecrets(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	rows, problems := collectDevices([]agentServer{srv.as("relay")}, sessions)
+	rows, problems, _ := collectDevices([]agentServer{srv.as("relay")}, sessions)
 	if len(problems) != 0 {
 		t.Fatalf("unexpected problems: %v", problems)
 	}
@@ -134,7 +134,7 @@ func TestListReportsSecretsNoServerKnowsAbout(t *testing.T) {
 	addSecret(t, sessions, "aaaa1111")
 	addSecret(t, sessions, "cccc3333")
 
-	rows, _ := collectDevices([]agentServer{srv.as("relay")}, sessions)
+	rows, _, _ := collectDevices([]agentServer{srv.as("relay")}, sessions)
 	if len(rows) != 2 {
 		t.Fatalf("want 2 rows, got %d: %+v", len(rows), rows)
 	}
@@ -152,7 +152,7 @@ func TestListDoesNotInventOrphansWhenAServerIsDown(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	rows, problems := collectDevices([]agentServer{srv.as("relay")}, sessions)
+	rows, problems, _ := collectDevices([]agentServer{srv.as("relay")}, sessions)
 	if len(problems) != 1 {
 		t.Fatalf("want 1 problem from the dead server, got %v", problems)
 	}
@@ -323,7 +323,7 @@ func TestReaperRemovesSecretsNoServerKnowsAbout(t *testing.T) {
 	addSecret(t, sessions, "aaaa1111")
 	addSecret(t, sessions, "cccc3333")
 
-	reaped, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	reaped, _, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestReaperTouchesNothingWhenAServerIsUnreachable(t *testing.T) {
 	addSecret(t, sessions, "aaaa1111")
 	addSecret(t, sessions, "cccc3333")
 
-	reaped, _, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now())
+	reaped, _, _, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now())
 	if err == nil {
 		t.Fatal("an incomplete round must be reported, not treated as a clean sweep")
 	}
@@ -367,7 +367,7 @@ func TestReaperIsANoOpWhenNothingIsStranded(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	reaped, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	reaped, _, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil || reaped != 0 {
 		t.Fatalf("reaped = %d, err = %v; want 0, nil", reaped, err)
 	}
@@ -397,7 +397,7 @@ func TestReaperRevokesTokensWhoseSecretIsGone(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	secrets, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	secrets, tokens, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestReaperLeavesAPairingInFlightAlone(t *testing.T) {
 	srv := fakeDeviceAdmin(t, aged("phone-new", "bbbb2222", time.Minute))
 	sessions := newSessions(t)
 
-	secrets, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	secrets, tokens, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestReaperLeavesARowWithNoUsableTimestampAlone(t *testing.T) {
 	)
 	sessions := newSessions(t)
 
-	_, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	_, tokens, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestReaperRevokesNoTokensWhenAServerIsUnreachable(t *testing.T) {
 	dead.Close()
 	sessions := newSessions(t)
 
-	if _, tokens, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now()); err == nil {
+	if _, tokens, _, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now()); err == nil {
 		t.Fatal("an incomplete round must be reported")
 	} else if tokens != 0 {
 		t.Fatalf("tokens = %d, want 0", tokens)
@@ -477,11 +477,78 @@ func TestReaperKeepsADeviceKnownToOnlyOneServer(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	secrets, tokens, err := reapDriftedCredentials([]agentServer{relay.as("relay"), direct.as("direct")}, sessions, time.Now())
+	secrets, tokens, _, err := reapDriftedCredentials([]agentServer{relay.as("relay"), direct.as("direct")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if secrets != 0 || tokens != 0 {
 		t.Fatalf("secrets = %d, tokens = %d; want nothing reaped", secrets, tokens)
+	}
+}
+
+// -- per-slot reachability (cmux-app-t5x)
+
+// The hourly listing is the only end-to-end probe the agent runs against its
+// own transports. It knew the direct standby was unreachable for 14 days and
+// reported it nowhere but a WARN.
+func TestAReapRoundReportsWhichSlotsAnswered(t *testing.T) {
+	live := fakeDeviceAdmin(t, wire.AgentDevice{Name: "phone-1", TokenHash: "aaaa1111"})
+	dead := fakeDeviceAdmin(t)
+	dead.Close()
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+
+	_, _, reached, err := reapDriftedCredentials(
+		[]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now())
+
+	if err == nil {
+		t.Fatal("want the round reported as incomplete")
+	}
+	if !reached["relay"] {
+		t.Error("relay answered and must be recorded as reached")
+	}
+	if reached["direct"] {
+		t.Error("direct did not answer and must not be recorded as reached")
+	}
+}
+
+// Reachability has to survive the early return: a round abandoned because one
+// slot was unreachable is exactly the round whose answer is worth keeping.
+func TestAnAbandonedRoundStillReportsReachability(t *testing.T) {
+	dead := fakeDeviceAdmin(t)
+	dead.Close()
+	sessions := newSessions(t)
+
+	_, _, reached, err := reapDriftedCredentials([]agentServer{dead.as("direct")}, sessions, time.Now())
+
+	if err == nil {
+		t.Fatal("want an error for an unreachable server")
+	}
+	if len(reached) != 1 {
+		t.Fatalf("reachability was dropped on the abandoned path: %v", reached)
+	}
+	if reached["direct"] {
+		t.Error("direct must be recorded as not reached")
+	}
+}
+
+func TestEveryConfiguredSlotIsAccountedFor(t *testing.T) {
+	relay := fakeDeviceAdmin(t)
+	direct := fakeDeviceAdmin(t)
+	sessions := newSessions(t)
+
+	_, _, reached, err := reapDriftedCredentials(
+		[]agentServer{relay.as("relay"), direct.as("direct")}, sessions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, slot := range []string{"relay", "direct"} {
+		if !reached[slot] {
+			t.Errorf("%s answered but is not recorded as reached", slot)
+		}
+	}
+	if len(reached) != 2 {
+		t.Fatalf("want exactly the configured slots, got %v", reached)
 	}
 }
