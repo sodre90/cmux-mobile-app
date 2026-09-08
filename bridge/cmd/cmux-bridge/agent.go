@@ -298,12 +298,24 @@ type directHealth struct {
 	bound      atomic.Bool
 	accepted   atomic.Int64
 	lastServed atomic.Value // time.Time
+	// boundTimes counts successful binds, not the current state, so a retry
+	// loop can tell an attempt that never started from one that was serving
+	// and then stopped -- markUnbound erases the difference (cmux-app-t5x).
+	boundTimes atomic.Int64
 }
 
 func (h *directHealth) markBound() {
 	if h != nil {
 		h.bound.Store(true)
+		h.boundTimes.Add(1)
 	}
+}
+
+func (h *directHealth) binds() int64 {
+	if h == nil {
+		return 0
+	}
+	return h.boundTimes.Load()
 }
 
 func (h *directHealth) markUnbound() {
@@ -465,14 +477,7 @@ func runAgent(args []string) int {
 	})
 
 	if cfg.DirectListen != "" {
-		certDir := filepath.Join(filepath.Dir(cfg.DirectAuthStore), "direct-certs")
-		go func() {
-			err := serveDirect(ctx, cfg.DirectListen, certDir, directStore, directTenantID, srv.DirectHandler(), directHealth)
-			directHealth.markUnbound()
-			if err != nil && ctx.Err() == nil {
-				slog.Error("agent: direct listener ended", "err", err)
-			}
-		}()
+		go runDirectListener(ctx, cfg, directStore, directTenantID, srv.DirectHandler(), directHealth)
 	}
 
 	retry := backoff.New(time.Second, 30*time.Second)
