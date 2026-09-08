@@ -59,10 +59,13 @@ CREATE TABLE IF NOT EXISTS devices (
 `
 
 // OpenStore opens (creating if absent) the SQLite database at path, applies
-// the schema, and imports a legacy sessions.json sibling on first run (see
-// importLegacyJSON). Mirrors auth.Store.Open's shape (busy_timeout pragma,
-// schema-on-Exec) with one addition: a corrupt file at path is recovered
-// from rather than left to fail every call silently (see recoverIfCorrupt).
+// the schema, and imports a legacy sessions.json on first run (see
+// legacySource and importLegacyJSON). Mirrors auth.Store.Open's shape
+// (busy_timeout pragma, schema-on-Exec) with two additions: a legacy JSON
+// store sitting at path itself is moved aside first so it can be imported
+// rather than mistaken for corruption (see stashLegacyJSONAtDBPath), and a
+// genuinely corrupt file at path is recovered from rather than left to fail
+// every call silently (see recoverIfCorrupt).
 //
 // Named OpenStore, not Open, because this package already has a top-level
 // Open (cipher.go's AEAD decrypt primitive, used by frame.go/envelope.go and
@@ -71,6 +74,9 @@ CREATE TABLE IF NOT EXISTS devices (
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create dir for session store: %w", err)
+	}
+	if err := stashLegacyJSONAtDBPath(path); err != nil {
+		return nil, fmt.Errorf("session store %s: %w", path, err)
 	}
 	dsn := path + "?_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
@@ -93,7 +99,7 @@ func OpenStore(path string) (*Store, error) {
 		// A broken legacy import must not block startup -- log loudly and
 		// proceed with whatever was imported before the error, same posture
 		// as a corrupt file: the operator needs a signal, not a crashed agent.
-		slog.Error("e2e: legacy session import incomplete", "path", legacyPath(path), "err", err)
+		slog.Error("e2e: legacy session import incomplete", "store", path, "err", err)
 	}
 	return s, nil
 }
@@ -125,24 +131,86 @@ func recoverIfCorrupt(path string, openErr error) (recovered bool, err error) {
 	return true, nil
 }
 
-// legacyPath derives the pre-migration JSON sessions file path from the new
-// SQLite database path by swapping the extension, e.g. "sessions.db" ->
-// "sessions.json". Works for both the new default path and any
-// operator-customized session_store value, as long as it ends in a
-// recognizable extension.
-func legacyPath(dbPath string) string {
-	return strings.TrimSuffix(dbPath, filepath.Ext(dbPath)) + ".json"
+// The first bytes of every SQLite database file, used to tell an already-
+// migrated store from a legacy JSON one without parsing either.
+const sqliteFileMagic = "SQLite format 3\x00"
+
+// Where a legacy store found at the database path itself is moved so SQLite
+// can take that name. Not ".json", which is exactly the collision being
+// fixed here.
+const legacyStashSuffix = ".legacy"
+
+// stashLegacyJSONAtDBPath moves a pre-migration sessions.json that is sitting
+// at the database path itself out of the way, before SQLite ever opens the
+// file, so that importLegacyJSON can still find the pairings.
+//
+// This is the upgrade case for an operator whose session_store still names
+// the pre-SQLite sessions.json -- the default is sessions.db, but the old
+// path is a configured value that nothing rewrites. Without this move SQLite
+// reports SQLITE_NOTADB, recoverIfCorrupt renames the only copy of the
+// pairings to .corrupt.<ts> and tells the operator that every paired device
+// must re-pair, and the import that would have rescued them looks for its
+// source at a path that had collapsed onto the database itself
+// (cmux-app-lgc).
+//
+// Anything that is not decodable as the legacy format is left exactly where
+// it is, for recoverIfCorrupt to judge.
+func stashLegacyJSONAtDBPath(dbPath string) error {
+	raw, err := os.ReadFile(dbPath)
+	if err != nil {
+		return nil // absent, or unreadable for a reason SQLite reports better
+	}
+	if strings.HasPrefix(string(raw), sqliteFileMagic) {
+		return nil // already the database, not a legacy store
+	}
+	var f fileFormat
+	if err := json.Unmarshal(raw, &f); err != nil || f.Devices == nil {
+		return nil
+	}
+	stash := dbPath + legacyStashSuffix
+	if err := os.Rename(dbPath, stash); err != nil {
+		return fmt.Errorf("move legacy session store aside: %w", err)
+	}
+	slog.Info("e2e: session_store names a legacy json store, moved aside to import from",
+		"path", dbPath, "moved_to", stash, "devices", len(f.Devices))
+	return nil
 }
 
-// importLegacyJSON one-time-imports a legacy sessions.json sibling of dbPath
-// into the (already schema'd) database. The trigger condition is "devices is
-// still empty", not "the .db file didn't exist yet" -- idempotent and safe
-// to re-attempt on every Open until a device genuinely exists, unlike a
-// file-existence check that a crash mid-migration could leave permanently
-// wrong. A successful import renames the source .json to .json.migrated
-// (kept, not deleted, as a forensic/rollback copy) so the empty-devices
-// condition naturally never fires again. An unreadable legacy file is logged
-// and skipped rather than blocking startup.
+// legacySource reports where a pre-migration sessions.json can be read from,
+// and whether there is one at all: the copy stashed out of the database path
+// by stashLegacyJSONAtDBPath if it exists, otherwise the extension-swapped
+// sibling ("sessions.db" -> "sessions.json").
+//
+// Swapping the extension is skipped when it would just name dbPath again,
+// which happens whenever session_store already ends in .json. That is the
+// database, not a legacy file, and reading it as one is what produced the
+// "legacy session store unreadable: invalid character 'S'" warning -- 'S'
+// being the first byte of "SQLite format 3".
+func legacySource(dbPath string) (string, bool) {
+	if stash := dbPath + legacyStashSuffix; exists(stash) {
+		return stash, true
+	}
+	sibling := strings.TrimSuffix(dbPath, filepath.Ext(dbPath)) + ".json"
+	if sibling == dbPath || !exists(sibling) {
+		return "", false
+	}
+	return sibling, true
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// importLegacyJSON one-time-imports the legacy sessions.json named by
+// legacySource into the (already schema'd) database. The trigger condition is
+// "devices is still empty", not "the .db file didn't exist yet" -- idempotent
+// and safe to re-attempt on every Open until a device genuinely exists,
+// unlike a file-existence check that a crash mid-migration could leave
+// permanently wrong. A successful import renames the source to
+// <source>.migrated (kept, not deleted, as a forensic/rollback copy) so the
+// empty-devices condition naturally never fires again. An unreadable legacy
+// file is logged and skipped rather than blocking startup.
 func (s *Store) importLegacyJSON(dbPath string) error {
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM devices`).Scan(&n); err != nil {
@@ -151,7 +219,11 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	if n > 0 {
 		return nil // already has real data; never re-import
 	}
-	raw, err := os.ReadFile(legacyPath(dbPath))
+	src, ok := legacySource(dbPath)
+	if !ok {
+		return nil
+	}
+	raw, err := os.ReadFile(src)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -160,7 +232,7 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	}
 	var f fileFormat
 	if err := json.Unmarshal(raw, &f); err != nil {
-		slog.Warn("e2e: legacy session store unreadable, starting empty instead of blocking startup", "path", legacyPath(dbPath), "err", err)
+		slog.Warn("e2e: legacy session store unreadable, starting empty instead of blocking startup", "path", src, "err", err)
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -181,12 +253,12 @@ func (s *Store) importLegacyJSON(dbPath string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	migratedTo := legacyPath(dbPath) + ".migrated"
-	if err := os.Rename(legacyPath(dbPath), migratedTo); err != nil {
-		slog.Warn("e2e: imported devices but could not rename legacy file aside -- remove it manually", "count", len(f.Devices), "path", legacyPath(dbPath), "err", err)
+	migratedTo := src + ".migrated"
+	if err := os.Rename(src, migratedTo); err != nil {
+		slog.Warn("e2e: imported devices but could not rename legacy file aside -- remove it manually", "count", len(f.Devices), "path", src, "err", err)
 		return nil
 	}
-	slog.Info("e2e: migrated paired devices to sqlite", "count", len(f.Devices), "from", legacyPath(dbPath), "to", dbPath)
+	slog.Info("e2e: migrated paired devices to sqlite", "count", len(f.Devices), "from", src, "to", dbPath)
 	return nil
 }
 
