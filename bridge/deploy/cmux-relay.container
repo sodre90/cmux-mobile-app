@@ -7,7 +7,7 @@
 #
 # Install as a rootless USER unit (recommended — the relay needs no root):
 #
-#   podman build -t localhost/cmux-relay:latest -f deploy/Containerfile .
+#   podman build --build-arg VERSION=0.2.0 -t localhost/cmux-relay:latest -f deploy/Containerfile .
 #   mkdir -p ~/.config/containers/systemd
 #   cp deploy/cmux-relay.container ~/.config/containers/systemd/
 #   # edit the config.toml path below to point at your own copy

@@ -12,7 +12,18 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cmux-relay ./cmd/cmux-relay
+
+# Stamp the version the binary reports. Left unset the binary keeps the
+# in-repo value, which is deliberately a -dev string -- an unstamped build IS
+# a dev build, and saying so beats defaulting to a number that then drifts
+# from internal/version/version.go. Pass --build-arg VERSION=0.2.0 (or
+# VERSION: in compose) when building a release, or `cmux-relay version`
+# reports X.Y.Z-dev for an image built from a release tag and there is no way
+# to tell what is deployed (cmux-app-xsw).
+ARG VERSION=
+RUN CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w ${VERSION:+-X github.com/sodre90/cmux-bridge/internal/version.v=$VERSION}" \
+      -o /out/cmux-relay ./cmd/cmux-relay
 
 # ---- runtime -----------------------------------------------------------------
 FROM alpine:3.20
