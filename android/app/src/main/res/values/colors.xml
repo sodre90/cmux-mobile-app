@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launcher icon's cyan. Android tints the status-bar glyph itself, so
+         this only colors the small icon inside the expanded notification and
+         the accent line beside it: enough to tell cmux apart in a full shade. -->
+    <color name="notification_accent">#00D3E8</color>
+</resources>

@@ -11,6 +11,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.sodre90.cmuxremote.CmuxApp
 import com.sodre90.cmuxremote.MainActivity
+import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import kotlinx.coroutines.CoroutineScope
@@ -122,33 +123,63 @@ class CmuxMessagingService : FirebaseMessagingService() {
             NotificationChannel(CHANNEL_ID, "Agent attention", NotificationManager.IMPORTANCE_HIGH),
         )
 
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(MainActivity.EXTRA_WORKSPACE_ID, workspaceId)
-            putExtra(MainActivity.EXTRA_SURFACE_ID, surfaceId)
-        }
-        val pending = PendingIntent.getActivity(
-            this,
-            notificationId,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
+        val pending = deepLinkIntent(ACTION_OPEN_PANE, notificationId, workspaceId, surfaceId, openInbox = false)
+        val openInbox = deepLinkIntent(ACTION_OPEN_INBOX, notificationId, workspaceId, surfaceId, openInbox = true)
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_cmux)
+            .setColor(getColor(R.color.notification_accent))
             .setContentTitle(title)
             .setContentText(body)
+            // A real question runs well past the single collapsed line -- one
+            // observed push was cut to "How...", which tells the user only that
+            // they have to open the app to find out whether it needs them.
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pending)
+            .addAction(R.drawable.ic_stat_cmux, getString(R.string.notification_open_inbox), openInbox)
             .setAutoCancel(true)
             .build()
 
         nm.notify(notificationId, notification)
     }
 
+    /**
+     * A PendingIntent into [MainActivity] carrying the deep-link extras.
+     *
+     * [action] is what keeps the two intents apart. PendingIntent reuse is
+     * decided by Intent.filterEquals, which compares action/data/type/component
+     * and ignores extras entirely -- so without distinct actions, FLAG_UPDATE_CURRENT
+     * would hand the second request the first one's intent and the "Open inbox"
+     * button would open the pane instead.
+     */
+    private fun deepLinkIntent(
+        action: String,
+        notificationId: Int,
+        workspaceId: String?,
+        surfaceId: String?,
+        openInbox: Boolean,
+    ): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            this.action = action
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_WORKSPACE_ID, workspaceId)
+            putExtra(MainActivity.EXTRA_SURFACE_ID, surfaceId)
+            putExtra(MainActivity.EXTRA_OPEN_INBOX, openInbox)
+        }
+        return PendingIntent.getActivity(
+            this,
+            notificationId,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
     companion object {
         const val CHANNEL_ID = "agent_attention"
         private const val TAG = "CmuxMessagingService"
+        private const val ACTION_OPEN_PANE = "com.sodre90.cmuxremote.OPEN_PANE"
+        private const val ACTION_OPEN_INBOX = "com.sodre90.cmuxremote.OPEN_INBOX"
     }
 }
 

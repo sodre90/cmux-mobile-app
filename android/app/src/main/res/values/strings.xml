@@ -58,6 +58,7 @@
 
     <!-- Inbox screen -->
     <string name="inbox_title">Agent inbox</string>
+    <string name="notification_open_inbox">Open inbox</string>
     <string name="inbox_empty">No pending prompts</string>
     <string name="inbox_open_terminal">Open terminal</string>
     <string name="inbox_send_reply">Send reply</string>

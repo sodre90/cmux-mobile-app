@@ -46,6 +46,11 @@ fun CmuxNavHost(
     container: AppContainer,
     pendingWorkspaceId: String? = null,
     pendingSurfaceId: String? = null,
+    // Set by the notification's "Open inbox" action, and checked before the ids
+    // above: that action carries the same workspace/surface as the tile it sits
+    // on, so honouring those first would send the user to the pane they
+    // explicitly chose not to open.
+    pendingOpenInbox: Boolean = false,
     // Bumped once per notification tap, even when it targets the same
     // workspace/surface as the previous one -- see MainActivity.applyDeepLink.
     // LaunchedEffect only restarts when a KEY's value actually changes, and a
@@ -98,6 +103,13 @@ fun CmuxNavHost(
     LaunchedEffect(pendingDeepLinkToken, configured) {
         if (!configured) return@LaunchedEffect
         pendingPicker = null
+        if (pendingOpenInbox) {
+            navController.navigate(Routes.INBOX) {
+                popUpTo(Routes.SESSIONS) { inclusive = false }
+                launchSingleTop = true
+            }
+            return@LaunchedEffect
+        }
         if (pendingSurfaceId != null) {
             navController.navigate(Routes.terminal(pendingSurfaceId)) {
                 popUpTo(Routes.SESSIONS) { inclusive = false }

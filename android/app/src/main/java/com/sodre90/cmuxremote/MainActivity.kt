@@ -34,6 +34,11 @@ class MainActivity : ComponentActivity() {
     private var pendingWorkspaceId by mutableStateOf<String?>(null)
     private var pendingSurfaceId by mutableStateOf<String?>(null)
 
+    // Set by the notification's "Open inbox" action, which wants the prompt
+    // list rather than the pane the body came from -- answering is what the
+    // user came to do, and the inbox is where they can do it.
+    private var pendingOpenInbox by mutableStateOf(false)
+
     // Bumped on every applyDeepLink call, independent of whether the ids
     // above actually changed value. A repeat notification for the same
     // workspace (e.g. the same agent pinging again) would otherwise leave
@@ -64,6 +69,7 @@ class MainActivity : ComponentActivity() {
                     container,
                     pendingWorkspaceId = pendingWorkspaceId,
                     pendingSurfaceId = pendingSurfaceId,
+                    pendingOpenInbox = pendingOpenInbox,
                     pendingDeepLinkToken = pendingDeepLinkToken,
                 )
             }
@@ -93,6 +99,7 @@ class MainActivity : ComponentActivity() {
     private fun applyDeepLink(intent: Intent) {
         pendingWorkspaceId = intent.getStringExtra(EXTRA_WORKSPACE_ID)
         pendingSurfaceId = intent.getStringExtra(EXTRA_SURFACE_ID)
+        pendingOpenInbox = intent.getBooleanExtra(EXTRA_OPEN_INBOX, false)
         pendingDeepLinkToken++
     }
 
@@ -138,6 +145,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_WORKSPACE_ID = "cmux.workspace_id"
         const val EXTRA_SURFACE_ID = "cmux.surface_id"
+        const val EXTRA_OPEN_INBOX = "cmux.open_inbox"
         private const val TAG = "MainActivity"
     }
 }
