@@ -117,6 +117,7 @@ dependencies {
     testImplementation(libs.lazysodium.java)
     testImplementation(libs.jna)
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.navigation.testing)
 }
 
 val lazysodiumNativeLibDir = layout.buildDirectory.dir("native-libs/lazysodium")

@@ -18,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -200,22 +201,7 @@ fun CmuxNavHost(
                     fontZoom = it
                     testPushVm.saveFontZoom(it)
                 },
-                // Two ways in, and they need opposite exits. Opened from Sessions
-                // the stack is [SESSIONS, SETTINGS], so Done is just a pop --
-                // navigating instead pushed a SECOND Sessions entry, leaving two
-                // SessionsViewModels polling and a Back press that looked dead
-                // because it only swapped one identical screen for another. On
-                // first run SETTINGS is the start destination and there is no
-                // Sessions to go back to, so that path still has to navigate.
-                onDone = {
-                    if (navController.previousBackStackEntry?.destination?.route == Routes.SESSIONS) {
-                        navController.popBackStack()
-                    } else {
-                        navController.navigate(Routes.SESSIONS) {
-                            popUpTo(Routes.SETTINGS) { inclusive = true }
-                        }
-                    }
-                },
+                onDone = { navController.leaveSettings() },
             )
         }
 
@@ -342,6 +328,30 @@ fun CmuxNavHost(
                     navController.navigate(Routes.terminal(surfaceId)) { launchSingleTop = true }
                 },
             )
+        }
+    }
+}
+
+/**
+ * Leaves the Settings screen by its "Done" button.
+ *
+ * Two ways in, and they need opposite exits. Opened from Sessions the stack is
+ * [SESSIONS, SETTINGS], so Done is just a pop -- navigating instead pushed a
+ * SECOND Sessions entry, leaving two SessionsViewModels polling and a Back
+ * press that looked dead because it only swapped one identical screen for
+ * another (cmux-app-4qm). On first run SETTINGS is the start destination and
+ * there is no Sessions to go back to, so that path still has to navigate.
+ *
+ * Lifted out of the NavHost so the decision itself is reachable from a test
+ * against a TestNavHostController -- composing the real graph would drag in
+ * every screen's ViewModel and its networking (cmux-app-4hc).
+ */
+internal fun NavController.leaveSettings() {
+    if (previousBackStackEntry?.destination?.route == Routes.SESSIONS) {
+        popBackStack()
+    } else {
+        navigate(Routes.SESSIONS) {
+            popUpTo(Routes.SETTINGS) { inclusive = true }
         }
     }
 }
