@@ -66,6 +66,15 @@ type Snapshot struct {
 	// LastEventAt is when the agent last processed a frame from its
 	// `cmux events --reconnect` stream.
 	LastEventAt time.Time `json:"last_event_at"`
+
+	// Counters is metrics.Snapshot() at WrittenAt: running totals since this
+	// agent process started, so they reset on restart and only differences
+	// between two readings mean anything.
+	//
+	// They live here because the agent serves no /debug/vars and is not
+	// getting a listener for one -- see this package's doc, and cmux-app-9aa
+	// for how long they went unreadable.
+	Counters map[string]int64 `json:"counters,omitempty"`
 }
 
 // Write atomically persists snap to path as JSON: written to a temp file in

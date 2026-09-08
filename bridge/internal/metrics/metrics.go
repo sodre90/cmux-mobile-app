@@ -6,10 +6,14 @@
 // metrics-specific parameters through unrelated call chains.
 //
 // Every var here is registered exactly once, at package init, via the
-// standard library's expvar.NewInt/expvar.NewMap. Both binaries serve them
-// at /debug/vars on their existing HTTP listener (relay.Handler,
-// server.Server's mux) -- expvar's registry is process-global, so whichever
-// vars a given binary actually increments are the ones that show up there.
+// standard library's expvar.NewInt/expvar.NewMap. expvar's registry is
+// process-global, so both binaries carry every var; only the ones a given
+// binary actually increments ever leave zero.
+//
+// The relay serves them live at /debug/vars (relay.Handler, behind the edge
+// token). The agent has no such route and deliberately gains no new listening
+// surface for one: it reports [Snapshot] in its periodic status file instead,
+// which `cmux-bridge status` prints (cmux-app-9aa).
 package metrics
 
 import "expvar"
@@ -60,3 +64,32 @@ var (
 	// agent, keyed by call site ("terminal_frame", "body").
 	E2EDecryptFailuresTotal = expvar.NewMap("e2e_decrypt_failures_total")
 )
+
+// Snapshot reports the current value of every counter and gauge in the
+// process's expvar registry, flattened: a map var contributes one entry per
+// key, as "name/key".
+//
+// It reads the registry rather than a list of the vars above on purpose. A
+// second list is a second thing to forget, and forgetting is precisely how
+// every one of these ended up unreadable on the agent for as long as it did
+// (cmux-app-9aa).
+//
+// Only *expvar.Int and *expvar.Map are collected, which is exactly this
+// package's own vars: the runtime's own "cmdline" and "memstats" are Funcs,
+// and neither belongs in an operator's health snapshot.
+func Snapshot() map[string]int64 {
+	out := make(map[string]int64)
+	expvar.Do(func(kv expvar.KeyValue) {
+		switch v := kv.Value.(type) {
+		case *expvar.Int:
+			out[kv.Key] = v.Value()
+		case *expvar.Map:
+			v.Do(func(entry expvar.KeyValue) {
+				if n, ok := entry.Value.(*expvar.Int); ok {
+					out[kv.Key+"/"+entry.Key] = n.Value()
+				}
+			})
+		}
+	})
+	return out
+}

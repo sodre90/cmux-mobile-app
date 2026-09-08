@@ -31,6 +31,42 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCountersRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	want := map[string]int64{"push_sent_total": 12, "e2e_decrypt_failures_total/body": 3}
+	if err := Write(path, Snapshot{WrittenAt: time.Now(), Counters: want}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Counters) != len(want) {
+		t.Fatalf("counters round trip: got %v want %v", got.Counters, want)
+	}
+	for name, n := range want {
+		if got.Counters[name] != n {
+			t.Errorf("counters[%q] = %d, want %d", name, got.Counters[name], n)
+		}
+	}
+}
+
+// An agent from before this field writes a snapshot with no counters at all,
+// which must read back as absent rather than fail the whole parse.
+func TestASnapshotWithNoCountersReadsBackEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "status.json")
+	if err := Write(path, Snapshot{WrittenAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Counters) != 0 {
+		t.Fatalf("want no counters, got %v", got.Counters)
+	}
+}
+
 func TestReadMissingFileErrors(t *testing.T) {
 	if _, err := Read(filepath.Join(t.TempDir(), "no-such-file.json")); err == nil {
 		t.Fatal("want an error reading a status file that was never written")

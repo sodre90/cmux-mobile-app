@@ -91,6 +91,41 @@ func TestPrintStatusDistinguishesBoundFromWorking(t *testing.T) {
 	}
 }
 
+// cmux-app-9aa: these totals have no /debug/vars on the agent to be read
+// from, so `cmux-bridge status` is the only place they surface at all.
+func TestPrintStatusListsCountersSortedIncludingZeroes(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{
+		WrittenAt: time.Now(),
+		Counters: map[string]int64{
+			"push_sent_total":                 12,
+			"push_failed_total":               0,
+			"e2e_decrypt_failures_total/body": 3,
+			"pairing_codes_redeemed_total":    1,
+		},
+	})
+	out := buf.String()
+
+	for _, want := range []string{"push_sent_total", "12", "push_failed_total", "e2e_decrypt_failures_total/body"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+	// Sorted, so two readings taken apart diff line by line.
+	if strings.Index(out, "pairing_codes_redeemed_total") > strings.Index(out, "push_failed_total") {
+		t.Fatalf("counters are not sorted: %s", out)
+	}
+}
+
+func TestPrintStatusSaysSoWhenThereAreNoCounters(t *testing.T) {
+	var buf bytes.Buffer
+	printStatus(&buf, status.Snapshot{WrittenAt: time.Now()})
+
+	if !strings.Contains(buf.String(), "counters:        none") {
+		t.Fatalf("output missing the no-counters line: %s", buf.String())
+	}
+}
+
 func TestRunStatusReadsWrittenSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	statusPath := filepath.Join(dir, "status.json")

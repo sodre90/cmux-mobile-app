@@ -26,6 +26,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/logging"
+	"github.com/sodre90/cmux-bridge/internal/metrics"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/status"
@@ -450,6 +451,7 @@ func runAgent(args []string) int {
 			DirectLastServedAt:        directLastServed,
 			LastCmuxReachedAt:         lastReached,
 			LastEventAt:               srv.LastEventAt(),
+			Counters:                  metrics.Snapshot(),
 		}
 	})
 

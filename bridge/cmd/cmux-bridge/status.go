@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/config"
@@ -46,6 +48,22 @@ func printStatus(w io.Writer, snap status.Snapshot) {
 	}
 	_, _ = fmt.Fprintf(w, "cmux reached:    %s\n", formatTimeOrNever(snap.LastCmuxReachedAt))
 	_, _ = fmt.Fprintf(w, "last event:      %s\n", formatTimeOrNever(snap.LastEventAt))
+	printCounters(w, snap.Counters)
+}
+
+// printCounters lists the agent's expvar totals, sorted so two readings taken
+// apart can be diffed line by line -- which is the only way to read them, since
+// they count from process start and reset on restart. Zeroes are printed too:
+// "this has never happened" is a different answer from "this counter is gone".
+func printCounters(w io.Writer, counters map[string]int64) {
+	if len(counters) == 0 {
+		_, _ = fmt.Fprintln(w, "counters:        none (agent predates this field, or has not written one yet)")
+		return
+	}
+	_, _ = fmt.Fprintln(w, "counters:")
+	for _, name := range slices.Sorted(maps.Keys(counters)) {
+		_, _ = fmt.Fprintf(w, "  %-32s %d\n", name, counters[name])
+	}
 }
 
 // describeDirectListener says what the listener is doing, not merely that it
