@@ -531,29 +531,38 @@ private fun WorkspaceCard(
                         }
                         // Long-press already opens this same menu (power-user shortcut);
                         // this icon is the discoverable affordance for everyone else.
-                        IconButton(onClick = { showActionMenu = true }) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = stringResource(R.string.sessions_workspace_actions_description),
-                            )
+                        //
+                        // The menu lives in this Box, not the card's outer one, because a
+                        // DropdownMenu anchors to its parent: declared at card level it
+                        // dropped from the card's top-left corner, ~250dp from the button
+                        // that opened it, covering the title and the card above.
+                        Box {
+                            val actionsDescription =
+                                stringResource(R.string.sessions_workspace_actions_description)
+                            IconButton(onClick = { showActionMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = actionsDescription)
+                            }
+                            DropdownMenu(
+                                expanded = showActionMenu,
+                                onDismissRequest = { showActionMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.action_rename)) },
+                                    onClick = {
+                                        showActionMenu = false
+                                        onRename()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.yolo_mode_menu_item)) },
+                                    onClick = {
+                                        showActionMenu = false
+                                        onYoloMode()
+                                    },
+                                )
+                            }
                         }
                         dragHandle()
-                    }
-                    DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_rename)) },
-                            onClick = {
-                                showActionMenu = false
-                                onRename()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.yolo_mode_menu_item)) },
-                            onClick = {
-                                showActionMenu = false
-                                onYoloMode()
-                            },
-                        )
                     }
                 }
                 if (expanded) {
