@@ -610,6 +610,117 @@ func TestConfirmPairingIsIdempotent(t *testing.T) {
 	}
 }
 
+// pairingStamps reads the two columns recording how a pairing ended. The wire
+// enum deliberately carries only one bit, so this is where the distinction the
+// audit question needs actually lives.
+func pairingStamps(t *testing.T, s *Store, code string) (refused, revoked bool) {
+	t.Helper()
+	var refusedAt, revokedAt sql.NullString
+	if err := s.db.QueryRow(`SELECT refused_at, revoked_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&refusedAt, &revokedAt); err != nil {
+		t.Fatalf("read pairing stamps for %s: %v", code, err)
+	}
+	return refusedAt.Valid, revokedAt.Valid
+}
+
+// Observed live on the relay 2026-08-11, code B4TNFA5U: redeemed 10:59:02,
+// confirmed 10:59:03, then a DELETE at 10:59:28 stamped refused_at and
+// /devices/pair-status started answering "refused" for a pairing the operator
+// had accepted (cmux-app-05w). Confirmed is terminal.
+func TestAbortingAConfirmedPairingLeavesItConfirmed(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("ConfirmPairing: %v", err)
+	}
+
+	if _, err := s.AbortPairing(tenant, code); err != nil {
+		t.Fatalf("AbortPairing: %v", err)
+	}
+
+	if state, ok := s.PairingConfirmationState(code, time.Minute); !ok || state != PairingConfirmed {
+		t.Fatalf("after aborting a confirmed pairing = (%q, ok=%v), want confirmed", state, ok)
+	}
+}
+
+// The data-model half: "was this pairing ever accepted?" has to stay
+// answerable, so the two events get their own columns.
+func TestAConfirmedThenAbortedPairingIsDistinguishableFromARefusedOne(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+
+	accepted := redeemedPairing(t, s, tenant)
+	if err := s.ConfirmPairing(tenant, accepted, time.Minute); err != nil {
+		t.Fatalf("ConfirmPairing: %v", err)
+	}
+	if _, err := s.AbortPairing(tenant, accepted); err != nil {
+		t.Fatalf("AbortPairing on the confirmed pairing: %v", err)
+	}
+
+	refusedCode := redeemedPairing(t, s, tenant)
+	if _, err := s.AbortPairing(tenant, refusedCode); err != nil {
+		t.Fatalf("AbortPairing on the unanswered pairing: %v", err)
+	}
+
+	if refused, revoked := pairingStamps(t, s, accepted); refused || !revoked {
+		t.Errorf("confirmed-then-aborted: refused=%v revoked=%v, want refused=false revoked=true", refused, revoked)
+	}
+	if refused, revoked := pairingStamps(t, s, refusedCode); !refused || revoked {
+		t.Errorf("refused at the prompt: refused=%v revoked=%v, want refused=true revoked=false", refused, revoked)
+	}
+}
+
+// Nothing above may weaken what abort is actually for: the token the phone is
+// holding still has to die, whichever side of confirmation the abort lands on.
+func TestAbortingAConfirmedPairingStillDestroysTheToken(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code, err := s.NewPairingCode(tenant, "agent-pubkey", time.Minute)
+	if err != nil {
+		t.Fatalf("NewPairingCode: %v", err)
+	}
+	token, _, ok := s.RedeemPairingCode(code, "phone", testPubkey)
+	if !ok {
+		t.Fatal("redeem should succeed")
+	}
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("ConfirmPairing: %v", err)
+	}
+
+	revoked, err := s.AbortPairing(tenant, code)
+	if err != nil {
+		t.Fatalf("AbortPairing: %v", err)
+	}
+	if !revoked {
+		t.Error("aborting a confirmed pairing must still report the token destroyed")
+	}
+	if _, err := s.Verify(token); err == nil {
+		t.Error("the phone's token still verifies after its pairing was aborted")
+	}
+}
+
+// A confirmed pairing is redeemed by definition, so moving its abort off
+// refused_at must not hand the code back to a second redemption.
+func TestAnAbortedConfirmedCodeStaysUnredeemable(t *testing.T) {
+	s := newStore(t)
+	tenant := newTenant(t, s)
+	code := redeemedPairing(t, s, tenant)
+	if err := s.ConfirmPairing(tenant, code, time.Minute); err != nil {
+		t.Fatalf("ConfirmPairing: %v", err)
+	}
+	if _, err := s.AbortPairing(tenant, code); err != nil {
+		t.Fatalf("AbortPairing: %v", err)
+	}
+
+	if _, _, ok := s.RedeemPairingCode(code, "attacker", testPubkey); ok {
+		t.Fatal("an aborted, already-redeemed code must not redeem again")
+	}
+	if _, _, _, ok := s.PairingCodeInfo(code); ok {
+		t.Error("PairingCodeInfo must not keep resolving a used-up code")
+	}
+}
+
 // The same isolation AbortPairing enforces: confirming is not a capability
 // another tenant's agent can exercise by guessing a code.
 func TestConfirmPairingIsTenantScoped(t *testing.T) {

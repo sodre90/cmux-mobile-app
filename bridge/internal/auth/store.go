@@ -90,6 +90,7 @@ var migrations = []string{
 	`ALTER TABLE pairing_codes ADD COLUMN agent_pubkey TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE pairing_codes ADD COLUMN confirmed_at TEXT`,
 	`ALTER TABLE pairing_codes ADD COLUMN refused_at TEXT`,
+	`ALTER TABLE pairing_codes ADD COLUMN revoked_at TEXT`,
 }
 
 // applyMigrations runs each migration statement, tolerating a "duplicate
@@ -633,7 +634,10 @@ func (s *Store) PairingCodeStatus(tenantID, code string) (devicePubkey, tokenHas
 // It used to DELETE the pairing_codes row, which was only ever how a refused
 // code was made unredeemable. The row now has to survive for the phone to
 // have something to read (PairingConfirmationState), so RedeemPairingCode and
-// PairingCodeInfo check refused_at directly instead (cmux-app-gmo).
+// PairingCodeInfo check refused_at directly instead (cmux-app-gmo). An abort
+// after confirmation stamps revoked_at rather than refused_at and so does not
+// go through those checks -- it does not need to, since both already reject an
+// already-redeemed code, and a confirmed pairing is by definition redeemed.
 //
 // This exists because the token is minted at redemption, which happens
 // BEFORE the operator sees the fingerprint to confirm: an abort left a fully
@@ -652,9 +656,9 @@ func (s *Store) AbortPairing(tenantID, code string) (revokedToken bool, err erro
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	var gotTenant string
-	var hash sql.NullString
-	err = tx.QueryRow(`SELECT tenant_id, token_hash FROM pairing_codes WHERE code = ?`, code).
-		Scan(&gotTenant, &hash)
+	var hash, confirmedAt sql.NullString
+	err = tx.QueryRow(`SELECT tenant_id, token_hash, confirmed_at FROM pairing_codes WHERE code = ?`, code).
+		Scan(&gotTenant, &hash, &confirmedAt)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && gotTenant != tenantID) {
 		return false, ErrNotFound
 	}
@@ -670,8 +674,16 @@ func (s *Store) AbortPairing(tenantID, code string) (revokedToken bool, err erro
 		n, _ := res.RowsAffected()
 		revokedToken = n > 0
 	}
-	if _, err := tx.Exec(`UPDATE pairing_codes SET refused_at = ? WHERE code = ? AND tenant_id = ?`,
-		now(), code, tenantID); err != nil {
+	// An abort before the operator answered is a refusal; an abort after they
+	// said yes is a revocation. One call, two different events, and stamping
+	// both on refused_at loses the answer to "was this pairing ever accepted?"
+	// -- as well as letting PairingConfirmationState walk a confirmed pairing
+	// backwards to refused (cmux-app-05w).
+	stamp := `UPDATE pairing_codes SET refused_at = ? WHERE code = ? AND tenant_id = ?`
+	if confirmedAt.Valid {
+		stamp = `UPDATE pairing_codes SET revoked_at = ? WHERE code = ? AND tenant_id = ?`
+	}
+	if _, err := tx.Exec(stamp, now(), code, tenantID); err != nil {
 		return false, fmt.Errorf("abort pairing: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -754,6 +766,12 @@ const (
 // refused, computed here rather than written by a sweeper. That makes the
 // timeout fail closed with no process needing to survive to enforce it: an
 // agent killed at its own prompt resolves the pairing to refused on its own.
+//
+// revoked_at is deliberately not consulted: confirmed is terminal. A pairing
+// aborted after the operator accepted it stays confirmed here, because that
+// is what happened -- the credential was withdrawn afterwards, which the
+// device row's deletion already expresses, and which the phone learns by its
+// token no longer verifying rather than by this pairing-time enum.
 func (s *Store) PairingConfirmationState(code string, confirmWindow time.Duration) (state string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
