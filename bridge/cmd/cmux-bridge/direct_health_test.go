@@ -126,14 +126,17 @@ func TestDirectHealthCountsConnectionsThatNeverBecomeRequests(t *testing.T) {
 	}
 }
 
+func directTestClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // throwaway self-signed cert
+	}}
+}
+
 func TestDirectHealthRecordsAServedRequest(t *testing.T) {
 	health := &directHealth{}
 	addr := serveForTest(t, health)
 
-	client := &http.Client{Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // throwaway self-signed cert
-	}}
-	resp, err := client.Get("https://" + addr + "/anything")
+	resp, err := directTestClient().Get("https://" + addr + "/anything")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +148,55 @@ func TestDirectHealthRecordsAServedRequest(t *testing.T) {
 	}
 	if lastServed.IsZero() {
 		t.Fatal("a completed request must record a last-served time")
+	}
+}
+
+// cmux-app-8d3: the hourly reaper calls GET /agent/devices against every
+// configured server, and the direct listener is one of them. Counting that
+// made the field advance once an hour on the agent's own behalf, so it could
+// not report whether the standby transport actually works -- it read healthy
+// on a day when every phone request to it 401'd.
+func TestDirectHealthIgnoresTheAgentsOwnAdminProbe(t *testing.T) {
+	health := &directHealth{}
+	addr := serveForTest(t, health)
+
+	resp, err := directTestClient().Get("https://" + addr + "/agent/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	_, accepted, lastServed := health.snapshot()
+	if accepted != 1 {
+		t.Fatalf("the probe still arrives, so it is still an accepted connection; got %d", accepted)
+	}
+	if !lastServed.IsZero() {
+		t.Fatal("the agent's own admin probe must not report the direct listener as serving devices")
+	}
+}
+
+// The exclusion is by caller, not by blanket silence: a device request still
+// records, including one that will go on to fail auth -- it reached the
+// transport, which is what this field answers.
+func TestDirectHealthStillRecordsADeviceRequestAfterAnAdminProbe(t *testing.T) {
+	health := &directHealth{}
+	addr := serveForTest(t, health)
+	client := directTestClient()
+
+	probe, err := client.Get("https://" + addr + "/agent/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Body.Close()
+
+	resp, err := client.Get("https://" + addr + "/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if _, _, lastServed := health.snapshot(); lastServed.IsZero() {
+		t.Fatal("a device request must record a last-served time even after an admin probe")
 	}
 }
 

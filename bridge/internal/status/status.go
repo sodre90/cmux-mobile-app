@@ -48,10 +48,16 @@ type Snapshot struct {
 	// arriving at all -- a firewall or a Tailscale ACL, not a TLS fault.
 	DirectConnectionsAccepted int64 `json:"direct_connections_accepted"`
 
-	// DirectLastServedAt is when the listener last read a request off a
-	// connection, which is the earliest moment a TLS handshake is known to
-	// have completed. Never, with connections accepted, means clients are
-	// arriving and failing before they deliver anything.
+	// DirectLastServedAt is when the listener last handled a request from
+	// something other than this agent's own admin client, which is the
+	// earliest moment a TLS handshake is known to have completed. Never,
+	// with connections accepted, means clients are arriving and failing
+	// before they deliver anything.
+	//
+	// The agent's own hourly device reaper is excluded on purpose: it calls
+	// every configured server, this listener included, so counting it made
+	// the field advance once an hour whether or not a phone had ever reached
+	// the standby transport (cmux-app-8d3).
 	DirectLastServedAt time.Time `json:"direct_last_served_at"`
 
 	// LastCmuxReachedAt is when a `cmux rpc` call (fast-path socket or

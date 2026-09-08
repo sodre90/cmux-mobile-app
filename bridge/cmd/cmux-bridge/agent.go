@@ -251,17 +251,7 @@ func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.St
 // nothing below it does.
 func serveDirectListener(ctx context.Context, ln net.Listener, handler http.Handler, health *directHealth) error {
 	health.markBound()
-	srv := &http.Server{
-		Handler: handler,
-		// StateActive is the first point at which bytes of a request have
-		// been read, so it is also the first proof the TLS handshake got
-		// all the way through -- which bind success alone never was.
-		ConnState: func(_ net.Conn, state http.ConnState) {
-			if state == http.StateActive {
-				health.markServed()
-			}
-		},
-	}
+	srv := &http.Server{Handler: markServedByDevice(health, handler)}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 	select {
@@ -271,6 +261,31 @@ func serveDirectListener(ctx context.Context, ln net.Listener, handler http.Hand
 	case err := <-errCh:
 		return err
 	}
+}
+
+// agentAdminPrefix is this agent's own device-admin API (see
+// internal/devices.Mount). No phone ever calls it; the hourly reaper in this
+// same process does, against every configured server -- and the direct
+// listener is one of them.
+const agentAdminPrefix = "/agent/"
+
+// markServedByDevice records that a request from something other than this
+// agent's own admin client reached the listener.
+//
+// Reaching a handler proves the TLS handshake completed, which bind success
+// alone never did. Excluding the admin API is what stops the reaper's hourly
+// round from advancing direct_last_served_at on its own behalf -- that made
+// the only signal `cmux-bridge status` offers about the standby transport
+// self-satisfying, reporting it healthy on a day when every phone request to
+// it 401'd (cmux-app-8d3). Excluding a caller can only ever under-report,
+// which is the safe direction for a health signal to fail in.
+func markServedByDevice(health *directHealth, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, agentAdminPrefix) {
+			health.markServed()
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // directHealth is what the direct listener reports about itself for
