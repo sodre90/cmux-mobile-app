@@ -11,14 +11,12 @@ import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.PendingFeedItem
+import com.sodre90.cmuxremote.ui.TestViewModelHost
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -56,17 +54,20 @@ private class FakeInboxBridgeGateway(private val bridge: FallbackBridgeClient?) 
 class InboxViewModelTest {
 
     private lateinit var server: MockWebServer
+    private lateinit var host: TestViewModelHost
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Default)
+        host = TestViewModelHost()
         server = MockWebServer().apply { start() }
     }
 
+    // Ordered: the ViewModels' refresh loops stop before the server they talk
+    // to goes away.
     @After
     fun tearDown() {
+        host.clearViewModels()
         server.shutdown()
-        Dispatchers.resetMain()
     }
 
     private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
@@ -86,13 +87,15 @@ class InboxViewModelTest {
     // Matches the exact strings.xml text each error path falls back to
     // (see CmuxNavHost's INBOX route) so assertions below can keep checking
     // the literal message.
-    private fun inboxViewModel(bridge: BridgeGateway) = InboxViewModel(
-        bridge = bridge,
-        bridgeNotConfiguredMessage = "Bridge not configured",
-        loadInboxFailedMessage = "Failed to load inbox",
-        replyFailedMessage = "Reply failed",
-        terminalNotFoundMessage = "Couldn't find that item's terminal",
-    )
+    private fun inboxViewModel(bridge: BridgeGateway) = host.hold(InboxViewModel::class.java) {
+        InboxViewModel(
+            bridge = bridge,
+            bridgeNotConfiguredMessage = "Bridge not configured",
+            loadInboxFailedMessage = "Failed to load inbox",
+            replyFailedMessage = "Reply failed",
+            terminalNotFoundMessage = "Couldn't find that item's terminal",
+        )
+    }
 
     @Test
     fun bridgeNotConfiguredSettlesOnError() {

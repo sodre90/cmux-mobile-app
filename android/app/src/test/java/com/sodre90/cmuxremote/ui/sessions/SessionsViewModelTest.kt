@@ -19,11 +19,10 @@ import com.sodre90.cmuxremote.data.e2e.PairedSession
 import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
 import com.sodre90.cmuxremote.data.e2e.ReplayWindow
 import com.sodre90.cmuxremote.data.e2e.nonce
+import com.sodre90.cmuxremote.ui.TestViewModelHost
 import com.sodre90.cmuxremote.ui.UiState
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -110,28 +109,23 @@ private class FakeSessionsBridgeGateway : BridgeGateway {
 class SessionsViewModelTest {
 
     private lateinit var server: MockWebServer
+    private lateinit var host: TestViewModelHost
     private val orderGateway = FakeWorkspaceOrderGateway()
     private val secret = ByteArray(32) { it.toByte() }
     private val cipher = Cipher(LazySodiumJava(SodiumJava()))
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Default)
+        host = TestViewModelHost()
         server = MockWebServer().apply { start() }
     }
 
+    // Ordered: the ViewModels' refresh collectors and events loop stop before
+    // the server they talk to goes away.
     @After
     fun tearDown() {
+        host.clearViewModels()
         server.shutdown()
-        // Deliberately no Dispatchers.resetMain(). Nothing here clears the
-        // ViewModels it builds, so their viewModelScope coroutines (the debounced
-        // refresh collectors, the events loop) are still live at this point.
-        // Resetting left them resuming onto an absent Main and throwing, which
-        // JUnit reports against whichever runTest-based test happens to run next
-        // -- an UncaughtExceptionsBeforeTest failure in a class with no bug in it.
-        // Main is Dispatchers.Default here rather than a TestDispatcher, so
-        // leaving it set stays valid for the life of the JVM, and any class that
-        // wants its own dispatcher calls setMain itself.
     }
 
     private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
@@ -151,15 +145,18 @@ class SessionsViewModelTest {
     // None of these tests assert on VM-owned error text, so the injected
     // messages are arbitrary fixed strings, not the real strings.xml values
     // (see CmuxNavHost's SESSIONS route for those).
-    private fun sessionsViewModel(bridge: BridgeGateway, workspaceOrder: WorkspaceOrderGateway) = SessionsViewModel(
-        bridge = bridge,
-        workspaceOrder = workspaceOrder,
-        bridgeNotConfiguredMessage = "Bridge not configured",
-        renameFailedMessage = "Rename failed",
-        setYoloModeFailedMessage = "Setting YOLO mode failed",
-        loadSessionsFailedMessage = "Failed to load sessions",
-        refreshSessionsFailedMessage = "Failed to refresh sessions",
-    )
+    private fun sessionsViewModel(bridge: BridgeGateway, workspaceOrder: WorkspaceOrderGateway) =
+        host.hold(SessionsViewModel::class.java) {
+            SessionsViewModel(
+                bridge = bridge,
+                workspaceOrder = workspaceOrder,
+                bridgeNotConfiguredMessage = "Bridge not configured",
+                renameFailedMessage = "Rename failed",
+                setYoloModeFailedMessage = "Setting YOLO mode failed",
+                loadSessionsFailedMessage = "Failed to load sessions",
+                refreshSessionsFailedMessage = "Failed to refresh sessions",
+            )
+        }
 
     private fun frameFor(json: String, counter: Long): okio.ByteString {
         val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, counter), json.toByteArray(Charsets.UTF_8))

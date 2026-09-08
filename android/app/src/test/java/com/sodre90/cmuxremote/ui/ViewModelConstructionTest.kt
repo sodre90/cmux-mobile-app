@@ -18,12 +18,8 @@ import com.sodre90.cmuxremote.ui.pairing.ConnectionSettingsViewModel
 import com.sodre90.cmuxremote.ui.pairing.PairingViewModel
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -39,14 +35,16 @@ import org.junit.Test
  */
 class ViewModelConstructionTest {
 
+    private lateinit var host: TestViewModelHost
+
     @Before
     fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        host = TestViewModelHost()
     }
 
     @After
     fun tearDown() {
-        Dispatchers.resetMain()
+        host.clearViewModels()
     }
 
     private class FakeBridgeGateway : BridgeGateway {
@@ -90,59 +88,69 @@ class ViewModelConstructionTest {
 
     @Test
     fun terminalViewModelIsConstructibleWithAFakeGateway() {
-        TerminalViewModel(
-            FakeBridgeGateway(),
-            FakeTerminalDisplayGateway(),
-            surfaceId = "surface-1",
-            bridgeNotConfiguredMessage = "unused",
-        )
+        host.hold(TerminalViewModel::class.java) {
+            TerminalViewModel(
+                FakeBridgeGateway(),
+                FakeTerminalDisplayGateway(),
+                surfaceId = "surface-1",
+                bridgeNotConfiguredMessage = "unused",
+            )
+        }
     }
 
     @Test
     fun sessionsViewModelIsConstructibleWithFakeGateways() {
-        SessionsViewModel(
-            FakeBridgeGateway(),
-            FakeWorkspaceOrderGateway(),
-            bridgeNotConfiguredMessage = "unused",
-            renameFailedMessage = "unused",
-            setYoloModeFailedMessage = "unused",
-            loadSessionsFailedMessage = "unused",
-            refreshSessionsFailedMessage = "unused",
-        )
+        host.hold(SessionsViewModel::class.java) {
+            SessionsViewModel(
+                FakeBridgeGateway(),
+                FakeWorkspaceOrderGateway(),
+                bridgeNotConfiguredMessage = "unused",
+                renameFailedMessage = "unused",
+                setYoloModeFailedMessage = "unused",
+                loadSessionsFailedMessage = "unused",
+                refreshSessionsFailedMessage = "unused",
+            )
+        }
     }
 
     @Test
     fun inboxViewModelIsConstructibleWithAFakeGateway() {
-        InboxViewModel(
-            FakeBridgeGateway(),
-            bridgeNotConfiguredMessage = "unused",
-            loadInboxFailedMessage = "unused",
-            replyFailedMessage = "unused",
-            terminalNotFoundMessage = "unused",
-        )
+        host.hold(InboxViewModel::class.java) {
+            InboxViewModel(
+                FakeBridgeGateway(),
+                bridgeNotConfiguredMessage = "unused",
+                loadInboxFailedMessage = "unused",
+                replyFailedMessage = "unused",
+                terminalNotFoundMessage = "unused",
+            )
+        }
     }
 
     @Test
     fun connectionSettingsViewModelIsConstructibleWithFakeGateways() {
-        ConnectionSettingsViewModel(
-            FakeBridgeGateway(),
-            FakeTerminalDisplayGateway(),
-            bridgeNotConfiguredMessage = "unused",
-            testPushFailedMessage = "unused",
-        )
+        host.hold(ConnectionSettingsViewModel::class.java) {
+            ConnectionSettingsViewModel(
+                FakeBridgeGateway(),
+                FakeTerminalDisplayGateway(),
+                bridgeNotConfiguredMessage = "unused",
+                testPushFailedMessage = "unused",
+            )
+        }
     }
 
     @Test
     fun pairingViewModelIsConstructibleWithAFakeGateway() {
-        PairingViewModel(
-            FakePairingGateway(),
-            ConnectionSlot.RELAY,
-            codeExpiredMessage = "unused",
-            codeInvalidScanAgainMessage = "unused",
-            codeInvalidAskFreshMessage = "unused",
-            pairingFailedMessage = "unused",
-            pairingRefusedMessage = "unused",
-            pairingNotAnsweredMessage = "unused",
-        )
+        host.hold(PairingViewModel::class.java) {
+            PairingViewModel(
+                FakePairingGateway(),
+                ConnectionSlot.RELAY,
+                codeExpiredMessage = "unused",
+                codeInvalidScanAgainMessage = "unused",
+                codeInvalidAskFreshMessage = "unused",
+                pairingFailedMessage = "unused",
+                pairingRefusedMessage = "unused",
+                pairingNotAnsweredMessage = "unused",
+            )
+        }
     }
 }

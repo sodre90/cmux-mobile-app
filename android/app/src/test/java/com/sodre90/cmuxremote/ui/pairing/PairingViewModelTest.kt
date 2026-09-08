@@ -7,10 +7,8 @@ import com.sodre90.cmuxremote.data.pairing.PairingNotAnsweredException
 import com.sodre90.cmuxremote.data.pairing.PairingQr
 import com.sodre90.cmuxremote.data.pairing.PairingRefusedException
 import com.sodre90.cmuxremote.data.pairing.PairingSession
+import com.sodre90.cmuxremote.ui.TestViewModelHost
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -54,14 +52,16 @@ private class FakePairingGateway(private val session: PairingSession) : PairingG
 
 class PairingViewModelTest {
 
+    private lateinit var host: TestViewModelHost
+
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Default)
+        host = TestViewModelHost()
     }
 
     @After
     fun tearDown() {
-        Dispatchers.resetMain()
+        host.clearViewModels()
     }
 
     private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
@@ -79,16 +79,18 @@ class PairingViewModelTest {
         """{"pair_url":"https://relay.example.com/devices/pair","code":"$code",""" +
             """"agent_pubkey":"QUJD","expires_at":"2099-01-01T00:00:00Z","tenant_id":"t1"}"""
 
-    private fun testViewModel(session: PairingSession) = PairingViewModel(
-        pairing = FakePairingGateway(session),
-        slot = ConnectionSlot.RELAY,
-        codeExpiredMessage = "expired",
-        codeInvalidScanAgainMessage = "invalid-scan-again",
-        codeInvalidAskFreshMessage = "invalid-ask-fresh",
-        pairingFailedMessage = "pairing-failed",
-        pairingRefusedMessage = "pairing-refused",
-        pairingNotAnsweredMessage = "pairing-not-answered",
-    )
+    private fun testViewModel(session: PairingSession) = host.hold(PairingViewModel::class.java) {
+        PairingViewModel(
+            pairing = FakePairingGateway(session),
+            slot = ConnectionSlot.RELAY,
+            codeExpiredMessage = "expired",
+            codeInvalidScanAgainMessage = "invalid-scan-again",
+            codeInvalidAskFreshMessage = "invalid-ask-fresh",
+            pairingFailedMessage = "pairing-failed",
+            pairingRefusedMessage = "pairing-refused",
+            pairingNotAnsweredMessage = "pairing-not-answered",
+        )
+    }
 
     @Test
     fun scanningAValidQrMovesToAwaitingConfirmationWithoutCommitting() {

@@ -13,11 +13,9 @@ import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
 import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
-import kotlinx.coroutines.Dispatchers
+import com.sodre90.cmuxremote.ui.TestViewModelHost
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.resetMain
-import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -55,17 +53,20 @@ private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
 class ConnectionSettingsViewModelTest {
 
     private lateinit var server: MockWebServer
+    private lateinit var host: TestViewModelHost
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Default)
+        host = TestViewModelHost()
         server = MockWebServer().apply { start() }
     }
 
+    // Ordered: the ViewModels' in-flight test-push calls stop before the server
+    // they talk to goes away.
     @After
     fun tearDown() {
+        host.clearViewModels()
         server.shutdown()
-        Dispatchers.resetMain()
     }
 
     private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
@@ -85,12 +86,15 @@ class ConnectionSettingsViewModelTest {
     // Matches the exact strings.xml text each error path falls back to (see
     // CmuxNavHost's SETTINGS route) so assertions below can keep checking the
     // literal message.
-    private fun testPushViewModel(bridge: BridgeGateway) = ConnectionSettingsViewModel(
-        bridge = bridge,
-        terminalDisplay = FakeTerminalDisplayGateway(),
-        bridgeNotConfiguredMessage = "Bridge not configured",
-        testPushFailedMessage = "Test push failed",
-    )
+    private fun testPushViewModel(bridge: BridgeGateway) =
+        host.hold(ConnectionSettingsViewModel::class.java) {
+            ConnectionSettingsViewModel(
+                bridge = bridge,
+                terminalDisplay = FakeTerminalDisplayGateway(),
+                bridgeNotConfiguredMessage = "Bridge not configured",
+                testPushFailedMessage = "Test push failed",
+            )
+        }
 
     @Test
     fun initialStateIsIdle() {
