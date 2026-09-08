@@ -102,6 +102,10 @@
 
     <!-- Terminal font size (Connections/Settings screen) -->
     <string name="terminal_font_size_title">Terminal font size</string>
+    <string name="terminal_font_size_reset">Reset to fit</string>
+    <string name="terminal_font_size_help">100% fits the terminal\'s full width on screen; higher zooms in. Pinching inside a terminal changes the same setting.</string>
+    <string name="connections_intro_title">Connect this phone to your Mac</string>
+    <string name="connections_intro_body">Run “cmux-bridge agent” on the Mac, then pair below by scanning the QR code it prints.\n\nStart with Relay: it reaches your Mac from anywhere. Tailscale is an optional second route for when both are on the same network — pair it too and the app falls back to it on its own.</string>
     <string name="terminal_font_size_decrease">Decrease terminal font size</string>
     <string name="terminal_font_size_increase">Increase terminal font size</string>
 

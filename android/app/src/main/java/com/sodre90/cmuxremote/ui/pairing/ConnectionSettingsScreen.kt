@@ -8,10 +8,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -39,6 +44,8 @@ import com.sodre90.cmuxremote.ui.terminal.MAX_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.MIN_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.ZOOM_STEP
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /** Replaces the old single-pairing Settings screen: shows both
@@ -64,11 +71,36 @@ fun ConnectionSettingsScreen(
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
     val relayLabel = stringResource(R.string.connection_slot_relay)
     val directLabel = stringResource(R.string.connection_slot_direct)
-    Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.connections_title)) }) }) { inner ->
+    val paired = relayConfigured || directConfigured
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.connections_title)) },
+                // The only labelled way out used to be a Done button below two
+                // connection cards, the font stepper and Test push -- off the
+                // bottom of the screen. On first run there is genuinely nowhere
+                // to go back to (this is the start destination until something
+                // is paired), which is the same condition Done already had.
+                navigationIcon = {
+                    if (paired) {
+                        IconButton(onClick = onDone) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.action_back),
+                            )
+                        }
+                    }
+                },
+            )
+        },
+    ) { inner ->
         Column(
             modifier = Modifier.fillMaxSize().padding(inner).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (!paired) {
+                FirstRunIntro()
+            }
             ConnectionRow(
                 label = relayLabel,
                 description = stringResource(R.string.connection_relay_description),
@@ -88,13 +120,8 @@ fun ConnectionSettingsScreen(
                 onForget = { forgetTarget = ConnectionSlot.DIRECT },
             )
             FontSizeRow(zoom = fontZoom, onZoomChange = onFontZoomChange)
-            if (relayConfigured || directConfigured) {
+            if (paired) {
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
-            }
-            if (relayConfigured || directConfigured) {
-                Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.action_done))
-                }
             }
         }
     }
@@ -140,12 +167,26 @@ private fun ConnectionRow(
             if (rejected) {
                 Text(recoveryHint, color = MaterialTheme.colorScheme.error)
             }
-            Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(if (configured) R.string.action_repair else R.string.action_pair))
-            }
+            // Pair is the primary action only while there is nothing paired.
+            // Once a slot is set up, Re-pair is the rarest thing on the screen
+            // and had no business being the loudest -- and Forget, which throws
+            // the credentials away, sat next to it looking equally routine.
             if (configured) {
-                OutlinedButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.action_repair))
+                }
+                TextButton(
+                    onClick = onForget,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text(stringResource(R.string.action_forget))
+                }
+            } else {
+                Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.action_pair))
                 }
             }
         }
@@ -215,7 +256,7 @@ private fun FontSizeRow(zoom: Float, onZoomChange: (Float) -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedButton(
-                    onClick = { onZoomChange((zoom - ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)) },
+                    onClick = { onZoomChange(steppedZoomDown(zoom)) },
                     enabled = zoom > MIN_ZOOM,
                     modifier = Modifier.semantics { contentDescription = decreaseDescription },
                 ) { Text("-") }
@@ -225,11 +266,53 @@ private fun FontSizeRow(zoom: Float, onZoomChange: (Float) -> Unit) {
                     textAlign = TextAlign.Center,
                 )
                 OutlinedButton(
-                    onClick = { onZoomChange((zoom + ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)) },
+                    onClick = { onZoomChange(steppedZoomUp(zoom)) },
                     enabled = zoom < MAX_ZOOM,
                     modifier = Modifier.semantics { contentDescription = increaseDescription },
                 ) { Text("+") }
             }
+            // What 100% means is not guessable, and a pinch can leave the value
+            // somewhere no stepper tap would ever produce -- so say what the
+            // baseline is and give a one-tap way back to it.
+            Text(
+                stringResource(R.string.terminal_font_size_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { onZoomChange(MIN_ZOOM) }, enabled = zoom > MIN_ZOOM) {
+                Text(stringResource(R.string.terminal_font_size_reset))
+            }
+        }
+    }
+}
+
+/**
+ * The next step *below* [zoom], snapped onto the ZOOM_STEP grid rather than
+ * subtracted from wherever a pinch happened to land. Stepping by a fixed offset
+ * from an arbitrary pinch value (1.36, say) meant the buttons could only ever
+ * reach 111/136/161% -- and once you had drifted off the grid there was no way
+ * back onto it.
+ */
+internal fun steppedZoomDown(zoom: Float): Float =
+    ((ceil(zoom / ZOOM_STEP) - 1) * ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)
+
+/** The next step above [zoom] -- see [steppedZoomDown]. */
+internal fun steppedZoomUp(zoom: Float): Float =
+    ((floor(zoom / ZOOM_STEP) + 1) * ZOOM_STEP).coerceIn(MIN_ZOOM, MAX_ZOOM)
+
+/** Shown until something is paired, which is also when this screen is the start
+ *  destination -- so it is the first thing the app ever says. It used to say
+ *  nothing: two cards, two "Pair" buttons, and no mention that the Mac has to be
+ *  running the agent, or which of the two slots to start with. */
+@Composable
+private fun FirstRunIntro() {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.connections_intro_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(stringResource(R.string.connections_intro_body))
         }
     }
 }
