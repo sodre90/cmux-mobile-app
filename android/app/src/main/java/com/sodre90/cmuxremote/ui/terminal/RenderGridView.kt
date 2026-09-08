@@ -58,10 +58,6 @@ val TerminalFont = FontFamily(
  */
 internal const val TerminalLineHeightFactor = 1.25f
 
-/** Height of the jump-to-latest button plus its 16dp inset, reserved below the
- *  grid's content so the newest rows can scroll clear of it. */
-private val JumpButtonClearance = 56.dp
-
 /** Scrollback beyond this many lines is dropped from the render buffer -- the
  *  agent's own history is untouched, only what this view holds/composes. Without
  *  a ceiling, a long-lived session's buffer (and the per-frame `+` reallocation
@@ -138,17 +134,10 @@ fun RenderGridView(
                 // legibility floor. wrap=true: reflow long rows onto extra display lines so
                 // zooming in wraps instead of sliding — the Column fills the viewport width
                 // to give Text a wrap boundary, and no horizontalScroll is attached.
-                // The jump button floats over the bottom-right of the grid, hiding the
-                // right end of the last few rows -- exactly the newest ones the user is
-                // scrolling back toward. Reserve its height inside the scrolling content
-                // (not around it, which would shrink the viewport the resize RPC reports)
-                // so those rows can clear it. Only while it is showing, so the bottom of
-                // an at-rest terminal keeps its full height.
-                val jumpClearance = if (showJump) JumpButtonClearance else 0.dp
                 val columnModifier = if (wrap) {
-                    Modifier.fillMaxWidth().verticalScroll(scroll).padding(bottom = jumpClearance)
+                    Modifier.fillMaxWidth().verticalScroll(scroll)
                 } else {
-                    Modifier.verticalScroll(scroll).horizontalScroll(hScroll).padding(bottom = jumpClearance)
+                    Modifier.verticalScroll(scroll).horizontalScroll(hScroll)
                 }
                 Column(modifier = columnModifier) {
                     buffer.forEachIndexed { index, line ->
