@@ -11,7 +11,10 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Icon
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -54,6 +57,10 @@ val TerminalFont = FontFamily(
  * grid resize sent to the backend would not match what is actually drawn).
  */
 internal const val TerminalLineHeightFactor = 1.25f
+
+/** Height of the jump-to-latest button plus its 16dp inset, reserved below the
+ *  grid's content so the newest rows can scroll clear of it. */
+private val JumpButtonClearance = 56.dp
 
 /** Scrollback beyond this many lines is dropped from the render buffer -- the
  *  agent's own history is untouched, only what this view holds/composes. Without
@@ -131,10 +138,17 @@ fun RenderGridView(
                 // legibility floor. wrap=true: reflow long rows onto extra display lines so
                 // zooming in wraps instead of sliding — the Column fills the viewport width
                 // to give Text a wrap boundary, and no horizontalScroll is attached.
+                // The jump button floats over the bottom-right of the grid, hiding the
+                // right end of the last few rows -- exactly the newest ones the user is
+                // scrolling back toward. Reserve its height inside the scrolling content
+                // (not around it, which would shrink the viewport the resize RPC reports)
+                // so those rows can clear it. Only while it is showing, so the bottom of
+                // an at-rest terminal keeps its full height.
+                val jumpClearance = if (showJump) JumpButtonClearance else 0.dp
                 val columnModifier = if (wrap) {
-                    Modifier.fillMaxWidth().verticalScroll(scroll)
+                    Modifier.fillMaxWidth().verticalScroll(scroll).padding(bottom = jumpClearance)
                 } else {
-                    Modifier.verticalScroll(scroll).horizontalScroll(hScroll)
+                    Modifier.verticalScroll(scroll).horizontalScroll(hScroll).padding(bottom = jumpClearance)
                 }
                 Column(modifier = columnModifier) {
                     buffer.forEachIndexed { index, line ->
@@ -171,10 +185,15 @@ fun RenderGridView(
             }
         }
         if (showJump) {
-            FloatingActionButton(
+            SmallFloatingActionButton(
                 onClick = { scope.launch { scroll.scrollTo(scroll.maxValue) } },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
-            ) { Text(stringResource(R.string.terminal_scroll_to_bottom)) }
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = stringResource(R.string.terminal_scroll_to_bottom),
+                )
+            }
         }
     }
 }

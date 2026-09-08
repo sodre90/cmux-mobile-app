@@ -130,7 +130,7 @@
     <string name="terminal_ctrl_state_not_armed">Not armed</string>
     <string name="terminal_delivery_reconnected">Reconnected — check your last few keystrokes went through</string>
     <string name="terminal_delivery_delayed">Input not confirmed — check connection</string>
-    <string name="terminal_scroll_to_bottom">▼</string>
+    <string name="terminal_scroll_to_bottom">Jump to latest output</string>
 
     <!-- Terminal key bar content descriptions (TalkBack): key.label itself stays a
          plain Kotlin string (short glyph/abbreviation, e.g. "^C", "PgUp", not prose). -->
