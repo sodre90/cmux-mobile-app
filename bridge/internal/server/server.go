@@ -21,6 +21,7 @@ type Server struct {
 	store        *auth.Store
 	hub          *hub
 	terminalPoll time.Duration // how often WS /terminal re-replays for output
+	replayGrace  time.Duration // how long WS /terminal holds a pane whose replays are failing
 	// sessions is nil unless SetSessions is called (only by runAgent's
 	// production wiring). Nil means the plaintext code path every existing
 	// test exercises; non-nil enables the opt-in e2e encryption layer.
@@ -87,6 +88,7 @@ func New(c *cmux.Client, s *auth.Store) *Server {
 		store:            s,
 		hub:              newHub(),
 		terminalPoll:     250 * time.Millisecond,
+		replayGrace:      terminalReplayGrace,
 		testPushCooldown: ratelimit.NewCooldown(testPushDeviceCooldown),
 		sockets:          newSocketTracker(),
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -357,5 +358,174 @@ func TestTheGoneCloseCarriesNoReasonText(t *testing.T) {
 	}
 	if closeErr.Text != "" {
 		t.Fatalf("close reason = %q, want empty", closeErr.Text)
+	}
+}
+
+// -- a slow cmux must not tear down a live pane (cmux-app-8a0)
+
+// fakeStallingTerminalScript answers the first replay, then fails the next
+// three, then answers again. Mirrors the measured failure: cmux stops
+// answering mobile.terminal.replay for a while and then comes back.
+const fakeStallingTerminalScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c mobile.terminal.replay "$CMUX_FAKE_LOG")
+    if [ "$n" -ge 2 ] && [ "$n" -le 4 ]; then
+      echo "Error: internal: cmux is busy" >&2
+      exit 1
+    fi
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"row_spans":[{"row":0,"text":"line-$n"}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+// fakeDeadTerminalScript answers the first replay and then never answers again.
+const fakeDeadTerminalScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c mobile.terminal.replay "$CMUX_FAKE_LOG")
+    if [ "$n" -ge 2 ]; then
+      echo "Error: internal: cmux is busy" >&2
+      exit 1
+    fi
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"row_spans":[{"row":0,"text":"line-1"}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+// THE regression. A failed poll used to return false, which ended the handler
+// and closed the socket -- so one slow replay dropped a healthy pane, the phone
+// reconnected, and the reconnect issued another full replay against the cmux
+// that was already too slow to serve one. The grid on screen is still valid, so
+// the socket must survive and recover on its own.
+func TestASlowReplayDoesNotCloseALivePane(t *testing.T) {
+	t.Setenv("CMUX_FAKE_LOG", t.TempDir()+"/cmux.log")
+	s, tok := newTestServer(t, fakeStallingTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	armReadDeadline(t, c)
+	var replay wire.TerminalDown
+	if err := c.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Type != "replay" {
+		t.Fatalf("first frame must be replay, got %q", replay.Type)
+	}
+
+	// Three replays fail in between. If any of them closed the socket this read
+	// returns a close/EOF error instead of the frame from the fifth call.
+	armReadDeadline(t, c)
+	var out wire.TerminalDown
+	if err := c.ReadJSON(&out); err != nil {
+		t.Fatalf("socket did not survive the failing replays: %v", err)
+	}
+	if !strings.Contains(string(out.Grid), "line-5") {
+		t.Fatalf("want the frame from after the recovery, got: %s", out.Grid)
+	}
+}
+
+// The safety valve: holding the pane is bounded, so a cmux that never comes
+// back does not keep the socket forever.
+func TestAPaneIsGivenUpOnceTheGraceRunsOut(t *testing.T) {
+	t.Setenv("CMUX_FAKE_LOG", t.TempDir()+"/cmux.log")
+	s, tok := newTestServer(t, fakeDeadTerminalScript)
+	s.replayGrace = 300 * time.Millisecond
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	armReadDeadline(t, c)
+	var replay wire.TerminalDown
+	if err := c.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+
+	// Must be a CLOSE, not merely silence: a socket that simply stops
+	// answering would satisfy "err != nil" via the read deadline and hide an
+	// unbounded hold.
+	armReadDeadline(t, c)
+	_, _, err := c.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("want the socket closed once the grace elapsed, got %v", err)
+	}
+}
+
+// -- replayOutage
+
+func outageAt(grace time.Duration, clock *time.Time) *replayOutage {
+	return &replayOutage{now: func() time.Time { return *clock }, grace: grace}
+}
+
+func TestAnOutageIsNotOngoingUntilSomethingFails(t *testing.T) {
+	now := time.Date(2026, 9, 8, 23, 0, 0, 0, time.UTC)
+	o := outageAt(time.Minute, &now)
+
+	if o.ongoing() {
+		t.Fatal("a fresh outage must not report itself as ongoing")
+	}
+	if o.recovered() != 0 {
+		t.Fatal("recovered must be zero when nothing was wrong -- otherwise every successful poll logs a recovery")
+	}
+}
+
+func TestThePaneIsHeldUntilTheGraceElapses(t *testing.T) {
+	now := time.Date(2026, 9, 8, 23, 0, 0, 0, time.UTC)
+	o := outageAt(time.Minute, &now)
+
+	if !o.keepWaiting() {
+		t.Fatal("the first failure must never give up -- that is the storm this fixes")
+	}
+	now = now.Add(59 * time.Second)
+	if !o.keepWaiting() {
+		t.Fatal("still inside the grace, must keep holding")
+	}
+	now = now.Add(2 * time.Second)
+	if o.keepWaiting() {
+		t.Fatal("past the grace, must give up")
+	}
+}
+
+func TestRecoveryReportsHowLongTheOutageRanAndClearsIt(t *testing.T) {
+	now := time.Date(2026, 9, 8, 23, 0, 0, 0, time.UTC)
+	o := outageAt(time.Minute, &now)
+	o.keepWaiting()
+
+	now = now.Add(30 * time.Second)
+	if down := o.recovered(); down != 30*time.Second {
+		t.Fatalf("outage length = %v, want 30s", down)
+	}
+	if o.ongoing() {
+		t.Fatal("recovered must end the outage")
+	}
+}
+
+// A second outage after a recovery gets its own full grace -- otherwise a pane
+// that flaps all day would be given up on for a failure it had just recovered
+// from.
+func TestAFreshOutageAfterRecoveryGetsTheFullGraceAgain(t *testing.T) {
+	now := time.Date(2026, 9, 8, 23, 0, 0, 0, time.UTC)
+	o := outageAt(time.Minute, &now)
+	o.keepWaiting()
+	now = now.Add(59 * time.Second)
+	o.recovered()
+
+	now = now.Add(time.Hour)
+	if !o.keepWaiting() {
+		t.Fatal("a new outage must start its grace from scratch")
 	}
 }

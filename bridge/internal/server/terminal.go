@@ -102,6 +102,8 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	nudge := make(chan struct{}, 1)
 	go s.terminalReadLoop(ctx, cancel, c, id, deviceID, write, nudge)
 
+	outage := newReplayOutage(s.replayGrace)
+
 	poll := func() bool {
 		next, err := s.fetchReplay(ctx, id)
 		if err != nil {
@@ -111,11 +113,29 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			// exec.CommandContext) -- that's an expected side effect
 			// of the disconnect already logged by the read loop, not
 			// a genuine RPC failure worth alarming about.
-			if ctx.Err() == nil {
-				slog.Warn("terminal: poll replay failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
-				closeIfSurfaceGone(c, err)
+			if ctx.Err() != nil {
+				return false
 			}
+			if cmux.IsNotFound(err) {
+				slog.Warn("terminal: surface is gone", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
+				closeIfSurfaceGone(c, err)
+				return false
+			}
+			metrics.TerminalReplayFailuresTotal.Add(1)
+			if !outage.ongoing() {
+				slog.Warn("terminal: replay failing, holding the pane on its last grid",
+					"surface_id", id, "grace", s.replayGrace, "err", err)
+			}
+			if outage.keepWaiting() {
+				return true
+			}
+			metrics.TerminalReplayGaveUpTotal.Add(1)
+			slog.Warn("terminal: giving up, cmux answered no replay for the whole grace window",
+				"surface_id", id, "grace", s.replayGrace, "err", err)
 			return false
+		}
+		if down := outage.recovered(); down > 0 {
+			slog.Info("terminal: replay working again", "surface_id", id, "down_for", down.Round(time.Second))
 		}
 		if bytes.Equal(next.Grid, lastGrid) {
 			return true
@@ -154,6 +174,59 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// terminalReplayGrace bounds how long the poll loop will sit on a stale grid
+// waiting for a cmux that cannot answer mobile.terminal.replay.
+//
+// Chosen from the measured episode lengths (cmux-app-8a0): of the nine multi-
+// failure episodes in 28 days, eight spanned under 7 minutes and one spanned 20.
+// So this waits out all but the outlier, and the outlier degrades to the old
+// behaviour rather than to something worse.
+//
+// Longer would be defensible too -- an idle socket costs nothing, while giving
+// up costs a reconnect and a fresh full replay against the process that is
+// already too slow to serve one. What sets an upper bound at all is that
+// nothing else can notice a client which vanished mid-outage: the read loop
+// only learns of it from a failed read, and the write path only from a write
+// there is currently nothing to make.
+const terminalReplayGrace = 10 * time.Minute
+
+// replayOutage tracks one run of consecutive replay failures on a single
+// terminal socket, so the poll loop can tell a first failure from a continuing
+// one and a recovery from an ordinary success.
+type replayOutage struct {
+	now   func() time.Time
+	grace time.Duration
+	since time.Time
+}
+
+func newReplayOutage(grace time.Duration) *replayOutage {
+	return &replayOutage{now: time.Now, grace: grace}
+}
+
+func (o *replayOutage) ongoing() bool { return !o.since.IsZero() }
+
+// keepWaiting records a failure and reports whether the socket is still worth
+// holding. The first failure starts the outage, so this is what decides when
+// the grace has run out.
+func (o *replayOutage) keepWaiting() bool {
+	if !o.ongoing() {
+		o.since = o.now()
+	}
+	return o.now().Sub(o.since) < o.grace
+}
+
+// recovered ends the outage and reports how long it ran. A zero duration means
+// there was no outage in progress, which is the ordinary case on every
+// successful poll.
+func (o *replayOutage) recovered() time.Duration {
+	if !o.ongoing() {
+		return 0
+	}
+	down := o.now().Sub(o.since)
+	o.since = time.Time{}
+	return down
 }
 
 // closeWriteTimeout bounds the close control frame's write. Short on purpose:
@@ -261,10 +334,15 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 // package's default, because it is categorically heavier than every other
 // call the bridge makes: it serialises a whole render grid, measured at
 // 1.0-4.45s for 240-390KB per surface against a 5s default, and 6.9-10.4s
-// once cmux itself was busy. Failing there is worse than waiting, because
-// the phone reconnects on failure and the reconnect issues another replay
-// -- the retry storm cost more than the slow call it was avoiding
-// (cmux-app-69y).
+// once cmux itself was busy (cmux-app-69y).
+//
+// This used to be the only defence against the retry storm -- a failure closed
+// the socket, the phone reconnected, and the reconnect issued another full
+// replay against the cmux that was already too slow to serve one -- so the
+// deadline was lengthened until failures got rare. The poll loop now holds the
+// socket through a failure instead (see [terminalReplayGrace]), which removes
+// the storm rather than making it rarer, and leaves this as what it says it is:
+// how long one replay may take.
 const replayTimeout = 20 * time.Second
 
 // fetchReplay calls mobile.terminal.replay and returns a wire.TerminalDown

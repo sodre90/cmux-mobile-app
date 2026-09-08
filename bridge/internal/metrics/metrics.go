@@ -63,6 +63,20 @@ var (
 	// E2EDecryptFailuresTotal counts failed e2e decrypt attempts on the
 	// agent, keyed by call site ("terminal_frame", "body").
 	E2EDecryptFailuresTotal = expvar.NewMap("e2e_decrypt_failures_total")
+
+	// TerminalReplayFailuresTotal counts mobile.terminal.replay calls that
+	// failed while a terminal socket was open. Since such a failure no longer
+	// closes the socket (cmux-app-8a0), and the log deliberately reports one
+	// line per outage rather than one per attempt, this counter is what keeps
+	// the volume measurable.
+	TerminalReplayFailuresTotal = expvar.NewInt("terminal_replay_failures_total")
+
+	// TerminalReplayGaveUpTotal counts terminal sockets closed because cmux
+	// answered no replay for the whole grace window. The ratio against
+	// TerminalReplayFailuresTotal is the one that matters: many failures and
+	// few give-ups is the fix working, and the two rising together means the
+	// grace is too short for the outages actually being seen.
+	TerminalReplayGaveUpTotal = expvar.NewInt("terminal_replay_gave_up_total")
 )
 
 // Snapshot reports the current value of every counter and gauge in the
