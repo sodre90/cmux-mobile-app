@@ -459,12 +459,16 @@ func runAgent(args []string) int {
 	}
 
 	retry := backoff.New(time.Second, 30*time.Second)
+	dialLog := newRelayDialLog(cfg.RelayURL)
 	for ctx.Err() == nil {
-		slog.Info("agent: dialing relay", "relay_url", cfg.RelayURL)
-		err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler, func() { relayTunnelUp.Store(true) })
+		dialLog.dialing()
+		err := dialAndServe(ctx, cfg.RelayURL, tlsCfg, handler, func() {
+			relayTunnelUp.Store(true)
+			dialLog.up()
+		})
 		relayTunnelUp.Store(false)
 		if err != nil {
-			slog.Warn("agent: tunnel ended", "err", err)
+			dialLog.failed(err)
 		}
 		if ctx.Err() != nil {
 			break
