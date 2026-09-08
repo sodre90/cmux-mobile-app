@@ -23,7 +23,6 @@ import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -124,7 +123,15 @@ class SessionsViewModelTest {
     @After
     fun tearDown() {
         server.shutdown()
-        Dispatchers.resetMain()
+        // Deliberately no Dispatchers.resetMain(). Nothing here clears the
+        // ViewModels it builds, so their viewModelScope coroutines (the debounced
+        // refresh collectors, the events loop) are still live at this point.
+        // Resetting left them resuming onto an absent Main and throwing, which
+        // JUnit reports against whichever runTest-based test happens to run next
+        // -- an UncaughtExceptionsBeforeTest failure in a class with no bug in it.
+        // Main is Dispatchers.Default here rather than a TestDispatcher, so
+        // leaving it set stays valid for the life of the JVM, and any class that
+        // wants its own dispatcher calls setMain itself.
     }
 
     private fun waitUntil(timeoutMs: Long = 3_000, block: () -> Boolean) {
