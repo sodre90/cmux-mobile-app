@@ -21,6 +21,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -41,6 +42,7 @@ import com.sodre90.cmuxremote.model.PendingFeedItem
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
 import com.sodre90.cmuxremote.ui.ErrorState
+import com.sodre90.cmuxremote.ui.PullableCenter
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.sessions.TerminalMatch
 import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
@@ -70,12 +72,13 @@ fun InboxScreen(
                     TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
                 },
                 actions = {
-                    TextButton(onClick = vm::refresh) { Text(stringResource(R.string.action_refresh)) }
+                    TextButton(onClick = vm::userRefresh) { Text(stringResource(R.string.action_refresh)) }
                 },
             )
         },
     ) { inner ->
         val connectionStatus by vm.connectionStatus.collectAsState()
+        val isRefreshing by vm.isRefreshing.collectAsState()
         Box(modifier = Modifier.fillMaxSize().padding(inner)) {
             Column(modifier = Modifier.fillMaxSize()) {
                 ConnectionStatusStrip(connectionStatus)
@@ -83,39 +86,47 @@ fun InboxScreen(
                     actionError?.let {
                         Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(8.dp))
                     }
-                    when (val s = state) {
-                        is UiState.Loading -> Box(Modifier.fillMaxSize()) {
-                            CircularProgressIndicator(Modifier.align(Alignment.Center))
-                        }
-                        is UiState.Error -> Box(Modifier.fillMaxSize()) {
-                            ErrorState(
-                                rawMessage = s.message,
-                                onRetry = vm::retry,
-                                modifier = Modifier.align(Alignment.Center),
-                            )
-                        }
-                        is UiState.Ready -> if (s.data.isEmpty()) {
-                            Box(Modifier.fillMaxSize()) {
-                                Text(stringResource(R.string.inbox_empty), Modifier.align(Alignment.Center))
+                    // The inbox is a list you wait on, so the pull gesture the
+                    // sessions list already had belongs here too -- including
+                    // over the empty and failed states, which is where a user
+                    // reaches for it first.
+                    PullToRefreshBox(
+                        isRefreshing = isRefreshing,
+                        onRefresh = vm::userRefresh,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        when (val s = state) {
+                            is UiState.Loading -> Box(Modifier.fillMaxSize()) {
+                                CircularProgressIndicator(Modifier.align(Alignment.Center))
                             }
-                        } else {
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(s.data, key = { it.id }) { item ->
-                                    InboxRow(
-                                        item = item,
-                                        onSend = { labels -> vm.reply(item, labels) },
-                                        onApprovePermission = { approve -> vm.replyPermission(item, approve) },
-                                        onOpenTerminal = {
-                                            scope.launch {
-                                                when (val match = vm.terminalTarget(item)) {
-                                                    is TerminalMatch.Direct -> onOpenTerminal(match.surfaceId)
-                                                    is TerminalMatch.Ambiguous ->
-                                                        pickerWorkspaces = match.workspaces
-                                                    null -> Unit // actionError already set by the ViewModel
+                            is UiState.Error -> PullableCenter {
+                                ErrorState(rawMessage = s.message, onRetry = vm::retry)
+                            }
+                            is UiState.Ready -> if (s.data.isEmpty()) {
+                                PullableCenter { Text(stringResource(R.string.inbox_empty)) }
+                            } else {
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(s.data, key = { it.id }) { item ->
+                                        InboxRow(
+                                            item = item,
+                                            onSend = { labels -> vm.reply(item, labels) },
+                                            onApprovePermission = { approve ->
+                                                vm.replyPermission(item, approve)
+                                            },
+                                            onOpenTerminal = {
+                                                scope.launch {
+                                                    when (val match = vm.terminalTarget(item)) {
+                                                        is TerminalMatch.Direct ->
+                                                            onOpenTerminal(match.surfaceId)
+                                                        is TerminalMatch.Ambiguous ->
+                                                            pickerWorkspaces = match.workspaces
+                                                        // actionError already set by the ViewModel
+                                                        null -> Unit
+                                                    }
                                                 }
-                                            }
-                                        },
-                                    )
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }

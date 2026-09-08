@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionStatus
+import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.model.EventFrame
 import com.sodre90.cmuxremote.model.FeedReply
@@ -64,6 +65,11 @@ class InboxViewModel(
     private val _actionError = MutableStateFlow<String?>(null)
     val actionError: StateFlow<String?> = _actionError.asStateFlow()
 
+    // True only while a refresh the user asked for is in flight -- see
+    // [userRefresh].
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     // Coalesces bursts of cmux feed events (two per tool call) into a single
     // refetch instead of hammering feed.list -- same trick as SessionsViewModel.
     private val refreshRequests =
@@ -109,25 +115,46 @@ class InboxViewModel(
     }
 
     fun refresh() {
-        val c = client ?: run {
-            // Same as SessionsViewModel: with no bridge there is nothing to wait
-            // for, so this is a settled failure rather than a load in progress.
+        val c = clientOrReportMissing() ?: return
+        viewModelScope.launch { fetchPending(c) }
+    }
+
+    /** The refresh the user asked for -- the pull gesture or the top-bar button.
+     *  Identical fetch to [refresh], but it drives [isRefreshing] so the pull
+     *  spinner has something to follow; event-driven refetches deliberately
+     *  don't, so agent activity nobody asked about never pops it. */
+    fun userRefresh() {
+        val c = clientOrReportMissing() ?: return
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            try {
+                fetchPending(c)
+            } finally {
+                _isRefreshing.value = false
+            }
+        }
+    }
+
+    // Same as SessionsViewModel: with no bridge there is nothing to wait for,
+    // so this is a settled failure rather than a load in progress.
+    private fun clientOrReportMissing(): FallbackBridgeClient? = client.also {
+        if (it == null) {
             if (_state.value is UiState.Loading) _state.value = UiState.Error(bridgeNotConfiguredMessage)
             _actionError.value = bridgeNotConfiguredMessage
-            return
         }
-        viewModelScope.launch {
-            try {
-                val items = c.pendingFeed().filter { isPendingInboxKind(it.kind) }
-                _state.value = UiState.Ready(items)
-                _actionError.value = null
-            } catch (ex: Exception) {
-                // Demotes to Error only while nothing has loaded yet; once a
-                // list is showing it stays -- see [_state]'s doc comment.
-                val message = ex.message ?: loadInboxFailedMessage
-                if (_state.value is UiState.Loading) _state.value = UiState.Error(message)
-                _actionError.value = message
-            }
+    }
+
+    private suspend fun fetchPending(c: FallbackBridgeClient) {
+        try {
+            val items = c.pendingFeed().filter { isPendingInboxKind(it.kind) }
+            _state.value = UiState.Ready(items)
+            _actionError.value = null
+        } catch (ex: Exception) {
+            // Demotes to Error only while nothing has loaded yet; once a
+            // list is showing it stays -- see [_state]'s doc comment.
+            val message = ex.message ?: loadInboxFailedMessage
+            if (_state.value is UiState.Loading) _state.value = UiState.Error(message)
+            _actionError.value = message
         }
     }
 

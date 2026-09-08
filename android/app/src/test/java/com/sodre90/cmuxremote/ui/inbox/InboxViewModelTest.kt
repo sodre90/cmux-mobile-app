@@ -25,6 +25,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 
 /** A [BridgeGateway] that always reports no configured slot for [anyBridgeConfigured]
  *  (so InboxViewModel's events-reconnect loop never starts -- these tests are
@@ -126,6 +127,36 @@ class InboxViewModelTest {
         waitUntil { vm.state.value is UiState.Ready }
         assertEquals(listOf("i1"), (vm.state.value as UiState.Ready).data.map { it.id })
         assertEquals(null, vm.actionError.value)
+    }
+
+    @Test
+    fun userRefreshRaisesIsRefreshingWhileItRunsAndLowersItAfterwards() {
+        server.enqueue(MockResponse().setBody("""{"items":[{"id":"i1","kind":"question"}]}"""))
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"items":[{"id":"i2","kind":"question"}]}""")
+                .setBodyDelay(200, TimeUnit.MILLISECONDS),
+        )
+        val vm = inboxViewModel(FakeInboxBridgeGateway(bridgeFor(server)))
+        waitUntil { vm.state.value is UiState.Ready }
+
+        vm.userRefresh()
+
+        // The spinner PullToRefreshBox follows has to actually go up, or the
+        // pull gesture looks like it did nothing.
+        waitUntil { vm.isRefreshing.value }
+        waitUntil { !vm.isRefreshing.value }
+        assertEquals(listOf("i2"), (vm.state.value as UiState.Ready).data.map { it.id })
+    }
+
+    @Test
+    fun userRefreshWithNoBridgeReportsItWithoutStrandingTheSpinner() {
+        val vm = inboxViewModel(FakeInboxBridgeGateway(null))
+
+        vm.userRefresh()
+
+        assertEquals("Bridge not configured", vm.actionError.value)
+        assertEquals(false, vm.isRefreshing.value)
     }
 
     @Test

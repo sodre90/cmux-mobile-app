@@ -75,6 +75,7 @@ import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.YoloMode
 import com.sodre90.cmuxremote.ui.ConnectionStatusStrip
 import com.sodre90.cmuxremote.ui.ErrorState
+import com.sodre90.cmuxremote.ui.PullableCenter
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.terminal.parseColor
@@ -126,21 +127,21 @@ fun SessionsScreen(
         val connectionStatus by vm.connectionStatus.collectAsState()
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
             ConnectionStatusStrip(connectionStatus)
-            Box(modifier = Modifier.fillMaxSize()) {
+            // Wraps every branch, not just the populated list: the empty and
+            // failed states are where a user reaches for the pull first.
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { vm.userRefresh() },
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 when (val s = state) {
-                    is UiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                    is UiState.Error -> ErrorState(
-                        rawMessage = s.message,
-                        onRetry = { vm.refresh() },
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                    is UiState.Ready -> PullToRefreshBox(
-                        isRefreshing = isRefreshing,
-                        onRefresh = { vm.userRefresh() },
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        WorkspaceList(vm, s.data, onOpenTerminal)
+                    is UiState.Loading -> Box(Modifier.fillMaxSize()) {
+                        CircularProgressIndicator(Modifier.align(Alignment.Center))
                     }
+                    is UiState.Error -> PullableCenter {
+                        ErrorState(rawMessage = s.message, onRetry = { vm.refresh() })
+                    }
+                    is UiState.Ready -> WorkspaceList(vm, s.data, onOpenTerminal)
                 }
             }
         }
@@ -161,7 +162,7 @@ private val ExpandedMapSaver = mapSaver(
 @Composable
 private fun WorkspaceList(vm: SessionsViewModel, workspaces: List<Workspace>, onOpen: (String) -> Unit) {
     if (workspaces.isEmpty()) {
-        Box(Modifier.fillMaxSize()) { Text(stringResource(R.string.sessions_empty), Modifier.align(Alignment.Center)) }
+        PullableCenter { Text(stringResource(R.string.sessions_empty)) }
         return
     }
     val expanded = rememberSaveable(saver = ExpandedMapSaver) { mutableStateMapOf() }
