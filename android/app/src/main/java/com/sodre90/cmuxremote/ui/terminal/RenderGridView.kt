@@ -330,7 +330,7 @@ internal fun buildLine(
     while (i < cells.size) {
         if (cursorColumn != null && i == cursorColumn) {
             withStyle(SpanStyle(color = colors.background, background = colors.cursor)) {
-                append(cells[i].char)
+                append(drawableGlyph(cells[i].char))
             }
             i++
             continue
@@ -340,7 +340,7 @@ internal fun buildLine(
         while (i < cells.size && cells[i].styleId == styleId &&
             !(cursorColumn != null && i == cursorColumn)
         ) {
-            run.append(cells[i].char)
+            run.append(drawableGlyph(cells[i].char))
             i++
         }
         val r = resolveSpan(styles[styleId], colors, defaultBackground)
