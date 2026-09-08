@@ -13,7 +13,9 @@ import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +52,10 @@ val TerminalFont = FontFamily(
     Font(R.font.jetbrains_mono_nerd_regular, FontWeight.Normal),
     Font(R.font.jetbrains_mono_nerd_bold, FontWeight.Bold),
 )
+
+/** Enough opacity for the button to read as a button, little enough for the
+ *  terminal text beneath it to stay legible. */
+private const val JumpButtonAlpha = 0.55f
 
 /**
  * Line height as a multiple of the font size. Shared so the rendered row height
@@ -174,8 +180,21 @@ fun RenderGridView(
             }
         }
         if (showJump) {
+            // Translucent, and flat so no shadow spills past it: this button sits
+            // over the newest rows -- the ones you are scrolling back toward --
+            // and every alternative that actually clears them costs a terminal
+            // row on every pane, forever, for an affordance that is usually not
+            // shown. Letting the text read through is the cheaper trade.
             SmallFloatingActionButton(
                 onClick = { scope.launch { scroll.scrollTo(scroll.maxValue) } },
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = JumpButtonAlpha),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 0.dp,
+                    pressedElevation = 0.dp,
+                    focusedElevation = 0.dp,
+                    hoveredElevation = 0.dp,
+                ),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
             ) {
                 Icon(
