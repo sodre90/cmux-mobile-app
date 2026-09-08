@@ -16,7 +16,18 @@
     3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sodre90.cmux-bridge.plist
     4. launchctl kickstart -k gui/$(id -u)/com.sodre90.cmux-bridge
 
-  Logs: ~/Library/Logs/cmux-bridge.log
+  Logs: ~/Library/Logs/cmux-bridge.log -- written and rotated by the agent
+  itself (8MB x 5 compressed generations; see log_file in agent.toml). The
+  two paths below are deliberately a DIFFERENT file: launchd holds a plain
+  append fd on whatever they name and never rolls it, so it must not be the
+  file the agent rotates. That one only ever sees panics and failures from
+  before the config is read, and stays a few KB.
+
+  Upgrading from a build before log rotation: reinstall this plist
+  (launchctl bootout gui/$(id -u)/com.sodre90.cmux-bridge, cp, bootstrap
+  again). Leaving the old plist in place is not fatal -- launchd's append fd
+  simply follows cmux-bridge.log into the first rotated generation -- but
+  panics then land in a compressed backup instead of the launchd log.
 -->
 <plist version="1.0">
 <dict>
@@ -42,8 +53,8 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.log</string>
+    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.log</string>
+    <string>REPLACE_ME_HOME/Library/Logs/cmux-bridge.launchd.log</string>
 </dict>
 </plist>

@@ -16,3 +16,8 @@ cmux_bin    = "cmux"
 # because the agent keeps its own device store. Empty disables direct push.
 # fcm_project_id  = "your-firebase-project-id"
 # fcm_credentials = "~/.config/cmux-bridge/fcm-service-account.json"
+
+# Where the agent writes its own log. It rotates this file itself (8MB, 5
+# compressed generations, 30 days) because launchd will not. Set it to "" to
+# log to stderr instead and leave the file to whoever supervises the process.
+# log_file = "~/Library/Logs/cmux-bridge.log"

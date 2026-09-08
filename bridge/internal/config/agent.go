@@ -61,6 +61,11 @@ type AgentConfig struct {
 	// writes periodically (see internal/status), read by `cmux-bridge
 	// status`.
 	StatusFile string `toml:"status_file"`
+	// LogFile is the path the agent writes its own rotated log to (see
+	// internal/logging.UseRotatingFile). Set it empty to log to stderr
+	// instead and leave the file to whatever supervises the process --
+	// which, under the shipped launchd plist, means an unbounded file.
+	LogFile string `toml:"log_file"`
 }
 
 func agentDefaults() AgentConfig {
@@ -71,6 +76,7 @@ func agentDefaults() AgentConfig {
 		YoloStore:       "~/.config/cmux-bridge/yolo.db",
 		DirectAuthStore: "~/.config/cmux-bridge/direct-auth.db",
 		StatusFile:      "~/.config/cmux-bridge/status.json",
+		LogFile:         "~/Library/Logs/cmux-bridge.log",
 	}
 }
 
@@ -100,5 +106,6 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.DirectAuthStore = expandHome(cfg.DirectAuthStore)
 	cfg.FCMCredentials = expandHome(cfg.FCMCredentials)
 	cfg.StatusFile = expandHome(cfg.StatusFile)
+	cfg.LogFile = expandHome(cfg.LogFile)
 	return cfg, nil
 }

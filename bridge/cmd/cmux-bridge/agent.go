@@ -25,6 +25,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cmux"
 	"github.com/sodre90/cmux-bridge/internal/config"
 	"github.com/sodre90/cmux-bridge/internal/e2e"
+	"github.com/sodre90/cmux-bridge/internal/logging"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/status"
@@ -356,6 +357,11 @@ func runAgent(args []string) int {
 	if err != nil {
 		slog.Error("agent: load config", "err", err)
 		return 1
+	}
+	// Not fatal: an agent that cannot open its own log file should still run
+	// and keep logging to stderr, where launchd will catch it.
+	if err := logging.UseRotatingFile(cfg.LogFile); err != nil {
+		slog.Error("agent: open log file, staying on stderr", "path", cfg.LogFile, "err", err)
 	}
 	if err := ensureRegistered(cfg); err != nil {
 		slog.Error("agent: register", "err", err)
