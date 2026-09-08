@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sodre90/cmux-bridge/internal/e2e"
 	"github.com/sodre90/cmux-bridge/internal/wire"
@@ -322,7 +323,7 @@ func TestReaperRemovesSecretsNoServerKnowsAbout(t *testing.T) {
 	addSecret(t, sessions, "aaaa1111")
 	addSecret(t, sessions, "cccc3333")
 
-	reaped, err := reapStrandedSecrets([]agentServer{srv.as("relay")}, sessions)
+	reaped, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +348,7 @@ func TestReaperTouchesNothingWhenAServerIsUnreachable(t *testing.T) {
 	addSecret(t, sessions, "aaaa1111")
 	addSecret(t, sessions, "cccc3333")
 
-	reaped, err := reapStrandedSecrets([]agentServer{live.as("relay"), dead.as("direct")}, sessions)
+	reaped, _, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now())
 	if err == nil {
 		t.Fatal("an incomplete round must be reported, not treated as a clean sweep")
 	}
@@ -366,11 +367,121 @@ func TestReaperIsANoOpWhenNothingIsStranded(t *testing.T) {
 	sessions := newSessions(t)
 	addSecret(t, sessions, "aaaa1111")
 
-	reaped, err := reapStrandedSecrets([]agentServer{srv.as("relay")}, sessions)
+	reaped, _, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
 	if err != nil || reaped != 0 {
 		t.Fatalf("reaped = %d, err = %v; want 0, nil", reaped, err)
 	}
 	if !hasSecret(t, sessions, "aaaa1111") {
 		t.Fatal("a live device's secret must survive")
+	}
+}
+
+// aged builds a server device row created age ago, which is what decides
+// whether the reaper may treat a missing local secret as drift.
+func aged(name, tokenHash string, age time.Duration) wire.AgentDevice {
+	return wire.AgentDevice{
+		Name:      name,
+		TokenHash: tokenHash,
+		CreatedAt: time.Now().Add(-age).UTC().Format(time.RFC3339),
+	}
+}
+
+// cmux-app-2vz: a server row whose shared secret this Mac no longer holds is
+// a live bearer token for a device that provably cannot be that device any
+// more. Reaping ran in one direction only, so 17 of them piled up.
+func TestReaperRevokesTokensWhoseSecretIsGone(t *testing.T) {
+	srv := fakeDeviceAdmin(t,
+		aged("phone-1", "aaaa1111", 48*time.Hour),
+		aged("phone-old", "bbbb2222", 48*time.Hour),
+	)
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+
+	secrets, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets != 0 || tokens != 1 {
+		t.Fatalf("secrets = %d, tokens = %d; want 0, 1", secrets, tokens)
+	}
+	if len(srv.revoked) != 1 || srv.revoked[0] != "bbbb2222" {
+		t.Fatalf("revoked %v, want just the secretless bbbb2222", srv.revoked)
+	}
+	if !hasSecret(t, sessions, "aaaa1111") {
+		t.Fatal("the live device's secret must survive")
+	}
+}
+
+// pair-device creates the server row when the phone redeems its code and
+// writes the local secret only after a human compares the pairing
+// fingerprint. Without the grace period the reaper would revoke whatever
+// pairing happened to be waiting on that person.
+func TestReaperLeavesAPairingInFlightAlone(t *testing.T) {
+	srv := fakeDeviceAdmin(t, aged("phone-new", "bbbb2222", time.Minute))
+	sessions := newSessions(t)
+
+	secrets, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets != 0 || tokens != 0 {
+		t.Fatalf("secrets = %d, tokens = %d; want the in-flight pairing untouched", secrets, tokens)
+	}
+	if len(srv.revoked) != 0 {
+		t.Fatalf("a pairing still being confirmed was revoked: %v", srv.revoked)
+	}
+}
+
+// A row whose age cannot be established is not a row whose age is old. The
+// safe way to be wrong about a credential is to leave it in place.
+func TestReaperLeavesARowWithNoUsableTimestampAlone(t *testing.T) {
+	srv := fakeDeviceAdmin(t,
+		wire.AgentDevice{Name: "no-date", TokenHash: "bbbb2222"},
+		wire.AgentDevice{Name: "bad-date", TokenHash: "cccc3333", CreatedAt: "yesterday"},
+	)
+	sessions := newSessions(t)
+
+	_, tokens, err := reapDriftedCredentials([]agentServer{srv.as("relay")}, sessions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 0 || len(srv.revoked) != 0 {
+		t.Fatalf("tokens = %d, revoked = %v; want nothing touched", tokens, srv.revoked)
+	}
+}
+
+// The unreachable-server guard has to cover the new direction too: an
+// incomplete listing must not be read as "the secret for this row is gone".
+func TestReaperRevokesNoTokensWhenAServerIsUnreachable(t *testing.T) {
+	live := fakeDeviceAdmin(t, aged("phone-old", "bbbb2222", 48*time.Hour))
+	dead := fakeDeviceAdmin(t)
+	dead.Close()
+	sessions := newSessions(t)
+
+	if _, tokens, err := reapDriftedCredentials([]agentServer{live.as("relay"), dead.as("direct")}, sessions, time.Now()); err == nil {
+		t.Fatal("an incomplete round must be reported")
+	} else if tokens != 0 {
+		t.Fatalf("tokens = %d, want 0", tokens)
+	}
+	if len(live.revoked) != 0 {
+		t.Fatalf("revoked %v despite an unreachable server", live.revoked)
+	}
+}
+
+// A device paired on one slot only must not be reaped off it just because
+// the other slot has no row for it -- the secret is matched across the whole
+// listing, not per server.
+func TestReaperKeepsADeviceKnownToOnlyOneServer(t *testing.T) {
+	relay := fakeDeviceAdmin(t, aged("phone-1", "aaaa1111", 48*time.Hour))
+	direct := fakeDeviceAdmin(t)
+	sessions := newSessions(t)
+	addSecret(t, sessions, "aaaa1111")
+
+	secrets, tokens, err := reapDriftedCredentials([]agentServer{relay.as("relay"), direct.as("direct")}, sessions, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secrets != 0 || tokens != 0 {
+		t.Fatalf("secrets = %d, tokens = %d; want nothing reaped", secrets, tokens)
 	}
 }

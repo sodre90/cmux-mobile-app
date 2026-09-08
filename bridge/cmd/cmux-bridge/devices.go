@@ -224,42 +224,83 @@ func revokeByPrefix(out io.Writer, servers []agentServer, sessions *e2e.Store, p
 	return nil
 }
 
-// reapStrandedSecrets removes every shared secret this Mac holds that no
-// server has a device row for. Those are inert -- no request can
-// authenticate without the token -- so this is hygiene rather than security,
-// which is exactly why it runs on a timer instead of on the critical path of
-// whatever revoked the token (cmux-app-f5y).
+// pairingGrace is how long a server device row with no local secret is left
+// alone before it counts as drift.
 //
-// It is also what makes revocation converge from any direction: a device
-// revoked through the phone's Forget, through `cmux-relay devices revoke`,
-// or by an operator here all end the same way instead of leaving the two
-// stores to drift apart (cmux-app-vkq).
+// `pair-device` creates the server row when the phone redeems its code, and
+// writes the local secret only after a human has compared the pairing
+// fingerprint across two screens -- so "row, no secret" is the ordinary state
+// of a pairing in flight, for as long as that person takes to look. An hour
+// is far longer than any such pause and still well inside the reaper's own
+// period.
+const pairingGrace = time.Hour
+
+// olderThan reports whether an RFC3339 created_at is at least age old. An
+// absent or unparseable timestamp reports false: without a known age the row
+// cannot be told apart from a pairing in flight, and leaving a credential in
+// place is the safe way to be wrong.
+func olderThan(createdAt string, now time.Time, age time.Duration) bool {
+	created, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return false
+	}
+	return now.Sub(created) >= age
+}
+
+// reapDriftedCredentials removes both halves of a pairing that has lost the
+// other half, in either direction:
+//
+//   - a shared secret this Mac holds that no server has a device row for.
+//     Inert -- no request can authenticate without the token -- so this is
+//     hygiene rather than security, which is why it runs on a timer instead
+//     of on the critical path of whatever revoked the token (cmux-app-f5y).
+//   - a server device row whose shared secret this Mac no longer holds. That
+//     one is not inert: it is a live bearer token that still authenticates at
+//     the relay and still reaches the agent, for a device that provably
+//     cannot be that device any more. 17 of them had accumulated by
+//     2026-08-13 because only the first direction was ever reaped
+//     (cmux-app-2vz).
+//
+// Together they are what makes revocation converge from any direction: a
+// device revoked through the phone's Forget, through `cmux-relay devices
+// revoke`, or by an operator here all end the same way instead of leaving the
+// two stores to drift apart (cmux-app-vkq).
 //
 // The whole round is abandoned if any server failed to answer. A server that
 // did not reply means its devices are unknown, not absent; without that
 // guard a relay outage would unpair every device on this Mac.
-func reapStrandedSecrets(servers []agentServer, sessions *e2e.Store) (reaped int, err error) {
+func reapDriftedCredentials(servers []agentServer, sessions *e2e.Store, now time.Time) (secrets, tokens int, err error) {
 	rows, problems := collectDevices(servers, sessions)
 	if len(problems) > 0 {
-		return 0, fmt.Errorf("skipped: %s", strings.Join(problems, "; "))
+		return 0, 0, fmt.Errorf("skipped: %s", strings.Join(problems, "; "))
 	}
 	for _, row := range rows {
-		if row.server.kind != localSource {
+		if row.server.kind == localSource {
+			removed, err := sessions.RemoveDevice(row.device.TokenHash)
+			if err != nil {
+				return secrets, tokens, fmt.Errorf("remove stranded secret %s: %w", shortHash(row.device.TokenHash), err)
+			}
+			if removed {
+				secrets++
+				slog.Info("devices: reaped a shared secret no server knows about", "device", shortHash(row.device.TokenHash))
+			}
 			continue
 		}
-		removed, err := sessions.RemoveDevice(row.device.TokenHash)
-		if err != nil {
-			return reaped, fmt.Errorf("remove stranded secret %s: %w", shortHash(row.device.TokenHash), err)
+		if row.hasSecret || !olderThan(row.device.CreatedAt, now, pairingGrace) {
+			continue
 		}
-		if removed {
-			reaped++
-			slog.Info("devices: reaped a shared secret no server knows about", "device", shortHash(row.device.TokenHash))
+		if _, err := revokeOnServer(row.server, row.device.TokenHash); err != nil {
+			return secrets, tokens, fmt.Errorf("revoke drifted %s token %s: %w",
+				row.server.kind, shortHash(row.device.TokenHash), err)
 		}
+		tokens++
+		slog.Info("devices: revoked a token whose shared secret this agent no longer holds",
+			"device", shortHash(row.device.TokenHash), "source", row.server.kind)
 	}
-	return reaped, nil
+	return secrets, tokens, nil
 }
 
-// runReaper reaps stranded secrets on a loop until ctx is done. The first
+// runReaper reaps drifted credentials on a loop until ctx is done. The first
 // round is delayed rather than immediate: at startup the relay tunnel is
 // usually still coming up, and a round that cannot reach a server does
 // nothing anyway.
@@ -275,10 +316,10 @@ func runReaper(ctx context.Context, cfg config.AgentConfig, sessions *e2e.Store,
 		servers, err := configuredServers(cfg, deviceAdminTimeout)
 		if err != nil {
 			slog.Warn("devices: reaper found no reachable server", "err", err)
-		} else if reaped, err := reapStrandedSecrets(servers, sessions); err != nil {
+		} else if secrets, tokens, err := reapDriftedCredentials(servers, sessions, time.Now()); err != nil {
 			slog.Warn("devices: reaper round incomplete", "err", err)
-		} else if reaped > 0 {
-			slog.Info("devices: reaper removed stranded secrets", "count", reaped)
+		} else if secrets > 0 || tokens > 0 {
+			slog.Info("devices: reaper removed drifted credentials", "secrets", secrets, "tokens", tokens)
 		}
 		timer.Reset(period)
 	}
