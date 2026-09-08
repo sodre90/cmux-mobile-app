@@ -63,8 +63,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -426,9 +426,17 @@ private fun WorkspaceCard(
                     // (see attentionAccent) -- fold what they mean into this row's own
                     // merged announcement instead, rather than putting semantics
                     // directly on either: the stripe sits outside this clickable Row
-                    // entirely (a sibling in the outer accent Row), so a contentDescription
+                    // entirely (a sibling in the outer accent Row), so a description
                     // on it would surface as its own, title-less TalkBack stop instead of
                     // part of this card's summary.
+                    //
+                    // stateDescription, not contentDescription: a contentDescription on
+                    // a merging node REPLACES its children's text in the announcement,
+                    // so this read out "Needs permission, has unread" and swallowed the
+                    // workspace title, cwd and pane names -- the exact opposite of the
+                    // intent above. stateDescription is announced alongside them, which
+                    // is what a state carried only by color needs (same reason CtrlChip
+                    // in TerminalScreen uses it).
                     val statusDescription = workspaceStatusDescription(
                         ws,
                         permissionLabel = stringResource(R.string.status_needs_permission),
@@ -447,7 +455,7 @@ private fun WorkspaceCard(
                             )
                             .then(
                                 if (statusDescription != null) {
-                                    Modifier.semantics { contentDescription = statusDescription }
+                                    Modifier.semantics { stateDescription = statusDescription }
                                 } else {
                                     Modifier
                                 },
