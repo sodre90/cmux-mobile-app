@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,14 +12,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.lifecycleScope
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.sodre90.cmuxremote.data.AppContainer
+import com.sodre90.cmuxremote.push.FcmTokenRegistrar
+import com.sodre90.cmuxremote.push.enqueueFcmTokenRegistration
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -121,26 +119,21 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Best-effort registration of the FCM token on launch. Firebase only
-     * initialises when `app/google-services.json` is present; without it
+     * Records the current FCM token and asks WorkManager to get it registered.
+     *
+     * A launch is a good moment to check, but it is no longer the only one --
+     * the retry outlives this process (see FcmTokenRegistrationWorker), which is
+     * the half that was missing when a token rotated by an overnight app update
+     * never reached the server. Firebase only initialises when
+     * `app/google-services.json` is present; without it
      * [FirebaseMessaging.getInstance] throws, so this is a guarded no-op.
      */
     private fun registerFcmToken() {
         val container = (application as CmuxApp).container
         try {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                lifecycleScope.launch(Dispatchers.IO) {
-                    try {
-                        container.activeBridge()?.registerDevice(token)
-                    } catch (e: Exception) {
-                        // Retried next launch. Per-slot rejections have already
-                        // been recorded by then (see FallbackBridgeClient's
-                        // onRegistrationOutcome), so this only reports that no
-                        // slot at all took the token -- which used to vanish
-                        // without trace.
-                        Log.w(TAG, "device registration failed on every slot: ${e.message}")
-                    }
-                }
+                FcmTokenRegistrar(container.settings, container::activeBridge).onTokenIssued(token)
+                enqueueFcmTokenRegistration(applicationContext)
             }
         } catch (_: Throwable) {
             // Firebase not configured (no google-services.json); push inactive.

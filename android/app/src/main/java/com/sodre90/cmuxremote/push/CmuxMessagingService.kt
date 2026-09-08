@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 
 /**
  * Receives FCM pushes. On a data message with `type=attention` it posts a
@@ -39,18 +38,15 @@ class CmuxMessagingService : FirebaseMessagingService() {
         scope.cancel()
     }
 
+    // FCM issues a rotated token exactly once. Record it durably and hand the
+    // delivery to WorkManager rather than to a coroutine that dies with this
+    // service: this callback is the app's only notice, and if the bridge happens
+    // to be unreachable right now there is no second push to try again on --
+    // push stays dead until someone opens the app (cmux-app-2cm).
     override fun onNewToken(token: String) {
         val container = (application as? CmuxApp)?.container ?: return
-        scope.launch {
-            try {
-                container.activeBridge()?.registerDevice(token)
-            } catch (e: Exception) {
-                // Token is resent on next start. Per-slot rejections are
-                // already recorded by FallbackBridgeClient's
-                // onRegistrationOutcome; this is only the no-slot-took-it case.
-                Log.w(TAG, "device registration failed on every slot: ${e.message}")
-            }
-        }
+        FcmTokenRegistrar(container.settings, container::activeBridge).onTokenIssued(token)
+        enqueueFcmTokenRegistration(applicationContext)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

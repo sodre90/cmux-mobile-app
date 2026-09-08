@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.sodre90.cmuxremote.push.PendingTokenStore
 
 /**
  * Persists connection settings and secrets for both [ConnectionSlot]s. Everything
@@ -15,7 +16,7 @@ import androidx.security.crypto.MasterKey
  * in-memory and starts over each process, but whether the user has already
  * been told about a rejection has to outlive one (see [RejectionReportLog]).
  */
-class Settings(context: Context) : RejectionReportLog {
+class Settings(context: Context) : RejectionReportLog, PendingTokenStore {
 
     private val prefs: SharedPreferences = run {
         val masterKey = MasterKey.Builder(context)
@@ -48,6 +49,27 @@ class Settings(context: Context) : RejectionReportLog {
     fun deviceToken(slot: ConnectionSlot): String? = prefs.getString(key(slot, KEY_TOKEN), null)
     fun setDeviceToken(slot: ConnectionSlot, value: String) {
         prefs.edit().putString(key(slot, KEY_TOKEN), value).apply()
+    }
+
+    /**
+     * An FCM token no slot has accepted yet, kept so the retry can outlive the
+     * process that failed.
+     *
+     * FCM hands the app a rotated token exactly once, through onNewToken. If the
+     * bridge happens to be unreachable at that moment the token used to be
+     * dropped on the floor and retried only if the user next opened the app --
+     * so an update installed overnight left the server holding a dead token,
+     * which FCM accepts with a 2xx while delivering nothing (cmux-app-2cm).
+     *
+     * Not cleared on [clearSlot]: the token belongs to the app on this device,
+     * not to either slot, and a re-pair should still find it waiting.
+     */
+    override fun pendingFcmToken(): String? = prefs.getString(KEY_PENDING_FCM_TOKEN, null)
+
+    override fun setPendingFcmToken(token: String?) {
+        prefs.edit().apply {
+            if (token == null) remove(KEY_PENDING_FCM_TOKEN) else putString(KEY_PENDING_FCM_TOKEN, token)
+        }.apply()
     }
 
     override fun wasRejectionReported(slot: ConnectionSlot): Boolean =
@@ -111,6 +133,9 @@ class Settings(context: Context) : RejectionReportLog {
         const val KEY_TOKEN = "device_token"
         const val KEY_P12 = "client_p12_b64"
         const val KEY_REJECTION_REPORTED = "credential_rejection_reported"
+
+        // Not slot-scoped: one FCM token per app install, offered to every slot.
+        const val KEY_PENDING_FCM_TOKEN = "pending_fcm_token"
     }
 }
 
