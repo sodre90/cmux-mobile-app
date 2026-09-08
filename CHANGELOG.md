@@ -12,6 +12,107 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-08
+
+A reliability and observability release. Every issue listed as *Known* in 0.2.0
+is fixed here. The theme is transports and terminals that recover on their own
+instead of failing quietly: a standby listener that retries, a terminal socket
+that survives a slow backend, push registration that keeps trying, and a status
+command that can finally answer "is the other transport actually working?".
+
+### Added
+
+- `cmux-bridge status` now prints the agent's counters (pushes sent and failed,
+  pairing codes issued/redeemed/expired, e2e decrypt failures, terminal replay
+  failures). The agent serves no `/debug/vars`, so these had been incrementing
+  where nothing could read them.
+- `cmux-bridge status` also reports, per transport slot, when that slot was last
+  reached end to end by the hourly device round -- and carries the value across
+  agent restarts, so it can show an outage that began before the current
+  process. A slot that has never answered reads differently from one that was
+  never configured.
+- The agent writes to a size-bounded log file of its own, so a sustained outage
+  can no longer fill the disk.
+- Pastes are sent bracketed (`ESC[200~`/`ESC[201~`) when the pane has bracketed
+  paste enabled, so a multi-line paste arrives as one paste instead of running
+  line by line as it lands.
+- The terminal falls back to a font that has the box-drawing and block glyphs
+  agent output uses, instead of drawing them as missing-glyph boxes.
+- The key bar shows where it continues off-screen, and asks for confirmation
+  before pasting a script into a shell.
+- When the relay refuses the agent's tunnel upgrade, the log now names the HTTP
+  status the relay actually answered with, which distinguishes an auth refusal
+  from a proxy misconfiguration from a dead backend.
+- Relay binaries built in the container are stamped with their version.
+
+### Changed
+
+- Unread state is no longer conveyed by the workspace colour, and expandable
+  cards carry a chevron, so "has unread" and "which workspace" stop competing
+  for the same signal.
+- The Connections screen can be exited, reports zoom honestly, and no longer
+  nags about re-pairing.
+- The jump-to-bottom button is translucent, so the terminal rows underneath it
+  stay readable.
+- A retry loop that is already failing logs once per outage plus a periodic
+  reminder, instead of one line per attempt.
+- An agent whose session store predates the SQLite layout is imported in place
+  rather than ignored.
+
+### Fixed
+
+- A slow `mobile.terminal.replay` no longer tears down a live terminal socket.
+  One failure used to end the handler, and the phone's reconnect issued another
+  full replay against the backend that was already too slow to serve one. The
+  pane is now held on its last grid and recovers on the next successful poll,
+  bounded so a backend that never returns cannot hold the socket forever
+  (`cmux-app-8a0`).
+- The app no longer reconnects forever to a terminal surface cmux no longer
+  has. The agent closes such a socket with a distinct code and the app reports
+  it instead of retrying every 5s behind a spinner (`cmux-app-34c`).
+- The direct (Tailscale) listener retries instead of giving up on its first
+  failure. A single "bind: can't assign requested address" at startup, before
+  Tailscale had assigned its address, previously ended the standby transport for
+  the life of the process -- and nothing noticed, because the relay was fine the
+  whole time (`cmux-app-t5x`).
+- `status.json`'s direct-mode health no longer counts the agent's own probe as a
+  served request, which had made the field advance hourly whether or not a phone
+  had ever reached the standby (`cmux-app-8d3`).
+- FCM registration is retried until a slot accepts it, instead of failing
+  silently after an app update until the next launch (`cmux-app-2cm`).
+- A registration token FCM reports as `UNREGISTERED` is now dropped, so dead
+  tokens stop being indistinguishable from live ones (`cmux-app-6u7`).
+- Drifted credentials are reaped in both directions, so a relay device row can
+  no longer outlive the shared secret it depends on (`cmux-app-2vz`).
+- Aborting an already-confirmed pairing no longer drives the phone-facing state
+  backwards from confirmed to refused (`cmux-app-05w`).
+- A repeat push no longer re-alerts a notification already on screen
+  (`cmux-app-17r`, `cmux-app-3ud`).
+- Both Settings "Done" paths guard the back stack instead of leaving it
+  inconsistent.
+
+### Compatibility
+
+No wire-format change. The only protocol addition is a WebSocket close code
+(4404) that an older app treats as an ordinary close, so either side can be
+upgraded alone. Upgrading both is still recommended: the two terminal fixes
+above are one agent-side and one app-side, and they complement each other.
+
+### Known issues
+
+Carried into this release and tracked in `.beads/`: a poisoned replay window can
+make a slot permanently undecryptable, and re-pairing does not recover it
+(`cmux-app-a3g`); a direct-slot credential can die silently, producing a 401
+lockout the moment the relay goes down (`cmux-app-hr1`); replay still exceeds
+even the 20s budget on roughly 1.25% of terminal opens, which tracks the cmux
+process's age rather than anything in this repo (`cmux-app-8a0`); attention
+pushes are sent twice to a phone paired on both slots (`cmux-app-8jb`);
+subprocess cmux RPC errors are untyped, so `not_found` handling only works on
+the fast path (`cmux-app-aft`); opening an agent pane costs a burst of heavy
+frames, and watching a running agent costs a sustained one (`cmux-app-dfl`); the
+relay's `/healthz` can answer 200 while the agent's own tunnel handshake still
+fails (`cmux-app-hxn`).
+
 ## [0.2.0] - 2026-09-05
 
 A security release. Every credential in the system now has a way to be taken
