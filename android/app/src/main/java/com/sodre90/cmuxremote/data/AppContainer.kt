@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.CryptoSession
 import com.sodre90.cmuxremote.data.e2e.E2eInterceptor
 import com.sodre90.cmuxremote.data.pairing.PairingClient
+import com.sodre90.cmuxremote.push.activatePush
 import com.sodre90.cmuxremote.push.showCredentialRejectedNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -158,6 +159,9 @@ class AppContainer(
                 sharedSlotCredentials,
                 sharedSlotCredentialHealth,
                 retirePreviousCredential = { cfg -> retireCredential(slot, cfg) },
+                // A pairing may have just delivered the Firebase config this
+                // process concluded at startup it did not have.
+                onPairingStored = { activatePush(appContext, settings, ::activeBridge) },
             )
         }
 

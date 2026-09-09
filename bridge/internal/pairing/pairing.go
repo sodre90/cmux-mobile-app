@@ -49,8 +49,8 @@ func AllowAll(*http.Request) bool { return true }
 // tenant deciding which tenant the agent-facing routes act for and
 // devicePairLimit gating POST /devices/pair specifically (pass AllowAll to
 // disable).
-func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, devicePairLimit RateLimiter) {
-	h := &handlers{store: store, tenant: tenant, devicePairLimit: devicePairLimit}
+func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, devicePairLimit RateLimiter, fcm wire.FCMClientConfig) {
+	h := &handlers{store: store, tenant: tenant, devicePairLimit: devicePairLimit, fcm: fcm}
 	mux.Handle("POST /agent/pairing-code", http.HandlerFunc(h.newPairingCode))
 	mux.Handle("GET /agent/pairing-code/{code}", http.HandlerFunc(h.pairingCodeStatus))
 	mux.Handle("DELETE /agent/pairing-code/{code}", http.HandlerFunc(h.abortPairing))
@@ -61,6 +61,11 @@ func Mount(mux *http.ServeMux, store *auth.Store, tenant TenantResolver, deviceP
 }
 
 type handlers struct {
+	// fcm is the client-side Firebase config handed to a phone on a
+	// successful redemption. The zero value means push was never configured
+	// here, and devicePair then answers exactly as it did before this
+	// existed.
+	fcm             wire.FCMClientConfig
 	store           *auth.Store
 	tenant          TenantResolver
 	devicePairLimit RateLimiter
@@ -248,6 +253,11 @@ func (h *handlers) devicePair(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	metrics.PairingCodesRedeemedTotal.Add(1)
-	httpjson.Write(w, http.StatusOK, wire.DevicePairResp{Token: tok, TenantID: tenantID})
+	resp := wire.DevicePairResp{Token: tok, TenantID: tenantID}
+	if h.fcm.Configured() {
+		fcm := h.fcm
+		resp.FCM = &fcm
+	}
+	httpjson.Write(w, http.StatusOK, resp)
 	slog.Info("pairing: device paired via QR code", "tenant_id", tenantID)
 }

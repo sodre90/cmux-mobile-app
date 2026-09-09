@@ -6,6 +6,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/auth"
 	"github.com/sodre90/cmux-bridge/internal/devices"
 	"github.com/sodre90/cmux-bridge/internal/pairing"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // MountDirectPairing registers the pre-auth pairing routes and the
@@ -24,7 +25,9 @@ import (
 // The device-admin routes inherit that posture, which means any tailnet peer
 // can list and revoke direct-paired devices -- see devices.Mount for why
 // that is accepted rather than overlooked.
-func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string) {
-	pairing.Mount(mux, store, pairing.ConstantTenant(tenantID), pairing.AllowAll)
+// fcm carries the client-side Firebase config to hand a phone at pairing; its
+// zero value means push was not configured and nothing extra is sent.
+func MountDirectPairing(mux *http.ServeMux, store *auth.Store, tenantID string, fcm wire.FCMClientConfig) {
+	pairing.Mount(mux, store, pairing.ConstantTenant(tenantID), pairing.AllowAll, fcm)
 	devices.Mount(mux, store, pairing.ConstantTenant(tenantID))
 }

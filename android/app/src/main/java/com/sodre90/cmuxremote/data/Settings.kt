@@ -72,6 +72,55 @@ class Settings(context: Context) : RejectionReportLog, PendingTokenStore {
         }.apply()
     }
 
+    /**
+     * The Firebase client config the bridge handed over at pairing, or null if
+     * no pairing has supplied one. Not slot-scoped -- see [FcmClientConfig].
+     *
+     * Read on every launch before Firebase is touched, so a phone that has
+     * never paired against a push-configured bridge simply never initialises
+     * Firebase at all.
+     */
+    fun fcmClientConfig(): FcmClientConfig? {
+        val projectId = prefs.getString(KEY_FCM_PROJECT_ID, null).orEmpty()
+        val appId = prefs.getString(KEY_FCM_APP_ID, null).orEmpty()
+        val apiKey = prefs.getString(KEY_FCM_API_KEY, null).orEmpty()
+        val senderId = prefs.getString(KEY_FCM_SENDER_ID, null).orEmpty()
+        if (projectId.isBlank() || appId.isBlank() || apiKey.isBlank() || senderId.isBlank()) return null
+        return FcmClientConfig(projectId, appId, apiKey, senderId)
+    }
+
+    /**
+     * Stores the config [slot]'s bridge supplied, or clears the stored one when
+     * that bridge supplied none.
+     *
+     * The clear is deliberately narrow. Only the slot that supplied the stored
+     * config may clear it: the two slots are configured independently, and
+     * direct push is documented as optional, so pairing a push-less direct
+     * agent after a push-enabled relay would otherwise delete a working
+     * config and kill push on both slots. Same reasoning as the FCM token two
+     * blocks up -- what belongs to the app on this device does not get thrown
+     * away by whichever slot happened to re-pair last.
+     */
+    fun setFcmClientConfig(slot: ConnectionSlot, config: FcmClientConfig?) {
+        val owner = prefs.getString(KEY_FCM_SOURCE_SLOT, null)
+        if (config == null && !mayClearFcmConfig(owner, slot)) return
+        prefs.edit().apply {
+            if (config == null) {
+                remove(KEY_FCM_PROJECT_ID)
+                remove(KEY_FCM_APP_ID)
+                remove(KEY_FCM_API_KEY)
+                remove(KEY_FCM_SENDER_ID)
+                remove(KEY_FCM_SOURCE_SLOT)
+            } else {
+                putString(KEY_FCM_PROJECT_ID, config.projectId)
+                putString(KEY_FCM_APP_ID, config.appId)
+                putString(KEY_FCM_API_KEY, config.apiKey)
+                putString(KEY_FCM_SENDER_ID, config.senderId)
+                putString(KEY_FCM_SOURCE_SLOT, slot.name)
+            }
+        }.apply()
+    }
+
     override fun wasRejectionReported(slot: ConnectionSlot): Boolean =
         prefs.getBoolean(key(slot, KEY_REJECTION_REPORTED), false)
 
@@ -136,8 +185,30 @@ class Settings(context: Context) : RejectionReportLog, PendingTokenStore {
 
         // Not slot-scoped: one FCM token per app install, offered to every slot.
         const val KEY_PENDING_FCM_TOKEN = "pending_fcm_token"
+
+        // Not slot-scoped either: Firebase initialises once per process, so
+        // one config serves both slots (see FcmClientConfig).
+        const val KEY_FCM_PROJECT_ID = "fcm_project_id"
+        const val KEY_FCM_APP_ID = "fcm_app_id"
+        const val KEY_FCM_API_KEY = "fcm_api_key"
+        const val KEY_FCM_SENDER_ID = "fcm_sender_id"
+
+        // Which slot's bridge supplied the stored config, so only that slot
+        // can later clear it (see setFcmClientConfig).
+        const val KEY_FCM_SOURCE_SLOT = "fcm_source_slot"
     }
 }
+
+/**
+ * Whether [slot] is allowed to clear a stored FCM config owned by [owner]
+ * (null meaning nobody has claimed one).
+ *
+ * A free function for the same reason [migrateLegacyIfNeededInternal] is one:
+ * the decision is worth testing on the JVM, and [Settings] itself cannot be
+ * constructed without Android Keystore.
+ */
+internal fun mayClearFcmConfig(owner: String?, slot: ConnectionSlot): Boolean =
+    owner == null || owner == slot.name
 
 /** Free function form of [Settings.migrateLegacyIfNeeded], parameterized over
  *  plain read/write callbacks so a JVM test can exercise it against

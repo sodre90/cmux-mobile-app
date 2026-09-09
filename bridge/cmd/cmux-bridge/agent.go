@@ -31,6 +31,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/server"
 	"github.com/sodre90/cmux-bridge/internal/status"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 	"github.com/sodre90/cmux-bridge/internal/yolo"
 )
 
@@ -114,6 +115,35 @@ func ensureDirectTenant(store *auth.Store) (string, error) {
 	return store.CreateTenant()
 }
 
+// fcmClientConfig assembles the client-side Firebase config handed to a phone
+// at pairing. An incomplete set stays incomplete rather than being patched up
+// with defaults: wire.FCMClientConfig.Configured then reports false and the
+// pairing response omits the block, which is what a bridge without push
+// configured should look like on the wire.
+func fcmClientConfig(cfg config.AgentConfig) wire.FCMClientConfig {
+	return wire.FCMClientConfig{
+		ProjectID: cfg.FCMProjectID,
+		AppID:     cfg.FCMAppID,
+		APIKey:    cfg.FCMAPIKey,
+		SenderID:  cfg.FCMSenderID,
+	}
+}
+
+// warnFCMClientConfig says out loud what a phone can never tell the operator:
+// that the Firebase config it would have been handed at pairing is not going
+// to be sent. Both cases are silent otherwise -- the pairing response simply
+// omits the block, and push stays dead on every phone forever.
+func warnFCMClientConfig(c wire.FCMClientConfig, canSend bool) {
+	switch {
+	case c.PartiallyConfigured():
+		slog.Warn("fcm client config incomplete -- withholding it from pairing; phones will not receive push",
+			"have_project_id", c.ProjectID != "", "have_app_id", c.AppID != "",
+			"have_api_key", c.APIKey != "", "have_sender_id", c.SenderID != "")
+	case canSend && !c.Configured():
+		slog.Warn("fcm credentials are set but the client config is not -- only phones with a google-services.json compiled in will receive push; set fcm_app_id, fcm_api_key and fcm_sender_id")
+	}
+}
+
 // directListenPort extracts the port from cfg.DirectListen, which is always
 // documented and configured in ":PORT" form (e.g. ":8443" -- see
 // bridge/README.md and bridge/deploy/agent.example.toml, and
@@ -189,9 +219,9 @@ func refreshDirectCert(ctx context.Context, domain, certFile, keyFile string, ce
 // on 0.0.0.0/[::] here would let any LAN-adjacent device reach them too.
 // health, if not nil, is where the listener reports itself for
 // `cmux-bridge status`.
-func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler, health *directHealth) error {
+func serveDirect(ctx context.Context, listenAddr, certDir string, store *auth.Store, tenantID string, handler http.Handler, health *directHealth, fcm wire.FCMClientConfig) error {
 	mux := http.NewServeMux()
-	server.MountDirectPairing(mux, store, tenantID)
+	server.MountDirectPairing(mux, store, tenantID, fcm)
 	mux.Handle("/", handler)
 
 	port, err := directListenPort(listenAddr)
@@ -430,6 +460,7 @@ func runAgent(args []string) int {
 		return 1
 	}
 	srv.SetYoloStore(yoloStore)
+	warnFCMClientConfig(fcmClientConfig(cfg), cfg.FCMCredentials != "")
 	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
 		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {
 			slog.Warn("agent: direct-mode push disabled", "err", err)

@@ -53,7 +53,7 @@ func runDirectListener(
 	retryDirectListener(ctx, cfg.DirectListen, health,
 		directListenBackoffMin, directListenBackoffMax,
 		func() error {
-			return serveDirect(ctx, cfg.DirectListen, certDir, store, tenantID, handler, health)
+			return serveDirect(ctx, cfg.DirectListen, certDir, store, tenantID, handler, health, fcmClientConfig(cfg))
 		})
 }
 
