@@ -12,13 +12,22 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
 ### Added
 
 - `GET /version` on the agent, and an About card at the bottom of the
   Connections screen showing the app's version and the agent's. The two halves
   ship separately -- the app from a release APK, the agent from a binary on the
   Mac -- so "what am I running" has two answers, and neither was visible on the
-  phone.
+  phone. The route sits inside the authenticated route set: a build number tells
+  an unauthenticated caller which fixes an agent is missing.
+
+### Compatibility
+
+No breaking change. An app on 0.4.0 talking to a 0.3.0 agent shows the bridge
+version as "unknown" (the route 404s) and is otherwise unaffected; a 0.3.0 app
+against a 0.4.0 agent simply never calls the route.
 
 
 ## [0.3.0] - 2026-09-08
