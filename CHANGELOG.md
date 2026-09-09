@@ -12,6 +12,68 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-10
+
+### Added
+
+- Push is configured on the bridge instead of being baked into the app. The
+  bridge now carries the client half of the Firebase configuration --
+  `fcm_app_id`, `fcm_api_key` and `fcm_sender_id`, alongside the
+  `fcm_project_id` it already had -- and hands it to a phone on the pairing
+  response, which builds its own `FirebaseOptions` from it. Push used to be a
+  build-time decision: an APK built without a `google-services.json` could
+  never register an FCM token however the bridge was configured, so anyone
+  handed the APK needed an Android toolchain to turn push on at all. None of
+  those four values is a secret -- Firebase ships all of them in the clear
+  inside every push-enabled APK, and none authorises sending, which still
+  needs the service-account key in `fcm_credentials` that never leaves the
+  machine.
+- Both binaries warn at startup when they find a half-filled client config, or
+  credentials with no client half. The config is withheld unless all four
+  fields are set, and withholding is silent on the wire -- a phone has no way
+  to report what it never received, so a relay would otherwise log that push
+  is enabled while every phone paired against it goes on receiving nothing.
+
+### Fixed
+
+- Panes on the alternate screen scroll again. Such a pane has no scrollback of
+  its own, so a swipe had nothing local to move and the pane read as frozen;
+  swipes there now route to the pane itself. Two things had to be fixed for
+  that to work: the drag never reached the handler (a descendant consumed it
+  on the Main pass), and a step sized at half the viewport was longer than a
+  thumb travels, so no step was ever emitted.
+- A swipe that starts on a key-bar button no longer sends that key. Compose
+  ends a tap only when something consumes the movement, and a vertical drag
+  over the horizontally-scrolling key row was consumed by nothing -- so a
+  scroll that began on Esc still fired it on lift-off. In a Claude pane one
+  Escape interrupts a running agent and two open the rewind overlay, which is
+  what made rewind keep appearing while scrolling.
+- A pairing that turns push on now asks for the notification permission. With
+  the config arriving at pairing, the startup prompt runs before there is
+  anything to prompt about; the phone then registered a token and the bridge
+  started sending into a device that had never been asked, which on API 33+
+  drops every notification silently until the app is relaunched.
+
+### Compatibility
+
+No breaking change, in either direction. A bridge with push unconfigured sends
+exactly the pairing response it sent before this field existed, so an older app
+decodes it unchanged; a 0.4.0 app against a push-configured 0.5.0 bridge
+ignores the field it does not know.
+
+The `fcm_app_id`, `fcm_api_key` and `fcm_sender_id` settings are optional and
+new. An agent or relay that does not set them behaves exactly as it did on
+0.4.0, and phones paired against it receive no push unless their APK has a
+`google-services.json` compiled in.
+
+Phones need to re-pair to receive push. The config is delivered at pairing and
+nothing else carries it, so a phone paired before 0.5.0 has none stored --
+including one upgrading from a locally-built APK that had push working from a
+compiled-in `google-services.json`, which keeps working from that baked-in
+config but is now the more specific of two possible sources. If a baked-in
+config and a bridge-supplied one name different projects, the phone registers
+against one while the bridge sends from the other and push fails silently.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
