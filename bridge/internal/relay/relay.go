@@ -23,6 +23,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/pairing"
 	"github.com/sodre90/cmux-bridge/internal/ratelimit"
 	"github.com/sodre90/cmux-bridge/internal/tunnel"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 // agentCNPrefix marks a client cert as belonging to a Mac agent, followed by
@@ -79,7 +80,10 @@ type Relay struct {
 	// POST /devices/test-push (testpush.go) reports 503 push_not_configured;
 	// real attention-event fanout (pushmon.go's MonitorAgent) takes its own
 	// Pusher directly via SetSessionHook and is unaffected by this field.
-	push             Pusher
+	push Pusher
+	// fcm is the client-side Firebase config handed to a phone at pairing.
+	// Zero value means push was never configured on this relay.
+	fcm              wire.FCMClientConfig
 	testPushCooldown *ratelimit.Cooldown
 	conns            *ConnTracker
 }
@@ -159,6 +163,12 @@ func (r *Relay) clientIP(req *http.Request) string {
 	}
 	return host
 }
+
+// SetFCMClientConfig sets the client-side Firebase config this relay hands a
+// phone at pairing. Called only by cmux-relay serve's production wiring, and
+// only when all four client fields are configured; left unset, pairing
+// responses omit the block entirely.
+func (r *Relay) SetFCMClientConfig(c wire.FCMClientConfig) { r.fcm = c }
 
 // SetSessionHook registers a callback invoked (in its own goroutine) for each
 // accepted agent session; its context is cancelled when the session ends.
@@ -261,7 +271,7 @@ func (r *Relay) Handler() http.Handler {
 	// as /tenants/register, since it's equally reachable with no credential.
 	pairing.Mount(mux, r.store, r.agentOnly, func(req *http.Request) bool {
 		return r.devicePairLimiter.allow(r.clientIP(req))
-	})
+	}, r.fcm)
 	// Device admin (internal/devices), agent-CN-gated by the same resolver:
 	// an agent enumerates and revokes only its own tenant's devices.
 	devices.Mount(mux, r.store, r.agentOnly)

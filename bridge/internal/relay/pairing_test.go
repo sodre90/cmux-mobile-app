@@ -924,3 +924,79 @@ func TestPairStatusUnknownCodeIs404(t *testing.T) {
 		t.Fatalf("an unknown code = %d, want 404", status)
 	}
 }
+
+// The relay is the primary pairing path, and it terminates POST /devices/pair
+// itself rather than proxying it to the agent -- so the config a phone gets
+// there is the RELAY's, and a wiring mistake on this side would be invisible
+// to every direct-mode test.
+func TestRelayDevicePairCarriesFCMClientConfig(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := wire.FCMClientConfig{ProjectID: "p", AppID: "a", APIKey: "k", SenderID: "s"}
+	rl := New(store, nil, "relay-secret")
+	// Before Handler(): pairing.Mount copies the value at mount time, so the
+	// reverse order silently sends nothing. This ordering is the contract.
+	rl.SetFCMClientConfig(want)
+	srv := httptest.NewServer(rl.Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got wire.DevicePairResp
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.FCM == nil {
+		t.Fatal("relay pairing must carry the relay's own FCM client config")
+	}
+	if *got.FCM != want {
+		t.Fatalf("FCM = %+v, want %+v", *got.FCM, want)
+	}
+}
+
+// A relay with no push configured must answer exactly as it did before the
+// field existed.
+func TestRelayDevicePairOmitsFCMWhenUnconfigured(t *testing.T) {
+	store, err := auth.Open(t.TempDir() + "/r.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := store.CreateTenant()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(store, nil, "relay-secret").Handler())
+	defer srv.Close()
+
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "fcm") {
+		t.Fatalf("unconfigured relay must not mention fcm, got %s", raw)
+	}
+}

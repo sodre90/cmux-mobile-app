@@ -316,9 +316,14 @@ are both on the same [Tailscale](https://tailscale.com) tailnet, the phone
 can talk straight to the Mac agent with no relay and no home server in the
 path. The relay keeps working exactly as before — this is a second listener,
 not a replacement. Direct mode has its own optional push, configured with
-`fcm_project_id` + `fcm_credentials` in `agent.toml` (same Firebase project as
-the relay's, but set separately because the agent keeps its own device store);
-leave them empty to disable it.
+`fcm_project_id` + `fcm_credentials` in `agent.toml`, plus the client half
+(`fcm_app_id`, `fcm_api_key`, `fcm_sender_id`) the agent hands a phone at
+pairing (same Firebase project as the relay's, but set separately because the
+agent keeps its own device store); leave them empty to disable it. The client
+half is independent of sending: an agent that has it but no `fcm_credentials`
+still bootstraps a phone for push the relay will send. If you pair both slots,
+set all four in **both** configs -- pairing a slot whose bridge sends no config
+clears nothing, but only the slot that supplied one can replace it.
 
 1. Install Tailscale on the Mac (Mac App Store, or `brew install --cask
    tailscale`) and run `tailscale up`.
@@ -358,7 +363,18 @@ To get "agent needs you" notifications:
 1. Create a Firebase project and a service-account JSON key.
 2. Put the key on the **home server** and set `fcm_project_id` +
    `fcm_credentials` in the relay config.
-3. The app registers its FCM token via `POST /devices/register`. The relay opens
+3. Set the client half in the same config -- `fcm_app_id`, `fcm_api_key`,
+   `fcm_sender_id` (see `deploy/relay.example.toml` for where to read each one
+   out of a `google-services.json`). The relay hands these to a phone on the
+   pairing response so the app can initialise Firebase itself, instead of
+   needing a `google-services.json` compiled into the APK. All four counting
+   `fcm_project_id` must be set or the block is withheld entirely -- Firebase
+   rejects a partial set, and the relay warns at startup when it finds one.
+   They are not secrets; every push-enabled APK ships them in the clear.
+   Sending still needs `fcm_credentials`, which never leaves the home server.
+   The config is delivered by pairing and only by pairing, so phones paired
+   before these were set must re-pair.
+4. The app registers its FCM token via `POST /devices/register`. The relay opens
    its own `/events` subscription over the agent tunnel; when an agent raises a
    blocking prompt it sends a high-priority FCM data message to every paired
    device.

@@ -1,6 +1,7 @@
 package com.sodre90.cmuxremote.data.pairing
 
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.FcmClientConfig
 import com.sodre90.cmuxremote.data.e2e.deriveSharedSecret
 import com.sodre90.cmuxremote.data.e2e.generateX25519KeyPair
 import com.sodre90.cmuxremote.data.e2e.pairingFingerprint
@@ -102,6 +103,72 @@ class PairingClientTest {
         val polled = server.takeRequest()
         assertEquals("GET", polled.method)
         assertEquals("/devices/pair-status/CODE1", polled.path)
+    }
+
+    /** A bridge with push configured hands its Firebase client config over on
+     *  the pairing response; the app stores it so it can initialise FCM
+     *  without a google-services.json compiled into it. */
+    @Test
+    fun pairStoresTheFcmClientConfigTheBridgeSends() {
+        val fcm = pairOnceReturningFcm(
+            """{"token":"tok-abc","tenant_id":"t1","fcm":{"project_id":"proj",""" +
+                """"app_id":"1:1:android:a","api_key":"AIzaKey","sender_id":"1"}}""",
+        )
+        assertEquals(FcmClientConfig("proj", "1:1:android:a", "AIzaKey", "1"), fcm)
+    }
+
+    /** A bridge without push omits the block entirely -- as every bridge older
+     *  than this feature also does -- and the app must read that as "no push"
+     *  rather than failing to pair. */
+    @Test
+    fun pairStoresNullFcmConfigWhenTheBridgeSendsNone() {
+        assertEquals(null, pairOnceReturningFcm("""{"token":"tok-abc","tenant_id":"t1"}"""))
+    }
+
+    /** Firebase rejects partial options, so a config missing any field has to
+     *  be discarded rather than stored and later used to initialise with. */
+    @Test
+    fun pairDiscardsAnIncompleteFcmConfig() {
+        val fcm = pairOnceReturningFcm(
+            """{"token":"tok-abc","tenant_id":"t1","fcm":{"project_id":"proj",""" +
+                """"app_id":"1:1:android:a","sender_id":"1"}}""",
+        )
+        assertEquals(null, fcm)
+    }
+
+    /** Runs one full pairing against [pairBody] and returns whatever config
+     *  was handed to storage. */
+    private fun pairOnceReturningFcm(pairBody: String): FcmClientConfig? {
+        val (_, agentPub) = generateX25519KeyPair()
+        val (phonePriv, phonePub) = generateX25519KeyPair()
+
+        server.enqueue(MockResponse().setBody(pairBody))
+        server.enqueue(confirmed())
+
+        var recorded: FcmClientConfig? = null
+        var called = false
+        val client = TestablePairingClient(
+            http = http,
+            phonePrivateKey = phonePriv,
+            phonePublicKey = phonePub,
+            onSetPairing = { _, _ -> },
+            onSetBaseUrl = { },
+            onSetToken = { },
+            onSetFcmClientConfig = {
+                recorded = it
+                called = true
+            },
+        )
+        val qr = PairingQr(
+            pairUrl = server.url("/devices/pair").toString(),
+            code = "CODE1",
+            agentPubkey = Base64.getEncoder().encodeToString(agentPub),
+            expiresAt = "2099-01-01T00:00:00Z",
+            tenantId = "t1",
+        )
+        runBlocking { client.commit(qr) }
+        assertTrue("storage must be told either way, so a stale config is cleared", called)
+        return recorded
     }
 
     /**
@@ -368,7 +435,10 @@ class PairingClientTest {
         assertEquals(emptyList<String>(), stateAtAwaitingOperator)
         assertEquals(3, persistedDuringEachPoll.size)
         assertEquals(listOf(emptyList<String>(), emptyList(), emptyList()), persistedDuringEachPoll)
-        assertEquals(listOf("pairing", "baseUrl", "token", "credentialsReplaced"), persisted)
+        assertEquals(
+            listOf("pairing", "baseUrl", "token", "fcm", "credentialsReplaced", "pairingStored"),
+            persisted,
+        )
     }
 
     @Test
@@ -428,7 +498,10 @@ class PairingClientTest {
 
         runBlocking { client.commit(qrFor(agentPub, code = "CODE1")) }
 
-        assertEquals(listOf("pairing", "baseUrl", "token", "credentialsReplaced"), persisted)
+        assertEquals(
+            listOf("pairing", "baseUrl", "token", "fcm", "credentialsReplaced", "pairingStored"),
+            persisted,
+        )
     }
 
     /** cmux-app-smu: onCredentialsReplaced tears down live sockets on the
@@ -473,7 +546,9 @@ class PairingClientTest {
         onSetPairing = { _, _ -> persisted += "pairing" },
         onSetBaseUrl = { persisted += "baseUrl" },
         onSetToken = { persisted += "token" },
+        onSetFcmClientConfig = { persisted += "fcm" },
         onCredentialsReplaced = { persisted += "credentialsReplaced" },
+        onPairingStored = { persisted += "pairingStored" },
         confirmTimeoutMillis = confirmTimeoutMillis,
     )
 }
@@ -488,7 +563,9 @@ private class TestablePairingClient(
     private val onSetPairing: (peerPublicKey: ByteArray, sharedSecret: ByteArray) -> Unit,
     private val onSetBaseUrl: (String) -> Unit,
     private val onSetToken: (String) -> Unit,
+    private val onSetFcmClientConfig: (FcmClientConfig?) -> Unit = {},
     private val onCredentialsReplaced: () -> Unit = {},
+    private val onPairingStored: () -> Unit = {},
     private val confirmTimeoutMillis: Long = 2000,
 ) {
     fun prepare(qr: PairingQr): String = prepareInternal(qr, phonePublicKey)
@@ -501,7 +578,9 @@ private class TestablePairingClient(
         onSetPairing = onSetPairing,
         onSetBaseUrl = onSetBaseUrl,
         onSetToken = onSetToken,
+        onSetFcmClientConfig = onSetFcmClientConfig,
         onCredentialsReplaced = onCredentialsReplaced,
+        onPairingStored = onPairingStored,
         onAwaitingOperator = onAwaitingOperator,
         pollPeriodMillis = 10,
         confirmTimeoutMillis = confirmTimeoutMillis,

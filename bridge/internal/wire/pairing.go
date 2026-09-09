@@ -55,10 +55,50 @@ type DevicePairReq struct {
 	Name         string `json:"name"`
 }
 
+// FCMClientConfig is the Firebase client configuration a phone needs to
+// initialise FCM itself, handed over once at pairing so the app no longer has
+// to be rebuilt with a google-services.json compiled into its resources.
+//
+// None of these four values is a secret: Firebase ships all of them in the
+// clear inside every distributed APK that has push configured, and none of
+// them authorises sending a message -- that needs the service-account key,
+// which stays on this machine (fcm_credentials) and is never sent anywhere.
+type FCMClientConfig struct {
+	ProjectID string `json:"project_id"`
+	AppID     string `json:"app_id"`
+	APIKey    string `json:"api_key"`
+	SenderID  string `json:"sender_id"`
+}
+
+// Configured reports whether every field needed to build Firebase's
+// client-side options is present. Firebase rejects a partial set, so a
+// half-filled config is treated as no config at all rather than sent to a
+// phone that could only fail on it.
+func (c FCMClientConfig) Configured() bool {
+	return c.ProjectID != "" && c.AppID != "" && c.APIKey != "" && c.SenderID != ""
+}
+
+// PartiallyConfigured reports a config the operator started and did not
+// finish: at least one field set, but not all four. That combination is
+// silently useless -- the block is withheld, so every phone pairs without
+// push and nothing on the phone can say why -- which is exactly the case
+// worth warning about at startup.
+func (c FCMClientConfig) PartiallyConfigured() bool {
+	if c.Configured() {
+		return false
+	}
+	return c.ProjectID != "" || c.AppID != "" || c.APIKey != "" || c.SenderID != ""
+}
+
 // DevicePairResp is the response to POST /devices/pair.
+//
+// FCM is omitted entirely unless the operator configured all four client
+// fields, so a phone paired against a bridge without push sees exactly the
+// response it saw before this field existed.
 type DevicePairResp struct {
-	Token    string `json:"token"`
-	TenantID string `json:"tenant_id"`
+	Token    string           `json:"token"`
+	TenantID string           `json:"tenant_id"`
+	FCM      *FCMClientConfig `json:"fcm,omitempty"`
 }
 
 // PairStatusResp is the response to GET /devices/pair-status/{code}, the

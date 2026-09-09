@@ -27,6 +27,14 @@ type Config struct {
 	// FCMCredentials is the path to a Google service-account JSON key. Empty
 	// disables push.
 	FCMCredentials string `toml:"fcm_credentials"`
+	// FCMAppID, FCMAPIKey and FCMSenderID are the client half of the
+	// Firebase configuration, handed to a phone at pairing (see
+	// wire.FCMClientConfig) so the app can initialise FCM without a
+	// google-services.json compiled into it. FCMProjectID above doubles as
+	// the project id.
+	FCMAppID    string `toml:"fcm_app_id"`
+	FCMAPIKey   string `toml:"fcm_api_key"`
+	FCMSenderID string `toml:"fcm_sender_id"`
 	// RelayToken is the shared secret the relay injects and the agent checks.
 	RelayToken string `toml:"relay_token"`
 	// EdgeToken is the shared secret the trusted edge (nginx) must present on

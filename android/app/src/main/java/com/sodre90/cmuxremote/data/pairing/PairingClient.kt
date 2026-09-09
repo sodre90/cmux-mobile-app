@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.data.pairing
 
 import com.sodre90.cmuxremote.data.BridgeConfig
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.FcmClientConfig
 import com.sodre90.cmuxremote.data.Settings
 import com.sodre90.cmuxremote.data.SlotCredentialHealth
 import com.sodre90.cmuxremote.data.SlotCredentials
@@ -60,7 +61,27 @@ private data class DevicePairRequest(
 private data class DevicePairResponse(
     val token: String = "",
     @SerialName("tenant_id") val tenantId: String = "",
+    val fcm: FcmClientConfigDto? = null,
 )
+
+/** Mirrors wire.FCMClientConfig. Absent whenever the bridge has no push
+ *  configured, which is why every field defaults and the block itself is
+ *  nullable: a bridge older than this feature simply never sends it. */
+@Serializable
+internal data class FcmClientConfigDto(
+    @SerialName("project_id") val projectId: String = "",
+    @SerialName("app_id") val appId: String = "",
+    @SerialName("api_key") val apiKey: String = "",
+    @SerialName("sender_id") val senderId: String = "",
+) {
+    /** Firebase rejects partial options, so anything short of the full set is
+     *  treated as no config at all -- mirrors wire.FCMClientConfig.Configured. */
+    fun isComplete(): Boolean =
+        projectId.isNotBlank() && appId.isNotBlank() && apiKey.isNotBlank() && senderId.isNotBlank()
+
+    fun toDomain(): FcmClientConfig =
+        FcmClientConfig(projectId = projectId, appId = appId, apiKey = apiKey, senderId = senderId)
+}
 
 /** Mirrors wire.PairStatusResp. Defaults to pending so a response that is
  *  missing or malformed keeps the phone waiting rather than reading as an
@@ -169,6 +190,9 @@ class PairingClient(
     private val slotCredentials: SlotCredentials,
     private val credentialHealth: SlotCredentialHealth,
     private val retirePreviousCredential: (BridgeConfig) -> Unit = {},
+    /** Fired once a pairing is confirmed and stored, so push can come up in
+     *  this process rather than waiting for the next launch. */
+    private val onPairingStored: () -> Unit = {},
 ) : PairingSession {
     private val keys = PairingKeys()
 
@@ -190,6 +214,8 @@ class PairingClient(
             onSetPairing = session::setPairing,
             onSetBaseUrl = { settings.setBaseUrl(slot, it) },
             onSetToken = { settings.setDeviceToken(slot, it) },
+            onSetFcmClientConfig = { settings.setFcmClientConfig(slot, it) },
+            onPairingStored = onPairingStored,
             // Sockets still running on the old token map to the agent's
             // previous device row, whose key no longer matches this
             // session, so every frame they carry is dropped (cmux-app-smu).
@@ -256,6 +282,7 @@ private class RedeemedPairing(
     val token: String,
     val agentPublicKey: ByteArray,
     val sharedSecret: ByteArray,
+    val fcm: FcmClientConfigDto?,
 )
 
 /** Free function (not a CryptoSession/Settings method) so PairingClientTest can
@@ -270,7 +297,9 @@ internal suspend fun commitInternal(
     onSetPairing: (peerPublicKey: ByteArray, sharedSecret: ByteArray) -> Unit,
     onSetBaseUrl: (String) -> Unit,
     onSetToken: (String) -> Unit,
+    onSetFcmClientConfig: (FcmClientConfig?) -> Unit,
     onCredentialsReplaced: () -> Unit,
+    onPairingStored: () -> Unit = {},
     onAwaitingOperator: () -> Unit = {},
     pollPeriodMillis: Long = PAIR_STATUS_POLL_MILLIS,
     confirmTimeoutMillis: Long = PAIRING_CONFIRM_TTL_MILLIS,
@@ -302,6 +331,7 @@ internal suspend fun commitInternal(
             token = body.token,
             agentPublicKey = agentPublicKey,
             sharedSecret = deriveSharedSecret(phonePrivateKey, agentPublicKey),
+            fcm = body.fcm?.takeIf { it.isComplete() },
         )
     }
 
@@ -312,11 +342,20 @@ internal suspend fun commitInternal(
     onSetPairing(redeemed.agentPublicKey, redeemed.sharedSecret)
     onSetBaseUrl(baseUrl)
     onSetToken(redeemed.token)
+    // Only ever on a confirmed pairing, like the token: a refused one must
+    // leave no trace, and a null here clears any config an earlier pairing
+    // left behind rather than stranding the app on a stale project.
+    onSetFcmClientConfig(redeemed.fcm?.toDomain())
     // Last, and only on a pairing the operator accepted: sockets woken by
     // this have to find the new credentials already stored, and it tears down
     // a live connection on the slot -- which a refused pairing has no
     // business doing.
     onCredentialsReplaced()
+    // Last of all, and only on a confirmed pairing: push is brought up here so
+    // a phone that just received its Firebase config does not sit dead until
+    // the next cold start. Ordered after onCredentialsReplaced so the token
+    // registration it triggers finds the new credentials already live.
+    onPairingStored()
 }
 
 /** Blocks until the agent's operator answers, mirroring the agent's own poll

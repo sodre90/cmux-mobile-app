@@ -13,10 +13,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.google.firebase.FirebaseApp
-import com.google.firebase.messaging.FirebaseMessaging
 import com.sodre90.cmuxremote.data.AppContainer
-import com.sodre90.cmuxremote.push.FcmTokenRegistrar
-import com.sodre90.cmuxremote.push.enqueueFcmTokenRegistration
+import com.sodre90.cmuxremote.push.activatePush
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 
@@ -53,12 +51,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Before anything asks whether Firebase is configured: the config now
+        // arrives at pairing rather than being compiled in, so it has to be
+        // read off Settings and applied first. Needs the container, which is
+        // why this moved above the permission prompt.
+        container = (application as CmuxApp).container
+        activatePush(applicationContext, container.settings, container::activeBridge)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isFirebaseConfigured()) {
             requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-
-        container = (application as CmuxApp).container
-        registerFcmToken()
 
         // Only on a genuine start. A configuration change recreates the Activity
         // with the SAME intent, so re-applying it re-navigates -- rotating in a
@@ -116,28 +118,6 @@ class MainActivity : ComponentActivity() {
         true
     } catch (_: Throwable) {
         false
-    }
-
-    /**
-     * Records the current FCM token and asks WorkManager to get it registered.
-     *
-     * A launch is a good moment to check, but it is no longer the only one --
-     * the retry outlives this process (see FcmTokenRegistrationWorker), which is
-     * the half that was missing when a token rotated by an overnight app update
-     * never reached the server. Firebase only initialises when
-     * `app/google-services.json` is present; without it
-     * [FirebaseMessaging.getInstance] throws, so this is a guarded no-op.
-     */
-    private fun registerFcmToken() {
-        val container = (application as CmuxApp).container
-        try {
-            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-                FcmTokenRegistrar(container.settings, container::activeBridge).onTokenIssued(token)
-                enqueueFcmTokenRegistration(applicationContext)
-            }
-        } catch (_: Throwable) {
-            // Firebase not configured (no google-services.json); push inactive.
-        }
     }
 
     companion object {

@@ -16,6 +16,24 @@ cmux_bin    = "cmux"
 # because the agent keeps its own device store. Empty disables direct push.
 # fcm_project_id  = "your-firebase-project-id"
 # fcm_credentials = "~/.config/cmux-bridge/fcm-service-account.json"
+# The client half, handed to a phone at pairing so the app can initialise FCM
+# without a google-services.json compiled into it. Read them out of the
+# google-services.json for the Android app whose package_name is
+# com.sodre90.cmuxremote (a project with several apps has several entries):
+#   fcm_project_id <- project_info.project_id
+#   fcm_sender_id  <- project_info.project_number
+#   fcm_app_id     <- client[].client_info.mobilesdk_app_id
+#   fcm_api_key    <- client[].api_key[0].current_key
+# App ID and Sender ID are also in the Firebase console (Project settings ->
+# General / Cloud Messaging); the Android API key is not -- the console's
+# project-level "Web API Key" is a different key.
+# All four must be set or the block is not sent -- Firebase rejects a partial
+# set, and the bridge warns at startup when it finds one. Not secrets: every
+# push-enabled APK ships them in the clear.
+# Sending still needs fcm_credentials, which never leaves this machine.
+# fcm_app_id     = "1:1234567890:android:abcdef1234567890"
+# fcm_api_key    = "AIzaSy..."
+# fcm_sender_id  = "1234567890"
 
 # Where the agent writes its own log. It rotates this file itself (8MB, 5
 # compressed generations, 30 days) because launchd will not. Set it to "" to

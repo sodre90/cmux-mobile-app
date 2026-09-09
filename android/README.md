@@ -97,22 +97,29 @@ both is the recommended setup. See
 ## Push notifications (optional)
 
 Push is **off by default and the app builds and runs without any Firebase
-config.** To enable "an agent needs you" notifications:
+config.** The Firebase client config travels from the bridge to the app on the
+pairing response, so a prebuilt APK can turn push on with no Android toolchain
+-- nothing is compiled in.
 
-1. Create a Firebase project, add an Android app with applicationId
-   `com.sodre90.cmuxremote`, and download its `google-services.json`.
-2. Place it at `android/app/google-services.json`. The Gradle build applies the
-   `com.google.gms.google-services` plugin **only when that file exists**, so
-   without it the build is unaffected.
-3. Configure the bridge's FCM sender (`fcm_project_id` + `fcm_credentials`) — see
+1. Create a Firebase project and add an Android app with applicationId
+   `com.sodre90.cmuxremote`.
+2. Configure the bridge with both halves of the Firebase config: the sender
+   half (`fcm_project_id` + `fcm_credentials`) and the client half
+   (`fcm_app_id`, `fcm_api_key`, `fcm_sender_id`). See
    [`bridge/README.md`](../bridge/README.md).
+3. Pair (or re-pair) the phone. The config is delivered by pairing and only by
+   pairing, so a phone paired before the bridge was configured must pair again.
 
-The app registers its FCM token via `POST /devices/register` on launch and on
-token rotation. When the bridge sends a `type=attention` data message, the app
-posts a high-priority notification that deep-links into the exact workspace
-that needs attention — opening its terminal directly when it has a single
-pane, or the sessions list (with that workspace's attention stripe visible)
-when it has several.
+All four client fields must be set on the bridge or none is sent: Firebase
+rejects partial options, so a half-filled config is treated as absent and the
+bridge logs a warning at startup.
+
+A build that does ship `android/app/google-services.json` still works and takes
+precedence -- the Gradle plugin applies only when that file exists, and the
+baked-in config wins over anything a bridge hands over. It is now an
+alternative, not a prerequisite. Note that if the baked-in project and the
+bridge's differ, the phone registers against one project while the bridge sends
+from the other, and push fails silently.
 
 ## Out of scope (for now)
 

@@ -219,3 +219,47 @@ func TestLoadAgentParsesStatusFile(t *testing.T) {
 		t.Fatalf("StatusFile = %q", cfg.StatusFile)
 	}
 }
+
+func TestLoadAgentParsesFCMClientFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.toml")
+	body := `
+relay_url      = "wss://cmux.example.com/agent/tunnel"
+fcm_project_id = "my-project"
+fcm_app_id     = "1:1234567890:android:abcdef"
+fcm_api_key    = "AIzaSyExample"
+fcm_sender_id  = "1234567890"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FCMAppID != "1:1234567890:android:abcdef" {
+		t.Fatalf("fcm_app_id = %q", cfg.FCMAppID)
+	}
+	if cfg.FCMAPIKey != "AIzaSyExample" {
+		t.Fatalf("fcm_api_key = %q", cfg.FCMAPIKey)
+	}
+	if cfg.FCMSenderID != "1234567890" {
+		t.Fatalf("fcm_sender_id = %q", cfg.FCMSenderID)
+	}
+}
+
+// The client fields are independent of fcm_credentials: a bridge may hand a
+// phone its Firebase config without itself being able to send, and must not
+// invent values for the ones the operator left out.
+func TestLoadAgentLeavesFCMClientFieldsEmptyWhenAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.toml")
+	if err := os.WriteFile(path, []byte("relay_url = \"wss://x/agent/tunnel\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FCMAppID != "" || cfg.FCMAPIKey != "" || cfg.FCMSenderID != "" {
+		t.Fatalf("absent client fields must stay empty, got %+v", cfg)
+	}
+}

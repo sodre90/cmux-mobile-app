@@ -58,8 +58,8 @@ Either way, once pairing succeeds the app moves to the sessions list; the start 
 
 Push is off by default and the app builds and runs without any Firebase config.
 
-1. Create a Firebase project, add an Android app with applicationId `com.sodre90.cmuxremote`, download its `google-services.json`.
-2. Place it at `android/app/google-services.json`. The Gradle build applies the `com.google.gms.google-services` plugin only when that file exists.
+1. Create a Firebase project and add an Android app with applicationId `com.sodre90.cmuxremote`.
+2. Configure the bridge with the client half of the config (`fcm_app_id`, `fcm_api_key`, `fcm_sender_id`); it reaches the app at pairing, so no `google-services.json` need be compiled in. Placing one at `android/app/google-services.json` still works and takes precedence. The Gradle build applies the `com.google.gms.google-services` plugin only when that file exists.
 3. Configure the bridge's FCM sender (`fcm_project_id` + `fcm_credentials`) — see [bridge](./bridge.md) and [push-notifications](../features/push-notifications.md).
 
 The app registers its FCM token via `POST /devices/register` on launch and on token rotation. When the bridge sends a `type=attention` data message, the app posts a high-priority notification that deep-links into the exact workspace that needs attention.

@@ -61,6 +61,17 @@ type AgentConfig struct {
 	// writes periodically (see internal/status), read by `cmux-bridge
 	// status`.
 	StatusFile string `toml:"status_file"`
+	// FCMAppID, FCMAPIKey and FCMSenderID are the client half of the
+	// Firebase configuration, handed to a phone at pairing (wire.
+	// FCMClientConfig) so the app can initialise FCM without being rebuilt
+	// with a google-services.json of its own. Read them off the Firebase
+	// console's Android app, or out of a google-services.json:
+	// mobilesdk_app_id, current_key, and project_number respectively.
+	// FCMProjectID above doubles as the project id. All four are needed
+	// before anything is sent.
+	FCMAppID    string `toml:"fcm_app_id"`
+	FCMAPIKey   string `toml:"fcm_api_key"`
+	FCMSenderID string `toml:"fcm_sender_id"`
 	// LogFile is the path the agent writes its own rotated log to (see
 	// internal/logging.UseRotatingFile). Set it empty to log to stderr
 	// instead and leave the file to whatever supervises the process --

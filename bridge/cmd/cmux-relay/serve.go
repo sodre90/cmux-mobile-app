@@ -18,6 +18,7 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/cli"
 	"github.com/sodre90/cmux-bridge/internal/push"
 	"github.com/sodre90/cmux-bridge/internal/relay"
+	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
 func defaultConfigPath() string {
@@ -70,6 +71,16 @@ func runServe(args []string) int {
 
 	rl := relay.New(store, signer, cfg.RelayToken)
 	rl.SetEdgeToken(cfg.EdgeToken)
+	fcmClient := wire.FCMClientConfig{
+		ProjectID: cfg.FCMProjectID,
+		AppID:     cfg.FCMAppID,
+		APIKey:    cfg.FCMAPIKey,
+		SenderID:  cfg.FCMSenderID,
+	}
+	// Must precede Handler(): pairing.Mount copies this value at mount time,
+	// so a later call would be silently ignored.
+	rl.SetFCMClientConfig(fcmClient)
+	warnFCMClientConfig(fcmClient, cfg.FCMCredentials != "")
 
 	var pusher relay.Pusher
 	if cfg.FCMCredentials != "" && cfg.FCMProjectID != "" {

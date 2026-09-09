@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,7 +14,9 @@ import (
 	"github.com/sodre90/cmux-bridge/internal/wire"
 )
 
-func newDirectPairingServer(t *testing.T) (srv *httptest.Server, store *auth.Store, tenantID string) {
+// fcm is variadic so the existing cases keep exercising the zero value --
+// the "push not configured" shape -- while the FCM cases pass a real one.
+func newDirectPairingServer(t *testing.T, fcm ...wire.FCMClientConfig) (srv *httptest.Server, store *auth.Store, tenantID string) {
 	t.Helper()
 	store, err := auth.Open(filepath.Join(t.TempDir(), "direct-auth.db"))
 	if err != nil {
@@ -23,8 +26,12 @@ func newDirectPairingServer(t *testing.T) (srv *httptest.Server, store *auth.Sto
 	if err != nil {
 		t.Fatal(err)
 	}
+	var cfg wire.FCMClientConfig
+	if len(fcm) > 0 {
+		cfg = fcm[0]
+	}
 	mux := http.NewServeMux()
-	MountDirectPairing(mux, store, tenantID)
+	MountDirectPairing(mux, store, tenantID, cfg)
 	return httptest.NewServer(mux), store, tenantID
 }
 
@@ -341,5 +348,104 @@ func TestDirectConfirmPairingUnknownCodeIs404(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+}
+
+// redeemForFCM runs one full redemption against srv and returns the decoded
+// response, so the FCM cases differ only in how the server was configured.
+func redeemForFCM(t *testing.T, srv *httptest.Server, store *auth.Store, tenantID string) wire.DevicePairResp {
+	t.Helper()
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200, got %d", resp.StatusCode)
+	}
+	var got wire.DevicePairResp
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestDirectDevicePairCarriesFCMClientConfig(t *testing.T) {
+	want := wire.FCMClientConfig{
+		ProjectID: "my-project",
+		AppID:     "1:1234567890:android:abcdef",
+		APIKey:    "AIzaSyExample",
+		SenderID:  "1234567890",
+	}
+	srv, store, tenantID := newDirectPairingServer(t, want)
+	defer srv.Close()
+
+	got := redeemForFCM(t, srv, store, tenantID)
+	if got.FCM == nil {
+		t.Fatal("a fully configured bridge must hand the phone its FCM client config")
+	}
+	if *got.FCM != want {
+		t.Fatalf("FCM config = %+v, want %+v", *got.FCM, want)
+	}
+}
+
+// Without push configured the response must be byte-identical to what it was
+// before this field existed: a phone on an older build decodes it unchanged,
+// and a current one must read "no push here" rather than a partial config it
+// would only fail to initialise Firebase with.
+//
+// Asserted on the raw body, not a decoded struct: decoding cannot tell an
+// absent key from "fcm":null, and absent is what the claim actually is.
+func TestDirectDevicePairOmitsFCMWhenUnconfigured(t *testing.T) {
+	srv, store, tenantID := newDirectPairingServer(t)
+	defer srv.Close()
+
+	body := redeemRawForFCM(t, srv, store, tenantID)
+	if strings.Contains(body, "fcm") {
+		t.Fatalf("unconfigured bridge must not mention fcm at all, got %s", body)
+	}
+}
+
+// redeemRawForFCM is redeemForFCM's undecoded twin, for the assertions that
+// are about the bytes rather than the values.
+func redeemRawForFCM(t *testing.T, srv *httptest.Server, store *auth.Store, tenantID string) string {
+	t.Helper()
+	code, err := store.NewPairingCode(tenantID, "agent-pubkey-b64", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"code":"` + code + `","device_pubkey":"device-pubkey-b64","name":"my-phone"}`
+	resp, err := http.Post(srv.URL+"/devices/pair", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// A half-filled config is the dangerous case: Firebase rejects partial
+// options, so sending three of four fields would hand the phone something it
+// can only crash on. It must read as "not configured" instead.
+func TestDirectDevicePairOmitsPartialFCMConfig(t *testing.T) {
+	partial := wire.FCMClientConfig{
+		ProjectID: "my-project",
+		AppID:     "1:1234567890:android:abcdef",
+		SenderID:  "1234567890",
+		// APIKey deliberately absent.
+	}
+	srv, store, tenantID := newDirectPairingServer(t, partial)
+	defer srv.Close()
+
+	if got := redeemForFCM(t, srv, store, tenantID); got.FCM != nil {
+		t.Fatalf("partial config must be withheld, got %+v", *got.FCM)
 	}
 }
