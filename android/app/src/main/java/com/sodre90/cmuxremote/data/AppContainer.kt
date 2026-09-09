@@ -161,7 +161,9 @@ class AppContainer(
                 retirePreviousCredential = { cfg -> retireCredential(slot, cfg) },
                 // A pairing may have just delivered the Firebase config this
                 // process concluded at startup it did not have.
-                onPairingStored = { activatePush(appContext, settings, ::activeBridge) },
+                onPairingStored = {
+                    if (activatePush(appContext, settings, ::activeBridge)) pushActivations.value++
+                },
             )
         }
 
@@ -228,6 +230,23 @@ class AppContainer(
     fun setAppForeground(value: Boolean) {
         appForeground.value = value
     }
+
+    // Bumped every time a pairing brings push up in a process that started
+    // without it -- the config now arrives at pairing, so startup can
+    // legitimately conclude there is nothing to initialise and be wrong about
+    // it minutes later.
+    private val pushActivations = MutableStateFlow(0)
+
+    /** Collected by MainActivity, which asks for POST_NOTIFICATIONS when this
+     *  changes: the permission needs an Activity, and by the time push comes
+     *  up on the pairing that delivered its config, the startup prompt has
+     *  long since decided there was nothing to ask for. Without it the phone
+     *  registers a token, the bridge starts sending, and every notification is
+     *  dropped until the user happens to relaunch (cmux-app-snt).
+     *
+     *  A counter rather than a flag: pairing the second slot must reach a
+     *  collector that already consumed the first. */
+    fun pushActivations(): StateFlow<Int> = pushActivations.asStateFlow()
 
     private val fallbackBridge = FallbackBridgeClient(
         primary = { bridgeClient(ConnectionSlot.RELAY) },

@@ -75,21 +75,28 @@ private const val TAG = "CmuxPush"
  *
  * Safe to call repeatedly: initialisation is guarded, and recording a token
  * already pending is idempotent (see [FcmTokenRegistrar.onTokenIssued]).
+ *
+ * Returns whether push is now up, which is what tells a caller holding an
+ * Activity that this is the moment to ask for the notification permission --
+ * a token registered against a phone that never granted it is dropped
+ * silently on API 33+.
  */
 fun activatePush(
     context: Context,
     settings: Settings,
     activeBridge: () -> FallbackBridgeClient?,
-) {
-    if (!ensureFirebaseInitialized(context) { settings.fcmClientConfig() }) return
-    try {
+): Boolean {
+    if (!ensureFirebaseInitialized(context) { settings.fcmClientConfig() }) return false
+    return try {
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
             FcmTokenRegistrar(settings, activeBridge).onTokenIssued(token)
             enqueueFcmTokenRegistration(context)
         }
+        true
     } catch (e: Throwable) {
         // Firebase present but unusable (no Play services, bad config). The
         // worker retry has nothing to retry against, so this is where it ends.
         Log.w(TAG, "fcm token request failed: ${e.javaClass.simpleName}")
+        false
     }
 }

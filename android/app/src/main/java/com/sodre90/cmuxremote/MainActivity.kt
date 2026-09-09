@@ -12,11 +12,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.firebase.FirebaseApp
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.push.activatePush
 import com.sodre90.cmuxremote.ui.CmuxNavHost
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -57,10 +62,8 @@ class MainActivity : ComponentActivity() {
         // why this moved above the permission prompt.
         container = (application as CmuxApp).container
         activatePush(applicationContext, container.settings, container::activeBridge)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isFirebaseConfigured()) {
-            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        requestNotificationsIfPushIsUp()
+        promptOnPushActivatedByPairing()
 
         // Only on a genuine start. A configuration change recreates the Activity
         // with the SAME intent, so re-applying it re-navigates -- rotating in a
@@ -109,9 +112,43 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Firebase only initialises when `app/google-services.json` is present;
-     * without it [FirebaseApp.getInstance] throws. Without push configured
-     * there's nothing to notify about, so don't prompt for the permission.
+     * Asks for the notification permission once push is actually up.
+     *
+     * Gated on Firebase rather than launched unconditionally because without
+     * push there is nothing to notify about, and a permission dialog nothing
+     * will ever use is a prompt the user can only get wrong.
+     */
+    private fun requestNotificationsIfPushIsUp() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && isFirebaseConfigured()) {
+            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    /**
+     * Re-runs that prompt when a pairing brings push up mid-session.
+     *
+     * The Firebase config arrives at pairing now, so [onCreate]'s prompt runs
+     * before there is anything to prompt about and correctly stays silent.
+     * Pairing then registers an FCM token and the bridge starts sending --
+     * into a phone that was never asked, which on API 33+ drops every one of
+     * them silently until the next launch (cmux-app-snt).
+     *
+     * [drop] skips the value replayed on each restart, so only genuinely new
+     * activations prompt; STARTED means a pairing that completes while the
+     * user is elsewhere is picked up when they come back.
+     */
+    private fun promptOnPushActivatedByPairing() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                container.pushActivations().drop(1).collect { requestNotificationsIfPushIsUp() }
+            }
+        }
+    }
+
+    /**
+     * Whether a FirebaseApp exists: either from a compiled-in
+     * `google-services.json` or from a config a pairing delivered (see
+     * [activatePush]). Without one [FirebaseApp.getInstance] throws.
      */
     private fun isFirebaseConfigured(): Boolean = try {
         FirebaseApp.getInstance()
