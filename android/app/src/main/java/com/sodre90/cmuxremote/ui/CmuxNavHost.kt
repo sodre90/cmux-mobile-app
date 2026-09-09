@@ -185,6 +185,7 @@ fun CmuxNavHost(
             val relayCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.RELAY).collectAsState()
             val directCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.DIRECT).collectAsState()
             var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
+            var wheelScrolling by rememberSaveable { mutableStateOf(testPushVm.loadWheelScrolling()) }
             val bridgeVersion by testPushVm.bridgeVersion.collectAsState()
             // Keyed on forgetGeneration so forgetting or re-pairing a slot
             // re-asks rather than leaving the previous agent's version on
@@ -197,6 +198,7 @@ fun CmuxNavHost(
                 directCredentialStatus = directCredentialStatus,
                 testPushState = testPushState,
                 fontZoom = fontZoom,
+                wheelScrolling = wheelScrolling,
                 appVersion = BuildConfig.VERSION_NAME,
                 bridgeVersion = bridgeVersion,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
@@ -208,6 +210,10 @@ fun CmuxNavHost(
                 onFontZoomChange = {
                     fontZoom = it
                     testPushVm.saveFontZoom(it)
+                },
+                onWheelScrollingChange = {
+                    wheelScrolling = it
+                    testPushVm.saveWheelScrolling(it)
                 },
                 onDone = { navController.leaveSettings() },
             )

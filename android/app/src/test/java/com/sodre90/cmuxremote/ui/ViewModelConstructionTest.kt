@@ -81,6 +81,8 @@ class ViewModelConstructionTest {
     private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
         private var zoom = 1f
         override fun loadFontZoom(): Float = zoom
+        override fun loadWheelScrolling(): Boolean = true
+        override fun saveWheelScrolling(enabled: Boolean) = Unit
         override fun saveFontZoom(zoom: Float) {
             this.zoom = zoom
         }

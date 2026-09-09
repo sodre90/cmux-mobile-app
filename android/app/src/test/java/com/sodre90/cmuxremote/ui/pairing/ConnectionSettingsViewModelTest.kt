@@ -47,6 +47,9 @@ private class FakeTestPushBridgeGateway(private val bridge: FallbackBridgeClient
  *  stub is enough. */
 private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
     override fun loadFontZoom(): Float = 1f
+    var wheelScrolling = true
+    override fun loadWheelScrolling(): Boolean = wheelScrolling
+    override fun saveWheelScrolling(enabled: Boolean) { wheelScrolling = enabled }
     override fun saveFontZoom(zoom: Float) = Unit
 }
 

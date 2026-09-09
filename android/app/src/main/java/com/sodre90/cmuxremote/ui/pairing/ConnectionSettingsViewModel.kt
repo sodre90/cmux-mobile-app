@@ -87,6 +87,10 @@ class ConnectionSettingsViewModel(
         bridge.slotCredentialHealth().status(slot)
 
     fun loadFontZoom(): Float = terminalDisplay.loadFontZoom()
+
+    fun loadWheelScrolling(): Boolean = terminalDisplay.loadWheelScrolling()
+
+    fun saveWheelScrolling(enabled: Boolean) = terminalDisplay.saveWheelScrolling(enabled)
     fun saveFontZoom(zoom: Float) = terminalDisplay.saveFontZoom(zoom)
 
     fun sendTestPush() {

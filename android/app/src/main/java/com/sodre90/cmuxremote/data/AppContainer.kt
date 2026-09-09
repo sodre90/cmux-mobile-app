@@ -178,6 +178,11 @@ class AppContainer(
 
     override fun saveFontZoom(zoom: Float) = terminalDisplayStore.saveFontZoom(zoom)
 
+    override fun loadWheelScrolling(): Boolean = terminalDisplayStore.loadWheelScrolling()
+
+    override fun saveWheelScrolling(enabled: Boolean) =
+        terminalDisplayStore.saveWheelScrolling(enabled)
+
     // Shared with fallbackBridge below and handed out via relayHealth() so
     // every reconnecting socket subscription and the REST fallback path
     // learn "relay is down" once, from the same instance.

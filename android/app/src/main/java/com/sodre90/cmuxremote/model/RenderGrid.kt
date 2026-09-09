@@ -96,13 +96,47 @@ data class DecodedGrid(
     // Mouse-reporting state (DECSET 1000/1002/1003): when on, the TUI wants
     // scroll input forwarded to it instead of the client scrolling its own
     // buffer -- opencode runs this way, which is why its PTY scrollback stays
-    // empty and swiping must become PgUp/PgDn keys (see TerminalScreen; its
-    // parser ignores synthetic wheel events, verified live).
+    // empty. See [paneOwnsScrolling].
     val mouseReporting: Boolean = false,
+    // The pane is on the alternate screen buffer (DECSET 1049) rather than the
+    // primary one. See [paneOwnsScrolling].
+    val alternateScreen: Boolean = false,
+    // DEC private mode 1006: mouse reports are encoded in SGR form. Decides
+    // whether a wheel notch can be spelled at all -- see [scrollsByWheel].
+    val sgrMouseEncoding: Boolean = false,
     // DEC private mode 2004. Decides whether a paste is wrapped in
     // ESC[200~ ... ESC[201~ -- see [bracketedPasteEnabled].
     val bracketedPaste: Boolean = false,
-)
+) {
+    /**
+     * True when a vertical swipe must drive the PANE's own scrolling rather
+     * than the local render buffer.
+     *
+     * Two independent reasons, either of which is sufficient:
+     *  - mouse reporting is on, so the pane asked for scroll input the way a
+     *    trackpad over cmux itself delivers it -- to the application, not the
+     *    viewport;
+     *  - the pane is on the alternate screen, which has no scrollback by
+     *    definition, so there is nothing local left to move. This covers
+     *    `less` and `vim` started without mouse support, where a swipe used to
+     *    do nothing at all and the pane read as frozen.
+     */
+    val paneOwnsScrolling: Boolean get() = mouseReporting || alternateScreen
+
+    /**
+     * True when this pane can be scrolled by wheel notches, which move it a
+     * fraction of a row, rather than only by PgUp/PgDn, which move it half a
+     * screen at a time.
+     *
+     * Both conditions are load-bearing. Mouse reporting means the pane asked
+     * for wheel input, so a notch is scroll rather than text. SGR encoding
+     * (1006) means a notch can be spelled in the only form spelled here.
+     * Emitting these bytes at a pane that wants neither is not a harmless
+     * no-op: they land in the session as literal text, which is exactly what
+     * opencode did (d3da2ba).
+     */
+    val scrollsByWheel: Boolean get() = mouseReporting && sgrMouseEncoding
+}
 
 /**
  * True when DECCKM (DEC private mode 1, "application cursor keys") is set: arrow
@@ -124,9 +158,7 @@ internal fun applicationCursorKeysEnabled(modes: List<JsonElement>): Boolean =
  * normal tracking, 1002 button-event, or 1003 any-event): vertical swipes must
  * be forwarded to the application rather than scrolling local scrollback. This
  * mirrors how a trackpad behaves over such panes in cmux itself -- the wheel
- * goes to the application, not the terminal viewport. (What we actually forward
- * is PgUp/PgDn: synthetic wheel events are not reliably parsed by these TUIs --
- * opencode prints them as text -- while the page keys scroll its history.)
+ * goes to the application, not the terminal viewport.
  */
 internal fun mouseReportingEnabled(modes: List<JsonElement>): Boolean =
     modes.any { element ->
@@ -135,6 +167,21 @@ internal fun mouseReportingEnabled(modes: List<JsonElement>): Boolean =
         val code = (obj["code"] as? JsonPrimitive)?.intOrNull
         val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
         !ansi && (code == 1000 || code == 1002 || code == 1003) && on
+    }
+
+/**
+ * True when DEC private mode 1006 (SGR mouse encoding) is set: mouse reports
+ * take the `ESC[<b;col;rowM` form rather than X10's byte-packed one. Only the
+ * SGR form is spelled here, so this gates wheel scrolling -- see
+ * [DecodedGrid.scrollsByWheel].
+ */
+internal fun sgrMouseEncodingEnabled(modes: List<JsonElement>): Boolean =
+    modes.any { element ->
+        val obj = element as? JsonObject ?: return@any false
+        val ansi = (obj["ansi"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val code = (obj["code"] as? JsonPrimitive)?.intOrNull
+        val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
+        !ansi && code == 1006 && on
     }
 
 /**
@@ -155,6 +202,12 @@ internal fun bracketedPasteEnabled(modes: List<JsonElement>): Boolean =
         val on = (obj["on"] as? JsonPrimitive)?.booleanOrNull ?: false
         !ansi && code == 2004 && on
     }
+
+/**
+ * The `active_screen` value cmux reports for a pane that has swapped to the
+ * alternate screen buffer; the primary buffer reports "primary".
+ */
+private const val ALTERNATE_SCREEN = "alternate"
 
 object RenderGridDecoder {
     private const val BLANK = ' '
@@ -181,6 +234,8 @@ object RenderGridDecoder {
             scrollback,
             applicationCursorKeys = applicationCursorKeysEnabled(grid.modes),
             mouseReporting = mouseReportingEnabled(grid.modes),
+            alternateScreen = grid.activeScreen == ALTERNATE_SCREEN,
+            sgrMouseEncoding = sgrMouseEncodingEnabled(grid.modes),
             bracketedPaste = bracketedPasteEnabled(grid.modes),
         )
     }

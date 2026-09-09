@@ -13,13 +13,20 @@ import kotlin.math.abs
  *    the grid's own horizontal scroll);
  *  - routing arms once cumulative vertical movement exceeds [armThresholdPx]
  *    in the vertical-dominant direction, so taps never fire keys;
- *  - while routed, every [pageStepPx] of accumulated drag emits exactly one
- *    step (up = swipe toward the top = PgUp), surplus carrying over;
+ *  - the FIRST step lands after [firstStepPx], later ones every [pageStepPx].
+ *    They differ because the two are answering different questions: the first
+ *    is "has this become a scroll?", and it wants answering early, since
+ *    nothing moves at all until it fires and the answer then costs a round trip
+ *    to become visible. Later steps are "how much further?", which wants the
+ *    longer, steadier spacing;
+ *  - direction is direct manipulation: dragging DOWN pulls earlier output into
+ *    view and is therefore PgUp. Surplus carries over;
  *  - a second finger (pinch) aborts routing for the rest of the gesture.
  */
 internal class SwipePager(
     private val armThresholdPx: Float,
     private val pageStepPx: Float,
+    private val firstStepPx: Float = pageStepPx,
     private val minStepIntervalMs: Long = 140,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val onStep: (up: Boolean) -> Unit,
@@ -55,22 +62,31 @@ internal class SwipePager(
         totalY = 0f
     }
 
-    // One step per [minStepIntervalMs], surplus DROPPED rather than queued:
-    // each press jumps a whole page in the TUI, so bursting a fast swipe's
-    // full distance made it lurch through several pages after lift-off. A
-    // fast flick deliberately scrolls less far than its raw pixel distance.
+    // One step per [minStepIntervalMs], surplus DROPPED rather than queued.
+    // Only meaningful when [pageStepPx] is small enough that one gesture can
+    // ask for many steps; the caller sizes a step to a quarter of the viewport
+    // (see TerminalScreen) so a gesture asks for a few at most, and passes 0 to keep
+    // every step. A zero interval never drops: distance alone decides how far
+    // the pane moves, so the same gesture scrolls the same amount whether it
+    // was flicked or dragged.
     private fun emitSteps() {
-        while (abs(totalY) >= pageStepPx) {
+        while (abs(totalY) >= currentStepPx()) {
+            val step = currentStepPx()
             val now = nowMillis()
             if (!firstStep && now - lastEmitAtMs < minStepIntervalMs) {
-                totalY += if (totalY < 0) pageStepPx else -pageStepPx
+                totalY += if (totalY < 0) step else -step
                 continue
             }
-            val up = totalY < 0
+            // Direct manipulation: dragging DOWN pulls earlier output into
+            // view, which is PgUp -- the same sense as RenderGridView's own
+            // verticalScroll on every non-routed pane (cmux-app-a5v).
+            val up = totalY > 0
             onStep(up)
             firstStep = false
             lastEmitAtMs = now
-            totalY += if (up) pageStepPx else -pageStepPx
+            totalY += if (totalY < 0) step else -step
         }
     }
+
+    private fun currentStepPx(): Float = if (firstStep) firstStepPx else pageStepPx
 }
