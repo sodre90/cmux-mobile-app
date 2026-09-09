@@ -64,6 +64,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -78,6 +79,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -104,6 +106,7 @@ import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
 import com.sodre90.cmuxremote.ui.yoloModeLabel
 import kotlinx.coroutines.delay
+import kotlin.math.abs
 
 private const val TAG = "TerminalSwipe"
 
@@ -712,6 +715,36 @@ private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (
  * find). [ctrlArmed] is owned by the caller so the same arm/disarm state
  * also gates typed-letter input outside this composable.
  */
+/**
+ * Makes a vertical drag across these buttons cancel the tap instead of firing
+ * the key on lift-off.
+ *
+ * Compose ends a tap only when something CONSUMES the movement -- distance
+ * alone never cancels one. A horizontal drag here is consumed by the bar's own
+ * horizontalScroll, so it already behaves; a vertical drag is consumed by
+ * nothing, so a scroll swipe that starts on a key button still sends that key.
+ * On `Esc` that is a bare ESC, which interrupts a running agent and opens the
+ * rewind overlay on the second one (cmux-app-qts).
+ *
+ * Claims on the Initial pass, so the buttons see the event already consumed
+ * rather than one event later, and only once the drag is past touch slop and
+ * vertical-dominant -- below that it is still a tap, and horizontal movement
+ * still belongs to the scroll.
+ */
+private fun Modifier.cancelTapOnVerticalDrag(): Modifier = pointerInput(Unit) {
+    val slop = viewConfiguration.touchSlop
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        var travel = Offset.Zero
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id && it.pressed } ?: break
+            travel += change.positionChangeIgnoreConsumed()
+            if (abs(travel.y) > slop && abs(travel.y) > abs(travel.x)) change.consume()
+        }
+    }
+}
+
 @Composable
 private fun KeyBar(
     applicationCursorKeys: Boolean,
@@ -731,7 +764,10 @@ private fun KeyBar(
             // reads as the bar simply ending -- PgUp/PgDn/^D/^Z and the F-keys
             // went undiscovered. The fade says the row continues, and it appears
             // only on a side that actually has more.
-            modifier = Modifier.scrollEdgeFade(keyScroll).horizontalScroll(keyScroll),
+            modifier = Modifier
+                .cancelTapOnVerticalDrag()
+                .scrollEdgeFade(keyScroll)
+                .horizontalScroll(keyScroll),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             TerminalKeys.forEach { key ->
