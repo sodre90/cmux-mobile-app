@@ -34,6 +34,7 @@ func RequireRelayToken(token string, next http.Handler) http.Handler {
 // sense for the latter.
 func (s *Server) routes(wrap func(http.Handler) http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /version", wrap(http.HandlerFunc(s.handleVersion)))
 	mux.Handle("GET /sessions", wrap(http.HandlerFunc(s.handleSessions)))
 	mux.Handle("GET /events", wrap(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /terminal/{id}", wrap(http.HandlerFunc(s.handleTerminal)))

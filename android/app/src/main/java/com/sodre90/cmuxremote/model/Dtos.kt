@@ -75,6 +75,13 @@ data class TerminalPane(
 @Serializable
 data class WorkspacesResponse(val workspaces: List<Workspace> = emptyList())
 
+/** Body of `GET /version` -- mirrors bridge/internal/wire/version.go's
+ *  VersionResponse. Defaulted so an agent too old to serve the route (or one
+ *  answering without the field) decodes to an empty string rather than
+ *  throwing, which the Connections screen renders as "unknown". */
+@Serializable
+data class VersionResponse(val bridge: String = "")
+
 /** Body of `POST /devices/register`. */
 @Serializable
 data class RegisterDeviceRequest(@SerialName("fcm_token") val fcmToken: String)

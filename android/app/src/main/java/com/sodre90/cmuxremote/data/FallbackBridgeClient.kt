@@ -205,6 +205,7 @@ class FallbackBridgeClient(
     /** Same fallback philosophy as [registerDevice]: whichever slot is
      *  actually reachable handles the test push, since either one may be
      *  the connection real pushes later arrive through. */
+    suspend fun version(): String = retryingNotPaired { call { it.version() } }
     suspend fun sendTestPush() = call { it.sendTestPush() }
 
     private companion object {

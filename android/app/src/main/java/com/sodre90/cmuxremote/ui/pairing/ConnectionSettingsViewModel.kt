@@ -22,6 +22,20 @@ sealed interface TestPushUiState {
     data class Error(val message: String) : TestPushUiState
 }
 
+/** What the Connections screen knows about the *agent's* version. The app's own
+ *  version needs no state of its own -- it is a compile-time constant.
+ *
+ *  [Unavailable] deliberately collapses every way of not knowing (no slot
+ *  configured, the agent unreachable, an agent too old to serve `GET /version`)
+ *  into one: they are indistinguishable to the user, who can act on none of
+ *  them from this screen, and the surrounding connection cards already say
+ *  which slots are paired and healthy. */
+sealed interface BridgeVersionUiState {
+    data object Loading : BridgeVersionUiState
+    data class Known(val version: String) : BridgeVersionUiState
+    data object Unavailable : BridgeVersionUiState
+}
+
 /** Backs [ConnectionSettingsScreen]'s "Send test notification" button --
  *  see bridge/internal/server/test_push.go and
  *  bridge/internal/relay/testpush.go's `POST /devices/test-push`.
@@ -38,6 +52,33 @@ class ConnectionSettingsViewModel(
 
     private val _testPushState = MutableStateFlow<TestPushUiState>(TestPushUiState.Idle)
     val testPushState: StateFlow<TestPushUiState> = _testPushState.asStateFlow()
+
+    private val _bridgeVersion = MutableStateFlow<BridgeVersionUiState>(BridgeVersionUiState.Loading)
+    val bridgeVersion: StateFlow<BridgeVersionUiState> = _bridgeVersion.asStateFlow()
+
+    /** Fetches the agent's version once. Called when the screen appears rather
+     *  than in `init`: it is a network round trip for a line of text, and the
+     *  screen is also the first destination on an unpaired install, where there
+     *  is nothing to ask. */
+    fun loadBridgeVersion() {
+        val client = bridge.activeBridge()
+        if (client == null) {
+            _bridgeVersion.value = BridgeVersionUiState.Unavailable
+            return
+        }
+        viewModelScope.launch {
+            _bridgeVersion.value = try {
+                // An agent too old for the route 404s, and one that answers
+                // without the field decodes to "": both are "we don't know",
+                // not a version worth printing.
+                client.version().takeIf { it.isNotBlank() }
+                    ?.let { BridgeVersionUiState.Known(it) }
+                    ?: BridgeVersionUiState.Unavailable
+            } catch (_: Exception) {
+                BridgeVersionUiState.Unavailable
+            }
+        }
+    }
 
     /** Whether [slot]'s server still recognises this device's credential.
      *  Surfaced here so a rejection is visible while the *other* slot is still

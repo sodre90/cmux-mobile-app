@@ -62,6 +62,8 @@ fun ConnectionSettingsScreen(
     directCredentialStatus: CredentialStatus,
     testPushState: TestPushUiState,
     fontZoom: Float,
+    appVersion: String,
+    bridgeVersion: BridgeVersionUiState,
     onPair: (ConnectionSlot) -> Unit,
     onForget: (ConnectionSlot) -> Unit,
     onSendTestPush: () -> Unit,
@@ -123,6 +125,7 @@ fun ConnectionSettingsScreen(
             if (paired) {
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
             }
+            AboutRow(appVersion = appVersion, bridgeVersion = bridgeVersion)
         }
     }
     forgetTarget?.let { slot ->
@@ -283,6 +286,61 @@ private fun FontSizeRow(zoom: Float, onZoomChange: (Float) -> Unit) {
                 Text(stringResource(R.string.terminal_font_size_reset))
             }
         }
+    }
+}
+
+/** The two versions that can differ. The app updates from a release APK and the
+ *  agent from a binary on the Mac, so "what am I running" has two answers, and
+ *  before this neither was visible anywhere on the phone. */
+@Composable
+private fun AboutRow(appVersion: String, bridgeVersion: BridgeVersionUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.about_title))
+            VersionLine(label = stringResource(R.string.about_app_version), value = appVersion)
+            VersionLine(
+                label = stringResource(R.string.about_bridge_version),
+                value = bridgeVersionText(bridgeVersion),
+            )
+        }
+    }
+}
+
+@Composable
+private fun VersionLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun bridgeVersionText(state: BridgeVersionUiState): String = when (state) {
+    is BridgeVersionUiState.Known -> state.version
+    BridgeVersionUiState.Loading -> stringResource(R.string.about_version_loading)
+    BridgeVersionUiState.Unavailable -> stringResource(R.string.about_version_unavailable)
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun AboutRowPreview() {
+    CmuxTheme {
+        AboutRow(appVersion = "0.3.0", bridgeVersion = BridgeVersionUiState.Known("0.3.0"))
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun AboutRowUnavailablePreview() {
+    CmuxTheme {
+        AboutRow(appVersion = "0.3.0", bridgeVersion = BridgeVersionUiState.Unavailable)
     }
 }
 

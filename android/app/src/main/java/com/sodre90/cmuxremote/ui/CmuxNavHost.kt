@@ -24,6 +24,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.sodre90.cmuxremote.BuildConfig
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.AppContainer
 import com.sodre90.cmuxremote.data.ConnectionSlot
@@ -184,6 +185,11 @@ fun CmuxNavHost(
             val relayCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.RELAY).collectAsState()
             val directCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.DIRECT).collectAsState()
             var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
+            val bridgeVersion by testPushVm.bridgeVersion.collectAsState()
+            // Keyed on forgetGeneration so forgetting or re-pairing a slot
+            // re-asks rather than leaving the previous agent's version on
+            // screen -- the active bridge may be a different machine now.
+            LaunchedEffect(forgetGeneration) { testPushVm.loadBridgeVersion() }
             ConnectionSettingsScreen(
                 relayConfigured = relayConfigured,
                 directConfigured = directConfigured,
@@ -191,6 +197,8 @@ fun CmuxNavHost(
                 directCredentialStatus = directCredentialStatus,
                 testPushState = testPushState,
                 fontZoom = fontZoom,
+                appVersion = BuildConfig.VERSION_NAME,
+                bridgeVersion = bridgeVersion,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
                 onForget = { slot ->
                     container.forgetSlot(slot)

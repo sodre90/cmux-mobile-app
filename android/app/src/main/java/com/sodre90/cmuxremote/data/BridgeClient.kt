@@ -7,6 +7,7 @@ import com.sodre90.cmuxremote.model.PendingFeedResponse
 import com.sodre90.cmuxremote.model.RegisterDeviceRequest
 import com.sodre90.cmuxremote.model.RenameWorkspaceRequest
 import com.sodre90.cmuxremote.model.SetYoloModeRequest
+import com.sodre90.cmuxremote.model.VersionResponse
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.WorkspacesResponse
 import kotlinx.coroutines.Dispatchers
@@ -38,6 +39,17 @@ class BridgeClient(
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw BridgeException(resp.code, body)
             BridgeJson.decodeFromString(WorkspacesResponse.serializer(), body).workspaces
+        }
+    }
+
+    /** The agent's own version, for the Connections screen -- the app knows its
+     *  own build from BuildConfig, but the two halves ship separately. */
+    suspend fun version(): String = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$root/version").get().build()
+        http.newCall(request).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw BridgeException(resp.code, body)
+            BridgeJson.decodeFromString(VersionResponse.serializer(), body).bridge
         }
     }
 

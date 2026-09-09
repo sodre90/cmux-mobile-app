@@ -178,4 +178,61 @@ class ConnectionSettingsViewModelTest {
         waitUntil { vm.testPushState.value is TestPushUiState.Success }
         assertEquals(1, server.requestCount)
     }
+    // -- bridge version
+
+    @Test
+    fun bridgeVersionStartsUnknownUntilAsked() {
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+
+        assertEquals(BridgeVersionUiState.Loading, vm.bridgeVersion.value)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun bridgeVersionIsReadFromTheAgent() {
+        server.enqueue(MockResponse().setBody("""{"bridge":"0.3.0"}"""))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+
+        vm.loadBridgeVersion()
+
+        waitUntil { vm.bridgeVersion.value is BridgeVersionUiState.Known }
+        assertEquals(BridgeVersionUiState.Known("0.3.0"), vm.bridgeVersion.value)
+        val recorded = server.takeRequest()
+        assertEquals("/version", recorded.path)
+        assertEquals("GET", recorded.method)
+    }
+
+    @Test
+    fun noBridgeConfiguredReportsUnavailableWithNoNetworkCall() {
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(null))
+
+        vm.loadBridgeVersion()
+
+        assertEquals(BridgeVersionUiState.Unavailable, vm.bridgeVersion.value)
+        assertEquals(0, server.requestCount)
+    }
+
+    // An agent from before GET /version existed answers 404. The screen must
+    // say "unknown", not crash or sit on "checking" forever.
+    @Test
+    fun anAgentTooOldForTheRouteReportsUnavailable() {
+        server.enqueue(MockResponse().setResponseCode(404))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+
+        vm.loadBridgeVersion()
+
+        waitUntil { vm.bridgeVersion.value == BridgeVersionUiState.Unavailable }
+    }
+
+    // A 200 with the field missing decodes to "" -- printing an empty version
+    // would look like a rendering bug rather than an unknown.
+    @Test
+    fun anEmptyVersionIsTreatedAsUnknownRatherThanPrinted() {
+        server.enqueue(MockResponse().setBody("{}"))
+        val vm = testPushViewModel(FakeTestPushBridgeGateway(bridgeFor(server)))
+
+        vm.loadBridgeVersion()
+
+        waitUntil { vm.bridgeVersion.value == BridgeVersionUiState.Unavailable }
+    }
 }
