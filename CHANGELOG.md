@@ -66,13 +66,16 @@ new. An agent or relay that does not set them behaves exactly as it did on
 0.4.0, and phones paired against it receive no push unless their APK has a
 `google-services.json` compiled in.
 
-Phones need to re-pair to receive push. The config is delivered at pairing and
-nothing else carries it, so a phone paired before 0.5.0 has none stored --
-including one upgrading from a locally-built APK that had push working from a
-compiled-in `google-services.json`, which keeps working from that baked-in
-config but is now the more specific of two possible sources. If a baked-in
-config and a bridge-supplied one name different projects, the phone registers
-against one while the bridge sends from the other and push fails silently.
+A phone running a release APK must re-pair to receive push. The config is
+delivered at pairing and nothing else carries it, so a phone paired before
+0.5.0 has none stored and upgrading the app alone does not bring push up.
+
+A phone whose APK has a `google-services.json` compiled in is unaffected and
+need not re-pair: `FirebaseInitProvider` creates the default app before any of
+this runs, and that baked-in config is left alone as the more specific of the
+two sources. If it and a bridge-supplied one name different projects, the phone
+registers against one while the bridge sends from the other and push fails
+silently, so use the same project for both.
 
 ## [0.4.0] - 2026-09-09
 
