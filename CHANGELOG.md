@@ -12,6 +12,15 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+### Added
+
+- `GET /version` on the agent, and an About card at the bottom of the
+  Connections screen showing the app's version and the agent's. The two halves
+  ship separately -- the app from a release APK, the agent from a binary on the
+  Mac -- so "what am I running" has two answers, and neither was visible on the
+  phone.
+
+
 ## [0.3.0] - 2026-09-08
 
 A reliability and observability release. Every issue listed as *Known* in 0.2.0
