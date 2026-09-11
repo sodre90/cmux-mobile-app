@@ -12,6 +12,29 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-11
+
+### Fixed
+
+- Panes on the alternate screen can be panned again. 0.5.0 routed swipes there
+  to the pane itself, but did it by claiming the drag before the grid's own
+  scrolling could start -- and the grid is 79 rows against a phone viewport, so
+  only whichever rows it happened to sit at were reachable, on Claude, `less`
+  and `vim` alike. A swipe now pans the grid first and pages the pane only with
+  the part the grid could not absorb. Found on a pane where that local panning
+  was the only scrolling that could have worked at all: an idle shell stranded
+  on the alternate screen after an agent exited without restoring the primary
+  buffer, which pages on nothing, so the pane read as completely frozen.
+- Mouse-reporting panes on the primary screen page the same way, so they now
+  pan their grid before they page. This is a behaviour change on those panes
+  (opencode among them), which used to page from the first swipe.
+
+### Compatibility
+
+No wire-format, config or pairing change; nothing on the bridge moved. Phone
+only, and the two halves stay interchangeable in both directions across this
+release.
+
 ## [0.5.0] - 2026-09-10
 
 ### Added
