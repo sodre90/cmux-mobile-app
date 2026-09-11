@@ -80,3 +80,4 @@
 {"id":"int-0f8379fa2f61521e7d5e5ca2062382fc","kind":"field_change","created_at":"2026-09-08T21:11:02.578602Z","actor":"sodre90","issue_id":"cmux-app-8a0","extra":{"field":"status","new_value":"open","old_value":"closed"}}
 {"id":"int-8a0f1a0f3b74521c022fb4e611469ba0","kind":"field_change","created_at":"2026-09-09T20:26:42.144849Z","actor":"sodre90","issue_id":"cmux-app-a5v","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-5242d2ba2bd270a1972946bcbb090767","kind":"field_change","created_at":"2026-09-09T20:39:29.296021Z","actor":"sodre90","issue_id":"cmux-app-sgy","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-12b38db9216c402efad368e510af942e","kind":"field_change","created_at":"2026-09-09T22:06:27.912981Z","actor":"sodre90","issue_id":"cmux-app-snt","extra":{"field":"status","new_value":"closed","old_value":"open"}}
