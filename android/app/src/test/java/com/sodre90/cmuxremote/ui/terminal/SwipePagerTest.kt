@@ -1,17 +1,19 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Covers the swipe->PgUp/PgDn routing rules for panes that own their scrolling
- * (see [SwipePager]). The key sequences themselves are trivial; what matters is
- * WHEN movement becomes keys: never on taps, never on horizontal pans, one step
- * per page-step of vertical drag, in the direct-manipulation direction (drag
- * DOWN pulls earlier output down = PgUp), and -- when a throttle is configured
- * -- surplus dropped rather than queued.
+ * Covers the overscroll->PgUp/PgDn routing rules for panes that may page (see
+ * [SwipePager]). The key sequences themselves are trivial; what matters is WHEN
+ * movement becomes keys: never on horizontal pans, one step per page-step of
+ * vertical overscroll, in the direct-manipulation direction (drag DOWN pulls
+ * earlier output down = PgUp), and -- when a throttle is configured -- surplus
+ * dropped rather than queued.
+ *
+ * Everything fed here is overscroll the grid's own scroll could not absorb, so
+ * there is no tap or slop case to cover: a tap never reaches a scroll container
+ * at all, and pre-slop movement never leaves one.
  */
 class SwipePagerTest {
 
@@ -19,52 +21,43 @@ class SwipePagerTest {
     private var clockMs = 1_000L
 
     private fun pager() = SwipePager(
-        armThresholdPx = 40f,
         pageStepPx = 120f,
         nowMillis = { clockMs },
         onStep = { up -> steps.add(up) },
     )
 
-    @Test fun tapSizedMovementNeverRoutes() {
-        val p = pager()
-        assertFalse(p.onMove(0f, 30f))
-        assertFalse(p.onMove(0f, -25f)) // wiggling under the threshold stays a tap
-        assertEquals(0, steps.size)
-    }
-
     @Test fun horizontalDominantDragNeverRoutes() {
         val p = pager()
-        repeat(10) { p.onMove(20f, 5f) } // 200px across, 50px down
+        repeat(10) { p.onOverscroll(20f, 5f) } // 200px across, 50px down
         assertEquals(0, steps.size)
     }
 
-    @Test fun verticalDragArmsThenEmitsOneStepPerPageStep() {
+    @Test fun verticalOverscrollEmitsOneStepPerPageStep() {
         val p = pager()
-        assertFalse(p.onMove(0f, 30f)) // arming threshold not reached
-        // Armed (>40px) but under one 120px step: consumed, zero keys -- the
-        // grid's own scroll must not fight the first page-step.
-        assertTrue(p.onMove(0f, 60f))
-        assertTrue(p.onMove(0f, 60f)) // 150 cumulative -> one step, 30 carry
+        p.onOverscroll(0f, 30f)
+        p.onOverscroll(0f, 60f) // under one 120px step -- still silent
+        assertEquals(0, steps.size)
+        p.onOverscroll(0f, 60f) // 150 cumulative -> one step, 30 carry
         clockMs += 500 // past the throttle: the next full step may fire
-        assertTrue(p.onMove(0f, 100f)) // 130 -> another step, 10 carry
+        p.onOverscroll(0f, 100f) // 130 -> another step, 10 carry
         // +y = downward drag = pull earlier output into view = PageUp = true.
         assertEquals(listOf(true, true), steps)
     }
 
     @Test fun rapidSurplusStepsAreDroppedNotQueued() {
         val p = pager()
-        repeat(6) { p.onMove(0f, 60f) } // 360px within one clock instant
+        repeat(6) { p.onOverscroll(0f, 60f) } // 360px within one clock instant
         // One step emitted; the rest dropped -- a fast flick must not queue a
         // burst of page jumps that all land after lift-off.
         assertEquals(listOf(true), steps)
     }
 
     @Test fun swipeDownEmitsPageUpSwipeUpEmitsPageDown() {
-        // Direct manipulation, matching RenderGridView's verticalScroll on every
-        // non-routed pane: dragging down pulls EARLIER output into view.
+        // Direct manipulation, matching the RenderGridView verticalScroll this
+        // continues: dragging down pulls EARLIER output into view.
         val downPager = pager()
         repeat(4) {
-            downPager.onMove(0f, 60f) // 240px down -> two PageUps
+            downPager.onOverscroll(0f, 60f) // 240px down -> two PageUps
             clockMs += 500
         }
         assertEquals(listOf(true, true), steps)
@@ -73,19 +66,21 @@ class SwipePagerTest {
         clockMs += 500
         val upPager = pager()
         repeat(4) {
-            upPager.onMove(0f, -60f) // 240px up -> two PageDowns
+            upPager.onOverscroll(0f, -60f) // 240px up -> two PageDowns
             clockMs += 500
         }
         assertEquals(listOf(false, false), steps)
     }
 
-    @Test fun secondFingerCancelsRoutingForTheGesture() {
-        val p = pager()
-        assertTrue(p.onMove(0f, -200f)) // routed, PgDn emitted
-        p.cancel()
-        // The caller stops feeding the pinched-out gesture; whatever arrives
-        // next belongs to a fresh one and must re-arm from zero.
-        assertFalse(p.onMove(0f, -10f))
+    @Test fun resetDropsTheCarryFromTheEndedGesture() {
+        val p = viewportPager()
+        p.onOverscroll(0f, -100f) // routed, one PgDn, 40px carry
+        assertEquals(listOf(false), steps)
+        p.reset()
+        // The carry belonged to the gesture that just ended. Without the reset
+        // it would top up the next one, so a short flick would page a pane the
+        // user had barely touched.
+        p.onOverscroll(0f, -20f)
         assertEquals(listOf(false), steps)
     }
 
@@ -93,7 +88,6 @@ class SwipePagerTest {
      *  viewport -- one comfortable swipe -- and the throttle is off so distance
      *  alone decides. */
     private fun viewportPager(viewportPx: Float = 240f) = SwipePager(
-        armThresholdPx = 40f,
         pageStepPx = viewportPx / 4f,
         minStepIntervalMs = 0L,
         nowMillis = { clockMs },
@@ -105,35 +99,34 @@ class SwipePagerTest {
         // flick and a slow drag of the SAME distance scrolled different
         // amounts -- the thing that made this feel unpredictable.
         val flick = viewportPager()
-        repeat(4) { flick.onMove(0f, 60f) } // 240px in one clock instant
+        repeat(4) { flick.onOverscroll(0f, 60f) } // 240px in one clock instant
         val flicked = steps.toList()
 
         steps.clear()
         val drag = viewportPager()
         repeat(4) {
-            drag.onMove(0f, 60f) // same 240px, spread over time
+            drag.onOverscroll(0f, 60f) // same 240px, spread over time
             clockMs += 300
         }
         assertEquals(flicked, steps)
         assertEquals(List(4) { true }, steps) // 240px / 60px step = four PgUps
     }
 
-    @Test fun aSwipeMustCrossAWholeStepBeforeThePaneMoves() {
+    @Test fun overscrollMustCrossAWholeStepBeforeThePaneMoves() {
         // The pane's quantum is half its screen whatever we do, so the step only
-        // decides how much swiping buys one; anything shorter must stay silent
-        // rather than round up to a half-screen jump.
+        // decides how much overscroll buys one; anything shorter must stay
+        // silent rather than round up to a half-screen jump.
         val p = viewportPager()
-        p.onMove(0f, 50f) // armed (>40px), but under the 60px step
+        p.onOverscroll(0f, 50f) // under the 60px step
         assertEquals(0, steps.size)
     }
 
     @Test fun aStepIsShortEnoughForOneRealSwipe() {
         // The regression this replaces: a step of half the viewport was longer
-        // than a thumb can travel, so an ordinary swipe emitted nothing at all
-        // and the pane only crawled by whatever slop leaked to its local scroll.
+        // than a thumb can travel, so an ordinary swipe emitted nothing at all.
         val viewportPx = 1638f // the device this was measured on
         val p = viewportPager(viewportPx)
-        p.onMove(0f, 600f) // an ordinary swipe
+        p.onOverscroll(0f, 600f) // an ordinary swipe
         assertEquals(listOf(true), steps)
     }
 
@@ -141,44 +134,58 @@ class SwipePagerTest {
         // Real swipes drift sideways; dominance is on magnitude, not purity.
         // Downward drag (+y) -> PageUp -> true.
         val p = pager()
-        assertTrue(p.onMove(8f, 50f))
-        assertTrue(p.onMove(-6f, 80f))
+        p.onOverscroll(8f, 50f)
+        p.onOverscroll(-6f, 80f)
         assertEquals(listOf(true), steps)
     }
 
     @Test fun theFirstStepLandsEarlierThanTheRest() {
         // Time-to-first-feedback is what reads as lag: nothing moves at all
         // until this fires, and it then costs a round trip to become visible.
-        val steps = mutableListOf<Boolean>()
         val p = SwipePager(
-            armThresholdPx = 40f,
             pageStepPx = 400f,
             firstStepPx = 200f,
             minStepIntervalMs = 0L,
             nowMillis = { clockMs },
             onStep = { up -> steps.add(up) },
         )
-        p.onMove(0f, 200f) // first step's shorter distance is enough
+        p.onOverscroll(0f, 200f) // first step's shorter distance is enough
         assertEquals(1, steps.size)
-        p.onMove(0f, 200f) // ... but the same distance again is not
+        p.onOverscroll(0f, 200f) // ... but the same distance again is not
         assertEquals(1, steps.size)
-        p.onMove(0f, 200f) // 400 past the first step -> second fires
+        p.onOverscroll(0f, 200f) // 400 past the first step -> second fires
+        assertEquals(2, steps.size)
+    }
+
+    @Test fun everyGestureOpensWithTheShorterFirstStep() {
+        // The instance now outlives one gesture (it is remembered alongside the
+        // nested-scroll connection, not rebuilt per drag), so the early first
+        // step has to be restored on reset -- otherwise only the first swipe of
+        // a session ever got quick feedback.
+        val p = SwipePager(
+            pageStepPx = 400f,
+            firstStepPx = 200f,
+            minStepIntervalMs = 0L,
+            nowMillis = { clockMs },
+            onStep = { up -> steps.add(up) },
+        )
+        p.onOverscroll(0f, 200f)
+        p.reset()
+        p.onOverscroll(0f, 200f)
         assertEquals(2, steps.size)
     }
 
     @Test fun anUnsetFirstStepFallsBackToThePageStep() {
         // The default keeps every existing caller on one uniform step.
-        val steps = mutableListOf<Boolean>()
         val p = SwipePager(
-            armThresholdPx = 40f,
             pageStepPx = 120f,
             minStepIntervalMs = 0L,
             nowMillis = { clockMs },
             onStep = { up -> steps.add(up) },
         )
-        p.onMove(0f, 119f)
+        p.onOverscroll(0f, 119f)
         assertEquals(0, steps.size)
-        p.onMove(0f, 1f)
+        p.onOverscroll(0f, 1f)
         assertEquals(1, steps.size)
     }
 }

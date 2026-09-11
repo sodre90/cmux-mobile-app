@@ -194,7 +194,7 @@ class RenderGridDecoderTest {
         assertFalse(RenderGridDecoder.decode(grid()).mouseReporting)
     }
 
-    // -- who owns a swipe (see DecodedGrid.paneOwnsScrolling) --
+    // -- whose overscroll may page the pane (see DecodedGrid.mayPageOnOverscroll) --
 
     private fun decodeWithScreen(activeScreen: String) = RenderGridDecoder.decode(
         BridgeJson.decodeFromString(
@@ -204,28 +204,28 @@ class RenderGridDecoderTest {
     )
 
     @Test
-    fun alternateScreenPaneOwnsItsScrollingWithoutMouseReporting() {
+    fun anAlternateScreenPaneMayPageWithoutMouseReporting() {
         // `less` and `vim` started without mouse support: no tracking mode, but
-        // the alternate screen has no scrollback, so a swipe has nothing local
-        // to move and used to leave the pane looking frozen.
+        // the alternate screen has no scrollback, so once the visible grid has
+        // been panned to its edge there is nothing local left to give.
         val decoded = decodeWithScreen("alternate")
         assertFalse(decoded.mouseReporting)
         assertTrue(decoded.alternateScreen)
-        assertTrue(decoded.paneOwnsScrolling)
+        assertTrue(decoded.mayPageOnOverscroll)
     }
 
     @Test
     fun primaryScreenWithoutMouseReportingScrollsLocally() {
         val decoded = decodeWithScreen("primary")
         assertFalse(decoded.alternateScreen)
-        assertFalse(decoded.paneOwnsScrolling)
+        assertFalse(decoded.mayPageOnOverscroll)
     }
 
     @Test
-    fun mouseReportingOnThePrimaryScreenStillOwnsItsScrolling() {
+    fun mouseReportingOnThePrimaryScreenMayPageToo() {
         val decoded = decodeWithModes("""[{"ansi":false,"code":1000,"on":true}]""")
         assertFalse(decoded.alternateScreen)
-        assertTrue(decoded.paneOwnsScrolling)
+        assertTrue(decoded.mayPageOnOverscroll)
     }
 
     @Test
@@ -233,7 +233,7 @@ class RenderGridDecoderTest {
         // Older cmux builds omit the field; the safe reading is "primary", which
         // leaves local scrolling exactly as it was.
         assertFalse(RenderGridDecoder.decode(grid()).alternateScreen)
-        assertFalse(RenderGridDecoder.decode(grid()).paneOwnsScrolling)
+        assertFalse(RenderGridDecoder.decode(grid()).mayPageOnOverscroll)
     }
 
     // -- who can take a wheel notch (see DecodedGrid.scrollsByWheel) --
@@ -262,15 +262,15 @@ class RenderGridDecoderTest {
 
     @Test
     fun anAlternateScreenPaneWithoutMouseModesTakesOnlyPageKeys() {
-        // `less` and `vim` without mouse support: the pane owns its scrolling,
-        // but PgUp/PgDn is all it understands.
+        // `less` and `vim` without mouse support: overscroll may page the
+        // pane, but PgUp/PgDn is all it understands.
         val decoded = decodeWithScreen("alternate")
-        assertTrue(decoded.paneOwnsScrolling)
+        assertTrue(decoded.mayPageOnOverscroll)
         assertFalse(decoded.scrollsByWheel)
     }
 
     @Test
-    fun aPaneScrollingByWheelAlsoOwnsItsScrolling() {
-        assertTrue(decodeWithModes("[$trackingOn,$sgrOn]").paneOwnsScrolling)
+    fun aPaneScrollingByWheelMayAlsoBePagedByOverscroll() {
+        assertTrue(decodeWithModes("[$trackingOn,$sgrOn]").mayPageOnOverscroll)
     }
 }

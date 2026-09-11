@@ -108,6 +108,10 @@ dependencies {
     implementation(libs.mlkit.barcode.scanning)
 
     debugImplementation(libs.androidx.ui.tooling)
+    // Not testImplementation: this contributes the bare ComponentActivity that
+    // createComposeRule() launches, and a Robolectric test reads it from the
+    // merged DEBUG manifest.
+    debugImplementation(libs.androidx.ui.test.manifest)
 
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
@@ -118,6 +122,8 @@ dependencies {
     testImplementation(libs.jna)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.navigation.testing)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.ui.test.junit4)
 }
 
 val lazysodiumNativeLibDir = layout.buildDirectory.dir("native-libs/lazysodium")

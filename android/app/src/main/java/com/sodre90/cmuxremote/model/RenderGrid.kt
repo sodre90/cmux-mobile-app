@@ -96,10 +96,10 @@ data class DecodedGrid(
     // Mouse-reporting state (DECSET 1000/1002/1003): when on, the TUI wants
     // scroll input forwarded to it instead of the client scrolling its own
     // buffer -- opencode runs this way, which is why its PTY scrollback stays
-    // empty. See [paneOwnsScrolling].
+    // empty. See [mayPageOnOverscroll].
     val mouseReporting: Boolean = false,
     // The pane is on the alternate screen buffer (DECSET 1049) rather than the
-    // primary one. See [paneOwnsScrolling].
+    // primary one. See [mayPageOnOverscroll].
     val alternateScreen: Boolean = false,
     // DEC private mode 1006: mouse reports are encoded in SGR form. Decides
     // whether a wheel notch can be spelled at all -- see [scrollsByWheel].
@@ -109,19 +109,29 @@ data class DecodedGrid(
     val bracketedPaste: Boolean = false,
 ) {
     /**
-     * True when a vertical swipe must drive the PANE's own scrolling rather
-     * than the local render buffer.
+     * True when a vertical swipe the local render buffer could not absorb is
+     * worth offering to the PANE as a page key.
      *
-     * Two independent reasons, either of which is sufficient:
+     * Deliberately a guess, and deliberately a cheap one. Neither signal proves
+     * anything is listening -- both only say the pane is the KIND of pane that
+     * usually pages:
      *  - mouse reporting is on, so the pane asked for scroll input the way a
      *    trackpad over cmux itself delivers it -- to the application, not the
      *    viewport;
      *  - the pane is on the alternate screen, which has no scrollback by
-     *    definition, so there is nothing local left to move. This covers
-     *    `less` and `vim` started without mouse support, where a swipe used to
-     *    do nothing at all and the pane read as frozen.
+     *    definition, so there is nothing local beyond the visible grid. This
+     *    covers `less` and `vim` started without mouse support.
+     *
+     * The counterexample that named this: an idle zsh prompt stranded on the
+     * alternate screen after Claude Code exited without restoring the primary
+     * buffer (cmux-app-4yi). It matches the second clause and pages on nothing.
+     * That is survivable only because this gates the OVERSCROLL alone -- local
+     * panning happens first and is never given up -- so a wrong guess costs a
+     * key the pane ignores, not a pane the user cannot move. An earlier version
+     * claimed the whole drag on that guess, and every alt-screen pane became
+     * unpannable.
      */
-    val paneOwnsScrolling: Boolean get() = mouseReporting || alternateScreen
+    val mayPageOnOverscroll: Boolean get() = mouseReporting || alternateScreen
 
     /**
      * True when this pane can be scrolled by wheel notches, which move it a

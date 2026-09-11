@@ -76,6 +76,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
@@ -96,10 +99,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sodre90.cmuxremote.BuildConfig
 import com.sodre90.cmuxremote.R
+import com.sodre90.cmuxremote.model.DecodedGrid
 import com.sodre90.cmuxremote.ui.UiState
 import com.sodre90.cmuxremote.ui.YoloBadge
 import com.sodre90.cmuxremote.ui.theme.CmuxTheme
@@ -407,115 +412,6 @@ fun TerminalScreen(
                                     keyboardController?.show()
                                 }
                             }
-                            // Panes that own their scrolling (see [DecodedGrid.paneOwnsScrolling])
-                            // have nothing local for a swipe to move -- either the TUI asked for
-                            // the scroll input, or the pane is on the alternate screen, which has
-                            // no scrollback at all. Swipes there become PgUp/PgDn, which such
-                            // TUIs' parsers do consume (see [SwipePager] for the
-                            // accumulate/arm/throttle rules). Sent via vm.sendText so the Ctrl
-                            // chip's arming is not involved.
-                            //
-                            // NOT synthetic wheel events. Verified twice now: opencode prints
-                            // SGR/X10 sequences as literal text (d3da2ba), and a Claude pane
-                            // advertising mouse tracking WITH SGR (1000+1002+1003+1006, on the
-                            // alternate screen) silently swallows `ESC[<64;col;rowM` -- the pane
-                            // stopped scrolling entirely until this was put back. Whatever makes
-                            // that pane scroll under a desktop trackpad, it is not a wheel report
-                            // arriving on stdin (cmux-app-vcx).
-                            //
-                            // Lives HERE, on the ancestor of the whole grid surface -- a
-                            // sibling Box layered underneath RenderGridView never sees a
-                            // single event (hit-testing picks the topmost path only),
-                            // which is exactly how the first attempt silently no-op'd.
-                            // Ancestors observe every event regardless of who consumes it,
-                            // same reason the pinch above works.
-                            .pointerInput(grid.paneOwnsScrolling, wheelScrolls) {
-                                if (!grid.paneOwnsScrolling) return@pointerInput
-                                if (BuildConfig.DEBUG) Log.d(TAG, "swipe handler armed (paneOwnsScrolling=true)")
-                                awaitEachGesture {
-                                    // Two ways to move a pane that owns its scrolling, and the
-                                    // pane plus a preference decide which (see [wheelScrolls]).
-                                    //
-                                    // Wheel notches move it a fraction of a row, so it tracks the
-                                    // finger. Their cost is round trips: a half-screen is roughly
-                                    // sixty notches against a ~150ms-per-RPC bridge, so this is
-                                    // smooth-but-slow, and throttled so a flick cannot build a
-                                    // blob the pane would collapse (WHEEL_NOTCH_INTERVAL_MS).
-                                    //
-                                    // PgUp/PgDn covers that distance in one keystroke, but its
-                                    // quantum is fixed at half a screen (35 of 79 rows on a live
-                                    // Claude pane). Soft-wrapped, 35 rows are taller than the
-                                    // viewport, so 1:1 is unreachable and a step only decides how
-                                    // much swiping buys one jump -- sized to one comfortable
-                                    // swipe. Half the viewport was longer than a thumb reaches, so
-                                    // no step ever fired and the pane crawled by whatever slop
-                                    // leaked to its local scroll (cmux-app-sgy).
-                                    //
-                                    // Built per gesture so a rotation or IME resize is picked up.
-                                    val wheeling = wheelScrolls && grid.scrollsByWheel
-                                    val hoverColumn = grid.columns / 2 + 1
-                                    val hoverRow = grid.rows / 2 + 1
-                                    val stepPx =
-                                        if (wheeling) WHEEL_NOTCH_TRAVEL.toPx() else size.height / 4f
-                                    // Nothing moves until the first step fires, and it then costs
-                                    // two `cmux rpc` subprocess spawns (~300ms) to become visible,
-                                    // so a quarter-screen drag before any feedback read as lag.
-                                    // Half that to start; the steadier spacing resumes after.
-                                    val firstStepPx = if (wheeling) stepPx else stepPx / 2f
-                                    val stepIntervalMs =
-                                        if (wheeling) WHEEL_NOTCH_INTERVAL_MS else 0L
-                                    val pager = SwipePager(
-                                        // Arming exactly at the platform's touch slop is what keeps
-                                        // that leak closed: it is the instant the descendant
-                                        // verticalScroll would start its own drag, and claiming the
-                                        // event on the Initial pass at that same instant means the
-                                        // child sees it already consumed and never starts.
-                                        armThresholdPx = viewConfiguration.touchSlop,
-                                        pageStepPx = stepPx.coerceAtLeast(1f),
-                                        firstStepPx = firstStepPx.coerceAtLeast(1f),
-                                        minStepIntervalMs = stepIntervalMs,
-                                        onStep = { up ->
-                                            if (BuildConfig.DEBUG) {
-                                                Log.d(TAG, "step up=$up wheel=$wheeling")
-                                            }
-                                            vm.sendText(
-                                                if (wheeling) {
-                                                    wheelNotch(up, hoverColumn, hoverRow)
-                                                } else {
-                                                    if (up) "$ESC[5~" else "$ESC[6~"
-                                                },
-                                            )
-                                        },
-                                    )
-                                    // INITIAL pass, and positionChangeIgnoreConsumed: RenderGridView's
-                                    // own verticalScroll is a DESCENDANT, so on the Main pass
-                                    // (child -> parent) it consumes the drag before this ancestor
-                                    // ever sees it and positionChange() reports a flat zero. That
-                                    // made the swipe work only when the grid happened to have
-                                    // nothing to scroll -- the pane looked randomly broken. The
-                                    // Initial pass runs parent -> child, so claiming the gesture
-                                    // here keeps the local pan from fighting the pane's own
-                                    // scrolling, the same way the pinch handler above wins.
-                                    val down = awaitFirstDown(
-                                        requireUnconsumed = false,
-                                        pass = PointerEventPass.Initial,
-                                    )
-                                    if (BuildConfig.DEBUG) {
-                                        Log.d(TAG, "down id=${down.id} viewportH=${size.height}")
-                                    }
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                                        if (event.changes.count { it.pressed } >= 2) {
-                                            pager.cancel()
-                                            break // pinch owns it
-                                        }
-                                        val change =
-                                            event.changes.firstOrNull { it.id == down.id && it.pressed } ?: break
-                                        val delta = change.positionChangeIgnoreConsumed()
-                                        if (pager.onMove(delta.x, delta.y)) change.consume()
-                                    }
-                                }
-                            },
                     ) {
                         // RenderGridView insets its content by 8.dp on every side; subtract
                         // it so the measured fit matches the real text area (no clipped edge).
@@ -532,12 +428,22 @@ fun TerminalScreen(
                         val fitFontSp = fitFontSizeSp(wPx, gridCols, advancePerSp, MIN_FONT_SP, FIT_MAX_SP)
                         val fontSizeSp = (fitFontSp * userZoom).coerceIn(MIN_FONT_SP, MAX_FONT_SP)
 
+                        val paneOverscrollPager = rememberPaneOverscrollPager(
+                            grid = grid,
+                            wheelScrolls = wheelScrolls,
+                            viewportHeightPx = hPx,
+                            onSend = vm::sendText,
+                        )
+
                         RenderGridView(
                             grid = grid,
                             styles = styles,
                             fontSizeSp = fontSizeSp,
                             wrap = wrap,
-                            modifier = Modifier.fillMaxSize().padding(8.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp)
+                                .nestedScroll(paneOverscrollPager),
                         )
 
                         // The real capture point for the keyboard: fully transparent and
@@ -619,6 +525,103 @@ fun TerminalScreen(
             },
             onDismiss = { pendingPaste = null },
         )
+    }
+}
+
+/**
+ * Hands the pane whatever vertical drag the local render buffer could not
+ * absorb, as page keys (or wheel notches; see [wheelScrolls]).
+ *
+ * A handoff, NOT an interception. The grid's own verticalScroll gets first
+ * refusal on every gesture and only its overscroll -- `available` in
+ * [NestedScrollConnection.onPostScroll] -- reaches the pager, so panning the
+ * visible grid always works and paging the pane begins where panning runs out.
+ * An earlier version claimed the whole drag on the Initial pass whenever
+ * [DecodedGrid.mayPageOnOverscroll] was true, which made every alt-screen pane
+ * unpannable -- 79 rows against a phone viewport, so the top half was simply
+ * unreachable -- and sent page keys to panes that pay no attention to them, an
+ * idle shell stranded on the alternate screen among them (cmux-app-4yi).
+ *
+ * Nested scroll is what makes this expressible at all: Compose's pointer
+ * consumption is all-or-nothing, so a descendant scroll that consumed a drag
+ * looks identical to one that hit its edge. Only the nested-scroll cycle
+ * reports how much was actually used.
+ *
+ * The keys are PgUp/PgDn, NOT synthetic wheel events. Verified twice: opencode
+ * prints SGR/X10 sequences as literal text (d3da2ba), and a Claude pane
+ * advertising mouse tracking WITH SGR (1000+1002+1003+1006, on the alternate
+ * screen) silently swallows `ESC[<64;col;rowM` -- the pane stopped scrolling
+ * entirely until this was put back. Whatever makes that pane scroll under a
+ * desktop trackpad, it is not a wheel report arriving on stdin (cmux-app-vcx).
+ */
+@Composable
+internal fun rememberPaneOverscrollPager(
+    grid: DecodedGrid,
+    wheelScrolls: Boolean,
+    viewportHeightPx: Float,
+    onSend: (String) -> Unit,
+): NestedScrollConnection {
+    // Two ways to move a pane, and the pane plus a preference decide which.
+    //
+    // Wheel notches move it a fraction of a row, so it tracks the finger. Their
+    // cost is round trips: a half-screen is roughly sixty notches against a
+    // ~150ms-per-RPC bridge, so this is smooth-but-slow, and throttled so a
+    // flick cannot build a blob the pane would collapse (WHEEL_NOTCH_INTERVAL_MS).
+    //
+    // PgUp/PgDn covers that distance in one keystroke, but its quantum is fixed
+    // at half a screen (35 of 79 rows on a live Claude pane). Soft-wrapped, 35
+    // rows are taller than the viewport, so 1:1 is unreachable and a step only
+    // decides how much overscroll buys one jump -- sized to one comfortable
+    // swipe. Half the viewport was longer than a thumb reaches, so no step ever
+    // fired (cmux-app-sgy).
+    val wheeling = wheelScrolls && grid.scrollsByWheel
+    val notchTravelPx = with(LocalDensity.current) { WHEEL_NOTCH_TRAVEL.toPx() }
+    val hoverColumn = grid.columns / 2 + 1
+    val hoverRow = grid.rows / 2 + 1
+    val pager = remember(grid.mayPageOnOverscroll, wheeling, viewportHeightPx, hoverColumn, hoverRow) {
+        if (!grid.mayPageOnOverscroll) return@remember null
+        val stepPx = (if (wheeling) notchTravelPx else viewportHeightPx / 4f).coerceAtLeast(1f)
+        SwipePager(
+            pageStepPx = stepPx,
+            // Nothing moves until the first step fires, and it then costs two
+            // `cmux rpc` subprocess spawns (~300ms) to become visible, so a
+            // quarter-screen of overscroll before any feedback read as lag.
+            // Half that to open with; the steadier spacing resumes after.
+            firstStepPx = (if (wheeling) stepPx else stepPx / 2f).coerceAtLeast(1f),
+            minStepIntervalMs = if (wheeling) WHEEL_NOTCH_INTERVAL_MS else 0L,
+            onStep = { up ->
+                if (BuildConfig.DEBUG) Log.d(TAG, "step up=$up wheel=$wheeling")
+                // Sent as text so the Ctrl chip's arming is not involved.
+                onSend(
+                    if (wheeling) wheelNotch(up, hoverColumn, hoverRow) else if (up) "$ESC[5~" else "$ESC[6~",
+                )
+            },
+        )
+    }
+    return remember(pager) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                // UserInput only: a fling's leftover would page the pane long
+                // after the finger is gone, and a programmatic stick-to-bottom
+                // scroll is not a scroll the user asked to continue.
+                if (pager != null && source == NestedScrollSource.UserInput) {
+                    pager.onOverscroll(available.x, available.y)
+                }
+                // Nothing consumed, so the overscroll stretch still shows the
+                // grid has run out -- the only feedback available during the
+                // round trip the pane's own jump costs.
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                pager?.reset()
+                return Velocity.Zero
+            }
+        }
     }
 }
 
