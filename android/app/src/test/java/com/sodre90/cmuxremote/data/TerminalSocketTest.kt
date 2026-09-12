@@ -6,6 +6,7 @@ import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
 import com.sodre90.cmuxremote.data.e2e.DIR_DEVICE_TO_AGENT
 import com.sodre90.cmuxremote.data.e2e.PAYLOAD_DEFLATE
+import com.sodre90.cmuxremote.data.e2e.PAYLOAD_DEFLATE_STREAM
 import com.sodre90.cmuxremote.data.e2e.PAYLOAD_IDENTITY
 import com.sodre90.cmuxremote.data.e2e.PairedSession
 import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
@@ -37,6 +38,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -273,7 +275,10 @@ class TerminalSocketTest {
      * Serves an unreadable frame followed by a good one. Returns what ended the
      * flow (null if it was still running) and the frame that got through, if any.
      */
-    private fun badThenGoodFrame(deltaConfirmed: Boolean): Pair<Throwable?, TerminalDown?> = runBlocking {
+    private fun badThenGoodFrame(
+        deltaConfirmed: Boolean,
+        streamConfirmed: Boolean = false,
+    ): Pair<Throwable?, TerminalDown?> = runBlocking {
         val serverSession = SharedSecretSession(secret)
         val good = """{"type":"output","columns":3,"rows":1,""" +
             """"grid":{"columns":3,"rows":1,"row_spans":[{"row":0,"column":0,"text":"ok"}]}}"""
@@ -292,6 +297,7 @@ class TerminalSocketTest {
             }
         })
         if (deltaConfirmed) upgrade.setHeader(DELTA_HEADER, "1")
+        if (streamConfirmed) upgrade.setHeader(STREAM_HEADER, "1")
         server.enqueue(upgrade)
 
         val ts = TerminalSocket(
@@ -361,5 +367,117 @@ class TerminalSocketTest {
         val (frame, _) = frameThroughBridge(deflate = false, confirmHeader = true)
         assertEquals("replay", frame.type)
         assertEquals("hi ", RenderGridDecoder.decode(frame.grid!!).lines[0].text)
+    }
+
+    @Test
+    fun asksTheBridgeForASharedCompressionWindow() {
+        val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
+        assertTrue("want stream=1 on the terminal URL, got $path", path.contains("stream=1"))
+    }
+
+    /**
+     * Serves two frames down one shared window, the second compressed against
+     * the first. Returns both as the app decoded them.
+     *
+     * The second frame is what this is for: it is unreadable on its own, so it
+     * only arrives if the socket kept one decoder alive across frames instead of
+     * building a fresh one per message.
+     */
+    private fun twoFramesThroughOneWindow(confirmStream: Boolean): List<TerminalDown> = runBlocking {
+        val serverSession = SharedSecretSession(secret)
+        val bodies = listOf("replay", "output").map { type ->
+            """{"type":"$type","columns":3,"rows":1,""" +
+                """"grid":{"columns":3,"rows":1,"row_spans":[{"row":0,"column":0,"text":"hi"}]}}"""
+        }
+        val upgrade = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                val deflater = Deflater(Deflater.DEFAULT_COMPRESSION, true)
+                for (body in bodies) {
+                    val payload = byteArrayOf(PAYLOAD_DEFLATE_STREAM) +
+                        deflater.syncFlush(body.toByteArray(Charsets.UTF_8))
+                    val n = serverSession.nextSendCounter()
+                    val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, n), payload)
+                    val frame = ByteArray(8 + ct.size)
+                    ByteBuffer.wrap(frame, 0, 8).putLong(n)
+                    ct.copyInto(frame, 8)
+                    webSocket.send(frame.toByteString())
+                }
+                deflater.end()
+            }
+        })
+        // Deflate is always confirmed, so the unconfirmed case is the one that
+        // actually matters: a bridge that compresses per frame but not against a
+        // window. Its decoder must reject the stream tag rather than guess.
+        upgrade.setHeader(DEFLATE_HEADER, "1")
+        if (confirmStream) upgrade.setHeader(STREAM_HEADER, "1")
+        server.enqueue(upgrade)
+
+        val ts = TerminalSocket(
+            OkHttpClient(),
+            server.url("/").toString(),
+            "surface-1",
+            SharedSecretSession(secret),
+            cipher,
+        )
+        val got = mutableListOf<TerminalDown>()
+        val both = CompletableDeferred<Unit>()
+        val job = launch(Dispatchers.IO) {
+            runCatching {
+                ts.connect().collect {
+                    got += it
+                    if (got.size == bodies.size) both.complete(Unit)
+                }
+            }
+        }
+        withTimeoutOrNull(3_000) { both.await() }
+        job.cancelAndJoin()
+        got
+    }
+
+    /** Compresses [body] as one chunk of an ongoing stream, ending it on a sync
+     *  flush so the window survives -- what the Go side's StreamEncoder does. */
+    private fun Deflater.syncFlush(body: ByteArray): ByteArray {
+        setInput(body)
+        val out = ByteArrayOutputStream(body.size + 64)
+        val chunk = ByteArray(4096)
+        do {
+            val n = deflate(chunk, 0, chunk.size, Deflater.SYNC_FLUSH)
+            out.write(chunk, 0, n)
+        } while (n == chunk.size)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun readsFramesCompressedAgainstEarlierOnesOnceTheBridgeConfirms() {
+        val frames = twoFramesThroughOneWindow(confirmStream = true)
+        assertEquals(listOf("replay", "output"), frames.map { it.type })
+        assertEquals("hi ", RenderGridDecoder.decode(frames[1].grid!!).lines[0].text)
+    }
+
+    /**
+     * The regression the third handshake exists for. A bridge that confirmed
+     * only deflate must never be fed to the streaming decoder, and vice versa --
+     * without the confirmation an app cannot tell a standalone frame from a
+     * chunk of a stream, and reads every one of them wrong.
+     */
+    @Test
+    fun doesNotTreatFramesAsAStreamWithoutTheConfirmingHeader() {
+        assertTrue(
+            "an unconfirmed socket must not decode stream chunks",
+            twoFramesThroughOneWindow(confirmStream = false).isEmpty(),
+        )
+    }
+
+    /**
+     * A streamed socket has to resync on a bad frame for the same reason a delta
+     * one does: every later chunk is compressed against the one that failed, so
+     * skipping it leaves the decoder permanently behind. Asserted with deltas
+     * off, so only the stream can be what ends the flow.
+     */
+    @Test
+    fun anUnreadableFrameEndsAStreamedSocketEvenWithoutDeltas() {
+        val (endedWith, frame) = badThenGoodFrame(deltaConfirmed = false, streamConfirmed = true)
+        assertTrue("want DesyncException so the reconnector resyncs", endedWith is DesyncException)
+        assertNull("no frame may be delivered after the desync", frame)
     }
 }

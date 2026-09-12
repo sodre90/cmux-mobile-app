@@ -2,12 +2,16 @@ package server
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -506,4 +510,157 @@ func TestTheDeltaEncoderPassesAnUndecodableGridThrough(t *testing.T) {
 	if !bytes.Equal(got, bad) || omitted != nil {
 		t.Fatalf("an undecodable grid must pass through whole, got %s / %v", got, omitted)
 	}
+}
+
+// terminalStream decodes a socket's frames the way the app does: one decoder
+// fed every chunk in arrival order. Re-inflating from the start each time is
+// test-only laziness; the app keeps a single Inflater primed instead.
+type terminalStream struct {
+	raw  []byte
+	seen int
+}
+
+func (s *terminalStream) decode(t *testing.T, payload []byte) wire.TerminalDown {
+	t.Helper()
+	if len(payload) < 1 || payload[0] != wire.PayloadDeflateStream {
+		t.Fatalf("want a stream-tagged payload, got tag %v", payload)
+	}
+	s.raw = append(s.raw, payload[1:]...)
+	r := flate.NewReader(bytes.NewReader(s.raw))
+	defer func() { _ = r.Close() }()
+	all, err := io.ReadAll(r)
+	// Every chunk ends on a sync flush rather than a final block, so running
+	// out of input is the normal end of one.
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("inflate: %v", err)
+	}
+	var down wire.TerminalDown
+	if err := json.Unmarshal(all[s.seen:], &down); err != nil {
+		t.Fatalf("unmarshal streamed frame: %v", err)
+	}
+	s.seen = len(all)
+	return down
+}
+
+// readSealed returns the codec-tagged payload without decoding it, for tests
+// that need to see the tag and drive their own decoder.
+func readSealed(t *testing.T, c *websocket.Conn, secret []byte, counter uint64) []byte {
+	t.Helper()
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, raw, err := c.ReadMessage()
+	if err != nil {
+		t.Fatalf("read frame %d: %v", counter, err)
+	}
+	n, plain, err := e2e.DecodeFrame(secret, e2e.DirAgentToDevice, raw)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if n != counter {
+		t.Fatalf("want frame counter %d, got %d", counter, n)
+	}
+	return plain
+}
+
+func TestTerminalCompressesAgainstOneWindowWhenTheClientAsks(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeStickyScrollbackScript)
+
+	c, resp := dialTerminal(t, srv.URL, "/terminal/SURF1?deflate=1&stream=1", "relay-secret", deviceID)
+	defer c.Close()
+	if got := resp.Header.Get(streamHeader); got != "1" {
+		t.Fatalf("bridge did not confirm the shared window on the 101: %q", got)
+	}
+
+	var dec terminalStream
+	if replay := dec.decode(t, readSealed(t, c, secret, 0)); replay.Type != "replay" {
+		t.Fatalf("want replay first, got %q", replay.Type)
+	}
+	// The frame that matters: it is only readable because the replay before it
+	// primed the same decoder.
+	if out := dec.decode(t, readSealed(t, c, secret, 1)); out.Type != "output" {
+		t.Fatalf("want an output frame, got %q", out.Type)
+	}
+}
+
+// The saving, end to end. A pane whose frames barely differ must cost a
+// fraction of a frame once the window has warmed -- if it does not, the
+// encoder is not surviving between writes.
+func TestASettledPaneCostsAFractionOfAFramePerUpdate(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeStickyScrollbackScript)
+
+	c, _ := dialTerminal(t, srv.URL, "/terminal/SURF1?deflate=1&stream=1", "relay-secret", deviceID)
+	defer c.Close()
+	var dec terminalStream
+	replay := readSealed(t, c, secret, 0)
+	dec.decode(t, replay)
+
+	var settled int
+	for counter := uint64(1); counter <= 4; counter++ {
+		chunk := readSealed(t, c, secret, counter)
+		dec.decode(t, chunk)
+		settled = len(chunk)
+	}
+	if settled*4 > len(replay) {
+		t.Fatalf("a settled frame cost %d B against a %d B replay -- the window is not being reused", settled, len(replay))
+	}
+}
+
+// Streaming has to be asked for on its own. An app that negotiated only
+// per-frame deflate cannot read chunks of a stream, so ?deflate=1 alone must
+// never produce them.
+func TestTheSharedWindowIsNotUsedWithoutItsOwnHandshake(t *testing.T) {
+	for _, query := range []string{"?deflate=1", "?stream=1", ""} {
+		t.Run(query, func(t *testing.T) {
+			srv, deviceID, secret := newEncryptedTerminalServer(t, fakeTerminalScript)
+
+			c, resp := dialTerminal(t, srv.URL, "/terminal/SURF1"+query, "relay-secret", deviceID)
+			defer c.Close()
+			if got := resp.Header.Get(streamHeader); got != "" {
+				t.Fatalf("bridge confirmed a shared window nobody asked for: %q", got)
+			}
+			plain := readSealed(t, c, secret, 0)
+			if query == "?deflate=1" && plain[0] == wire.PayloadDeflateStream {
+				t.Fatal("a deflate-only client was sent a chunk of a stream")
+			}
+		})
+	}
+}
+
+// The invariant the shared window rests on: EVERY frame goes through the
+// stream, including the acks that per-frame deflate deliberately skips. An ack
+// sent standalone would be readable on its own, so nothing would look broken --
+// but it would leave the app's window a frame behind the bridge's, and the next
+// real frame would desync. This exists to make that tempting optimisation fail
+// loudly.
+func TestEvenAnAckStaysOnTheSharedWindow(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeTerminalScript)
+
+	c, _ := dialTerminal(t, srv.URL, "/terminal/SURF1?deflate=1&stream=1", "relay-secret", deviceID)
+	defer c.Close()
+	var dec terminalStream
+	dec.decode(t, readSealed(t, c, secret, 0)) // drain the replay
+
+	upBytes, err := json.Marshal(wire.TerminalUp{Type: "input", Text: "ls\r", Seq: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := e2e.EncodeFrame(secret, e2e.DirDeviceToAgent, 0, upBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+	for counter := uint64(1); counter < 6; counter++ {
+		plain := readSealed(t, c, secret, counter)
+		if plain[0] != wire.PayloadDeflateStream {
+			t.Fatalf("frame %d left the shared window with tag %d", counter, plain[0])
+		}
+		if down := dec.decode(t, plain); down.Type == "ack" {
+			if down.Seq != 7 {
+				t.Fatalf("want ack for seq 7, got %d", down.Seq)
+			}
+			return
+		}
+	}
+	t.Fatal("no ack frame arrived")
 }

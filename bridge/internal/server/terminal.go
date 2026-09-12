@@ -68,6 +68,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// absent field as an EMPTY scrollback and lose its pan-up history.
 	deflate := s.sessions != nil && r.URL.Query().Get("deflate") == "1"
 	delta := r.URL.Query().Get("delta") == "1"
+	// Streaming compression is a third negotiated capability rather than part of
+	// ?deflate=1, because it changes what a frame is: chunks of one stream can
+	// only be read in order and only by a decoder that saw every chunk before
+	// them. An app that asked for deflate alone must keep getting standalone
+	// frames. Built before the upgrade so a failure here simply leaves the
+	// socket on per-frame deflate instead of failing the connection.
+	var stream *wire.StreamEncoder
+	if deflate && r.URL.Query().Get("stream") == "1" {
+		var err error
+		if stream, err = wire.NewStreamEncoder(); err != nil {
+			slog.Warn("terminal: streaming compression unavailable, falling back to per-frame", "surface_id", id, "err", err)
+			stream = nil
+		}
+	}
 	// Unlike deflate and delta this needs no confirming header: the client
 	// decodes frames the same way whatever the interval, so there is nothing
 	// for it to arm or leave disarmed. An old bridge simply ignores it.
@@ -79,13 +93,20 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	if delta {
 		upgradeHeader.Set(deltaHeader, "1")
 	}
+	if stream != nil {
+		upgradeHeader.Set(streamHeader, "1")
+	}
 	c, err := upgrader.Upgrade(w, r, upgradeHeader)
 	if err != nil {
 		return
 	}
 	defer func() { _ = c.Close() }()
 	start := time.Now()
-	slog.Info("terminal: connected", "surface_id", id, "device", deviceLogID(deviceID))
+	// The negotiated capabilities decide what an open pane costs, so they are
+	// worth having in the log: a socket that is quietly falling back to whole
+	// uncompressed frames looks identical to a cheap one from the outside.
+	slog.Info("terminal: connected", "surface_id", id, "device", deviceLogID(deviceID),
+		"deflate", deflate, "delta", delta, "shared_window", stream != nil, "poll", pollInterval)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	if deviceID != "" {
@@ -96,12 +117,17 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// poll loop below and terminalReadLoop's ack writes both write to c, so
 	// every write goes through this mutex-guarded helper instead of calling
 	// writeTerminalFrame directly.
+	//
+	// The lock has to cover compression as well as the write, not just the
+	// write: a stream encoder's chunks must reach the wire in the order it
+	// produced them, since each one is only readable after the one before it.
+	// Keep encode and send inside the same critical section.
 	var writeMu sync.Mutex
 	write := func(fr wire.TerminalDown) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		return s.writeTerminalFrame(c, deviceID, fr, deflate)
+		return s.writeTerminalFrame(c, deviceID, fr, deflate, stream)
 	}
 
 	// Initial full replay.
@@ -413,6 +439,11 @@ const deflateHeader = "X-Cmux-Deflate"
 // TerminalSocket's DELTA_HEADER.
 const deltaHeader = "X-Cmux-Delta"
 
+// streamHeader confirms ?stream=1, the request to compress the socket's frames
+// against one shared window instead of each on its own. Mirrored in the app as
+// TerminalSocket's STREAM_HEADER.
+const streamHeader = "X-Cmux-Deflate-Stream"
+
 // The bounds a client's ?poll_ms= request is held to. The floor is the old
 // fixed rate: a client may spend more of its data allowance than the default
 // but not less of the Mac's, since every tick is a cmux replay. The ceiling is
@@ -441,8 +472,15 @@ func terminalPollInterval(raw string, fallback time.Duration) time.Duration {
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
 // When deflate is set, the sealed payload carries a wire codec tag and is
-// compressed where that helps -- see wire.EncodePayload.
-func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.TerminalDown, deflate bool) error {
+// compressed where that helps -- see wire.EncodePayload. A non-nil stream
+// compresses against the socket's shared window instead, which is far smaller
+// but requires the caller to serialize encoding with sending.
+//
+// A stream that fails mid-socket falls back to a standalone frame. That frame
+// arrives, but it leaves the app's decoder short of everything the encoder
+// still believes it has, so the app will fail the next chunk and resync -- one
+// visible reconnect rather than a silently wrong pane.
+func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.TerminalDown, deflate bool, stream *wire.StreamEncoder) error {
 	if s.sessions == nil {
 		return c.WriteJSON(fr)
 	}
@@ -450,7 +488,16 @@ func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.
 	if err != nil {
 		return err
 	}
-	if deflate {
+	switch {
+	case stream != nil:
+		chunk, err := stream.Encode(raw)
+		if err != nil {
+			slog.Warn("terminal: stream compression failed, sending the frame standalone", "err", err)
+			raw = wire.EncodePayload(raw)
+		} else {
+			raw = chunk
+		}
+	case deflate:
 		raw = wire.EncodePayload(raw)
 	}
 	frame, err := s.sessions.EncryptFrame(deviceID, raw)

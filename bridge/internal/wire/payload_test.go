@@ -2,7 +2,10 @@ package wire
 
 import (
 	"bytes"
+	"compress/flate"
 	"encoding/hex"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -93,5 +96,171 @@ func TestTheCrossLanguageFixtureIsUnchanged(t *testing.T) {
 	back, err := DecodePayload(encoded)
 	if err != nil || string(back) != fixturePlaintext {
 		t.Fatalf("fixture does not round trip: %v", err)
+	}
+}
+
+// inflateStream decodes a sync-flushed DEFLATE stream by re-inflating
+// everything seen so far and returning the part that is new. O(n^2) and
+// test-only: the app is the real decoder, and it keeps one Inflater fed
+// incrementally instead.
+type inflateStream struct {
+	raw  []byte
+	seen int
+}
+
+func (s *inflateStream) decode(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	if len(payload) < 1 || payload[0] != PayloadDeflateStream {
+		t.Fatalf("want a stream-tagged payload, got %v", payload)
+	}
+	s.raw = append(s.raw, payload[1:]...)
+	r := flate.NewReader(bytes.NewReader(s.raw))
+	defer func() { _ = r.Close() }()
+	all, err := io.ReadAll(r)
+	// A stream cut at a sync flush has no final block, so the reader runs out
+	// of input mid-stream. That is the ordinary end of a chunk, not a fault.
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("inflate: %v", err)
+	}
+	out := all[s.seen:]
+	s.seen = len(all)
+	return out
+}
+
+func TestAStreamedFrameDecodesThroughTheStreamThatEncodedIt(t *testing.T) {
+	e, err := NewStreamEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := [][]byte{
+		[]byte(`{"type":"replay","grid":{"row_spans":[{"row":0,"text":"hello"}]}}`),
+		[]byte(`{"type":"output","grid":{"row_spans":[{"row":0,"text":"hello"}]}}`),
+		[]byte(`{"type":"output","grid":{"row_spans":[{"row":0,"text":"world"}]}}`),
+	}
+	var dec inflateStream
+	for i, want := range frames {
+		chunk, err := e.Encode(want)
+		if err != nil {
+			t.Fatalf("frame %d: %v", i, err)
+		}
+		if got := dec.decode(t, chunk); !bytes.Equal(got, want) {
+			t.Fatalf("frame %d round-tripped to %q, want %q", i, got, want)
+		}
+	}
+}
+
+// The sentinel that says Flush ran rather than Close: a sync flush ends the
+// chunk with an empty stored block. If this ever fails, the window is being
+// thrown away every frame and the whole saving with it.
+func TestEveryStreamedChunkEndsOnASyncFlushMarker(t *testing.T) {
+	e, err := NewStreamEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		chunk, err := e.Encode([]byte(`{"type":"output","seq":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasSuffix(chunk, []byte{0x00, 0x00, 0xff, 0xff}) {
+			t.Fatalf("chunk %d does not end on a sync-flush marker: %x", i, chunk)
+		}
+	}
+}
+
+// The point of the whole exercise. A repeated frame must cost a fraction of
+// what it cost the first time -- if the second chunk is the same size as the
+// first, the encoder is being reset per frame and this is just EncodePayload
+// with a different tag.
+func TestARepeatedFrameCostsAlmostNothingOnAWarmStream(t *testing.T) {
+	e, err := NewStreamEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := []byte(`{"type":"output","grid":{"row_spans":[` +
+		`{"row":0,"text":"the quick brown fox jumps over the lazy dog"},` +
+		`{"row":1,"text":"the quick brown fox jumps over the lazy dog"}]}}`)
+	first, err := e.Encode(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last []byte
+	for range 3 {
+		if last, err = e.Encode(frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(last)*4 > len(first) {
+		t.Fatalf("a warm stream saved almost nothing: first %d B, repeat %d B", len(first), len(last))
+	}
+	alone := EncodePayload(frame)
+	if len(last) >= len(alone) {
+		t.Fatalf("streaming (%d B) beat nothing over per-frame deflate (%d B)", len(last), len(alone))
+	}
+}
+
+// A decoder that missed the frames before it cannot read the one it has. This
+// is the property that forces the app to close and resync rather than skip,
+// and it is also what stops the fixture below from passing on an encoder that
+// secretly restarts every frame.
+func TestAStreamedChunkIsUnreadableWithoutTheFramesBeforeIt(t *testing.T) {
+	e, err := NewStreamEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := []byte(`{"type":"replay","grid":{"row_spans":[{"row":0,"text":"hello"}]}}`)
+	second := []byte(`{"type":"output","grid":{"row_spans":[{"row":0,"text":"hello"}]}}`)
+	if _, err := e.Encode(first); err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := e.Encode(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := flate.NewReader(bytes.NewReader(chunk[1:]))
+	defer func() { _ = r.Close() }()
+	out, err := io.ReadAll(r)
+	if err == nil && bytes.Equal(out, second) {
+		t.Fatal("a fresh decoder read the second frame, so the window is not shared")
+	}
+}
+
+// The streaming counterpart of [TestTheCrossLanguageFixtureIsUnchanged], and a
+// sharper test than it: these two chunks come from one encoder, so the app can
+// only read the second by having kept its decoder primed with the first. A
+// Kotlin decoder that quietly restarts per frame passes the single-frame
+// fixture above and fails this one.
+//
+// Mirrored in the app's PayloadCodecTest.kt -- regenerate both halves together
+// from what this prints if the codec ever changes.
+func TestTheCrossLanguageStreamFixtureIsUnchanged(t *testing.T) {
+	const (
+		firstPlaintext  = `{"type":"replay","grid":{"columns":4,"rows":1,"row_spans":[{"row":0,"text":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}`
+		secondPlaintext = `{"type":"output","grid":{"columns":4,"rows":1,"row_spans":[{"row":0,"text":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}`
+	)
+	e, err := NewStreamEncoder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.Encode([]byte(firstPlaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.Encode([]byte(secondPlaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Generated by this function. The second chunk is a quarter the size of the
+	// first for the same shape of frame, which is the whole point.
+	const (
+		wantFirst = "028488510a802014c0eeb26f3f0afa7a5789082989c052d42811ef1e7681f6b5ad9" +
+			"0b23708c178ab338a2dec2b52589cbd8e33228322b83b22fd2773f4baedb1b4423a4" +
+			"5324f42d03f50a75a5f000000ffff"
+		wantSecond = "02825b985f5a52505a427b0b01000000ffff"
+	)
+	gotFirst, gotSecond := hex.EncodeToString(first), hex.EncodeToString(second)
+	if gotFirst != wantFirst || gotSecond != wantSecond {
+		t.Fatalf("stream codec output changed; regenerate both fixtures from:\nfirst:  %s\nsecond: %s", gotFirst, gotSecond)
 	}
 }

@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.data
 
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.StreamPayloadDecoder
 import com.sodre90.cmuxremote.data.e2e.decodePayload
 import com.sodre90.cmuxremote.data.e2e.decryptFrame
 import com.sodre90.cmuxremote.data.e2e.encryptFrame
@@ -60,6 +61,18 @@ internal const val DEFLATE_HEADER = "X-Cmux-Deflate"
 internal const val DELTA_HEADER = "X-Cmux-Delta"
 
 /**
+ * The bridge's confirmation that it will compress the socket's frames against
+ * one shared window rather than each on its own. Mirrors `streamHeader` in
+ * bridge/internal/server/terminal.go.
+ *
+ * Asked for alongside `?deflate=1` but negotiated separately, because it is a
+ * strictly stronger promise: a bridge that only confirmed deflate sends frames
+ * this side can still read one at a time, while a chunk of a stream is readable
+ * only in order and only by the decoder that saw every chunk before it.
+ */
+internal const val STREAM_HEADER = "X-Cmux-Deflate-Stream"
+
+/**
  * A frame arrived but could not be turned into a [TerminalDown].
  *
  * Ends the flow instead of skipping the frame. While every frame was
@@ -85,7 +98,8 @@ class TerminalSocket(
     // frames decode identically whatever the interval, so there is nothing for
     // this side to arm. A bridge too old to know the parameter ignores it and
     // keeps its own rate.
-    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1&delta=1&poll_ms=$pollMs"
+    private val url =
+        "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1&delta=1&stream=1&poll_ms=$pollMs"
 
     @Volatile
     private var socket: WebSocket? = null
@@ -98,22 +112,37 @@ class TerminalSocket(
     @Volatile
     private var delta = false
 
+    @Volatile
+    private var streamed = false
+
     /** [onOpen] fires on the WebSocket upgrade, before any frame -- see
      *  [EventsSocket.connect] for why that can't come through the flow. */
     fun connect(onOpen: () -> Unit = {}): Flow<TerminalDown> = callbackFlow {
         val request = Request.Builder().url(url).build()
+        // One decoder for this socket's whole life. It holds the window every
+        // frame after the first is compressed against, so it belongs to the
+        // connection, not to a frame -- and it is released in awaitClose rather
+        // than after each one.
+        val stream = StreamPayloadDecoder()
         val ws = http.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     deflated = response.header(DEFLATE_HEADER) == "1"
                     delta = response.header(DELTA_HEADER) == "1"
+                    streamed = response.header(STREAM_HEADER) == "1"
                     onOpen()
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
-                        .mapCatching { if (deflated) decodePayload(it) else it }
+                        .mapCatching {
+                            when {
+                                streamed -> stream.decode(it)
+                                deflated -> decodePayload(it)
+                                else -> it
+                            }
+                        }
                         .mapCatching {
                             BridgeJson.decodeFromString(
                                 TerminalDown.serializer(),
@@ -127,11 +156,15 @@ class TerminalSocket(
                         // and resync from a full replay instead. Decrypt
                         // failures come through here too -- they are a desync
                         // by any other name, and the reconnect is the same
-                        // remedy. Off a delta stream the old behaviour stands,
-                        // because each frame still stands alone.
+                        // remedy. A shared compression window makes the same
+                        // demand for the same reason -- a chunk this socket
+                        // never decoded leaves every later chunk unreadable --
+                        // so it forces a reconnect too. Off both, the old
+                        // behaviour stands, because each frame still stands
+                        // alone.
                         .onFailure {
                             android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}")
-                            if (delta) close(DesyncException(it))
+                            if (delta || streamed) close(DesyncException(it))
                         }
                 }
 
@@ -153,6 +186,7 @@ class TerminalSocket(
         socket = ws
         awaitClose {
             ws.cancel()
+            stream.close()
             if (socket === ws) socket = null
         }
     }

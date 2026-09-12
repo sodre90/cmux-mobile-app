@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.data.e2e
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.zip.Deflater
@@ -65,6 +66,83 @@ class PayloadCodecTest {
         }
         assertThrows(PayloadCodecException::class.java) {
             decodePayload(byteArrayOf(PAYLOAD_DEFLATE) + bomb)
+        }
+    }
+
+    /**
+     * Two chunks of one stream, copied from the Go side's
+     * TestTheCrossLanguageStreamFixtureIsUnchanged. The second is a quarter the
+     * size of the first for a near-identical frame -- that is the saving, and it
+     * is only readable because the first primed the same decoder.
+     */
+    private val goStreamFixture = listOf(
+        "028488510a802014c0eeb26f3f0afa7a5789082989c052d42811ef1e7681f6b5ad9" +
+            "0b23708c178ab338a2dec2b52589cbd8e33228322b83b22fd2773f4baedb1b4423a4" +
+            "5324f42d03f50a75a5f000000ffff",
+        "02825b985f5a52505a427b0b01000000ffff",
+    ).map { it.hexToByteArray() }
+
+    private val goStreamPlaintext = listOf("replay", "output").map { type ->
+        """{"type":"$type","grid":{"columns":4,"rows":1,"row_spans":""" +
+            """[{"row":0,"text":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}}"""
+    }
+
+    @Test
+    fun inflatesAStreamProducedByTheGoBridge() {
+        StreamPayloadDecoder().use { decoder ->
+            goStreamFixture.forEachIndexed { i, chunk ->
+                assertEquals(PAYLOAD_DEFLATE_STREAM, chunk[0])
+                assertEquals(goStreamPlaintext[i], String(decoder.decode(chunk), Charsets.UTF_8))
+            }
+        }
+    }
+
+    /**
+     * The half that keeps the test above honest. If this decoder secretly
+     * restarted its window per frame, it would still pass that test on a Go
+     * encoder that did the same -- both sides wrong, in step. A decoder that
+     * never saw chunk one must not be able to read chunk two.
+     */
+    @Test
+    fun cannotReadAChunkWithoutTheOneBeforeIt() {
+        StreamPayloadDecoder().use { decoder ->
+            val read = runCatching { String(decoder.decode(goStreamFixture[1]), Charsets.UTF_8) }
+            assertNotEquals(
+                "a fresh decoder read a chunk of a warmed stream",
+                goStreamPlaintext[1],
+                read.getOrNull(),
+            )
+        }
+    }
+
+    /** The bridge streams every frame including acks, so a standalone one means
+     *  its stream encode failed. The frame must still get through; the desync it
+     *  leaves behind is the next chunk's problem. */
+    @Test
+    fun acceptsAStandaloneFrameOnAStreamingSocket() {
+        val json = """{"type":"ack","seq":7,"ok":true}""".toByteArray(Charsets.UTF_8)
+        StreamPayloadDecoder().use { decoder ->
+            assertArrayEquals(json, decoder.decode(byteArrayOf(PAYLOAD_IDENTITY) + json))
+        }
+    }
+
+    @Test
+    fun refusesAnUnknownCodecTagOnAStream() {
+        StreamPayloadDecoder().use { decoder ->
+            assertThrows(PayloadCodecException::class.java) {
+                decoder.decode(byteArrayOf(9, 'x'.code.toByte()))
+            }
+        }
+    }
+
+    /** Garbage must surface as a thrown desync, not a hung reader thread. */
+    @Test
+    fun refusesAChunkThatIsNotPartOfTheStream() {
+        StreamPayloadDecoder().use { decoder ->
+            decoder.decode(goStreamFixture[0])
+            assertThrows(PayloadCodecException::class.java) {
+                decoder.decode(byteArrayOf(PAYLOAD_DEFLATE_STREAM) + ByteArray(64) { 0xFF.toByte() })
+            }
         }
     }
 

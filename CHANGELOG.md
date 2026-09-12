@@ -12,6 +12,37 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+### Changed
+
+- Terminal frames are now compressed against every frame sent before them on
+  the same socket, rather than each one from scratch. Consecutive frames from a
+  pane are nearly identical, and a compressor restarted per frame cannot see
+  that at all; one kept open for the life of the socket can.
+
+  How much it saves depends entirely on frame size, because DEFLATE's sliding
+  window is 32KB. A frame smaller than that is compressed against its
+  predecessor and costs a fraction of what it did: measured 607 bytes down to
+  61, and 5-6x on synthetic frames up to ~14KB. A frame LARGER than the window
+  gets nothing -- by the time the encoder reaches the end of a 140KB frame, the
+  matching bytes of the previous one have already fallen out of the window, and
+  the result is within 2% of compressing each frame on its own. Measured live
+  on a busy pane sending 200KB frames: 6.1x, the same as before.
+
+  So this helps settled and small panes and does nothing for large ones. The
+  large-frame case is dominated by scrollback being re-sent in full whenever it
+  changes, which is a delta problem rather than a compression one.
+
+  Negotiated separately from the existing per-frame compression (`?stream=1`,
+  confirmed with `X-Cmux-Deflate-Stream`), so every combination of app and
+  bridge version keeps working: an older bridge ignores the request and an
+  older app never makes it.
+
+  The trade-off is that frames no longer stand alone. A frame that arrives
+  corrupt or not at all leaves the app unable to read anything after it, so it
+  now closes the socket and resyncs from a fresh replay instead of skipping the
+  frame -- the same bargain delta frames already made, and visible as a
+  reconnect rather than as a wrong pane.
+
 ## [0.6.0] - 2026-09-12
 
 Terminal streaming used to cost a measured 146 KB/s on a busy pane and roughly

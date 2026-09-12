@@ -30,6 +30,24 @@ const (
 	// with no zlib or gzip wrapper. The app inflates it with Inflater(nowrap
 	// = true) to match.
 	PayloadDeflate byte = 1
+
+	// PayloadDeflateStream marks one frame's worth of a DEFLATE stream that
+	// stays open for the life of a socket, so each frame is compressed against
+	// everything already sent on it rather than from scratch.
+	//
+	// Consecutive terminal frames are nearly identical, and that repetition is
+	// invisible to a compressor restarted every frame. Measured over twelve
+	// live frames: 607 bytes each compressed alone, 61 bytes each once the
+	// window had warmed -- the first output frame after a replay still costs
+	// ~400 bytes, because the only thing behind it is a frame of a different
+	// shape.
+	//
+	// The cost is that frames stop standing alone. A frame that never arrives,
+	// or arrives and will not decode, leaves the decompressor unable to read
+	// anything after it, so the app closes the socket and resyncs from a fresh
+	// replay instead of skipping the frame (see TerminalSocket's
+	// DesyncException). That is the same bargain delta frames already made.
+	PayloadDeflateStream byte = 2
 )
 
 // maxPayloadSize bounds Decode's output. Frames are authenticated, so an
@@ -104,4 +122,53 @@ func deflate(plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// StreamEncoder compresses a socket's frames against one shared DEFLATE
+// window. Create one per socket; never copy it, since the flate.Writer holds a
+// pointer to the buffer field.
+//
+// Not safe for concurrent use, and it must be called in the same order the
+// frames go out on the wire: the app inflates them through a single decoder,
+// so a chunk that arrives before the one it was compressed against cannot be
+// read. Both of those hold in server/terminal.go because encode, encrypt and
+// write share one mutex-guarded critical section.
+type StreamEncoder struct {
+	buf bytes.Buffer
+	w   *flate.Writer
+}
+
+// NewStreamEncoder returns an encoder whose window starts empty, which is what
+// makes a reconnect a clean resync: the client's decoder starts empty too.
+func NewStreamEncoder() (*StreamEncoder, error) {
+	e := &StreamEncoder{}
+	w, err := flate.NewWriter(&e.buf, deflateLevel)
+	if err != nil {
+		return nil, err
+	}
+	e.w = w
+	return e, nil
+}
+
+// Encode returns plaintext as a tagged chunk of the ongoing stream.
+//
+// Unlike [EncodePayload] there is no identity fallback for frames compression
+// does not shrink. Skipping the stream for one frame would leave the app's
+// decoder a frame behind for every frame after it, so a rare larger ack is
+// accepted as the price of the window staying in step.
+//
+// Flush, not Close: Close would end the stream and throw the window away.
+// Flush ends the chunk with an empty stored block (00 00 FF FF) and keeps
+// everything written so far available to compress the next frame against.
+func (e *StreamEncoder) Encode(plaintext []byte) ([]byte, error) {
+	e.buf.Reset()
+	if _, err := e.w.Write(plaintext); err != nil {
+		return nil, err
+	}
+	if err := e.w.Flush(); err != nil {
+		return nil, err
+	}
+	// Copies, which matters: buf.Bytes() aliases storage that Reset reuses on
+	// the next call.
+	return append([]byte{PayloadDeflateStream}, e.buf.Bytes()...), nil
 }
