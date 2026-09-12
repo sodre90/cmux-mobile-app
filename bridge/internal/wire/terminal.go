@@ -47,10 +47,16 @@ const CloseSurfaceGone = 4404
 
 // TerminalUp is a client->server terminal message. Seq is a client-assigned
 // monotonic id echoed back in the matching "ack" TerminalDown.
+//
+// An "attach" carries an image the bridge writes to disk and pastes the path
+// of into the pane: Image is the file's bytes, base64; Name is the phone's
+// idea of a name, a hint the bridge may log but never uses to form a path.
 type TerminalUp struct {
-	Type    string `json:"type"` // "input" | "paste" | "resize"
+	Type    string `json:"type"` // "input" | "paste" | "resize" | "attach"
 	Text    string `json:"text,omitempty"`
 	Columns int    `json:"columns,omitempty"`
 	Rows    int    `json:"rows,omitempty"`
 	Seq     int64  `json:"seq,omitempty"`
+	Image   string `json:"image,omitempty"`
+	Name    string `json:"name,omitempty"`
 }

@@ -55,6 +55,33 @@ func defaultAgentConfigPath() string {
 	return cli.ConfigPath("cmux-bridge", "agent.toml")
 }
 
+// attachmentSweepInterval is how often landed images past their retention
+// are removed; once at start, then daily.
+const attachmentSweepInterval = 24 * time.Hour
+
+func sweepAttachments(ctx context.Context, store *server.AttachmentStore) {
+	sweep := func() {
+		removed, err := store.Sweep()
+		switch {
+		case err != nil:
+			slog.Warn("agent: attachment sweep failed", "err", err)
+		case removed > 0:
+			slog.Info("agent: attachments swept", "removed", removed)
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(attachmentSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
+}
+
 func loadTLS(certPath, keyPath, caPath string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -460,6 +487,9 @@ func runAgent(args []string) int {
 		return 1
 	}
 	srv.SetYoloStore(yoloStore)
+	attachments := server.NewAttachmentStore(cfg.AttachmentsDir)
+	srv.SetAttachmentStore(attachments)
+	go sweepAttachments(ctx, attachments)
 	warnFCMClientConfig(fcmClientConfig(cfg), cfg.FCMCredentials != "")
 	if cfg.DirectListen != "" && cfg.FCMProjectID != "" && cfg.FCMCredentials != "" {
 		if p, err := push.FromServiceAccount(context.Background(), cfg.FCMProjectID, cfg.FCMCredentials); err != nil {

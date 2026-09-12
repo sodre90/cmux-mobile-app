@@ -52,7 +52,15 @@ type Server struct {
 	// sockets holds live device WebSockets so revocation can reach the ones
 	// that authenticated before it happened (see conntrack.go).
 	sockets *socketTracker
+	// attachments is nil unless SetAttachmentStore is called (runAgent's
+	// production wiring, and the tests that exercise it). Nil means an
+	// "attach" frame is refused with a failed ack and nothing is written.
+	attachments *AttachmentStore
 }
+
+// SetAttachmentStore enables image attachments on the terminal socket. Same
+// post-construction-setter idiom as SetSessions/SetYoloStore.
+func (s *Server) SetAttachmentStore(store *AttachmentStore) { s.attachments = store }
 
 // LastEventAt returns when this agent last processed a frame from its cmux
 // events stream, or the zero time if none has arrived yet.

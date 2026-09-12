@@ -74,6 +74,21 @@ class DtosTest {
         assertFalse(out.contains("columns"))
     }
 
+    /** The attach fields must not change what every existing frame looks
+     *  like on the wire: an input still encodes exactly as it did. */
+    @Test
+    fun anInputFrameIsByteIdenticalToBeforeAttachExisted() {
+        val out = BridgeJson.encodeToString(TerminalUp.serializer(), TerminalUp(type = "input", text = "ls", seq = 3))
+        assertEquals("""{"type":"input","text":"ls","seq":3}""", out)
+    }
+
+    @Test
+    fun encodesAnAttachWithItsImageAndNameHint() {
+        val up = TerminalUp(type = TerminalUpType.ATTACH, seq = 4, image = "iVBORw0KGgo=", name = "IMG_2041")
+        val out = BridgeJson.encodeToString(TerminalUp.serializer(), up)
+        assertEquals("""{"type":"attach","seq":4,"image":"iVBORw0KGgo=","name":"IMG_2041"}""", out)
+    }
+
     @Test
     fun encodesFeedReplyWithRequestIdAndParams() {
         val params = buildJsonObject { put("decision", "approve") }

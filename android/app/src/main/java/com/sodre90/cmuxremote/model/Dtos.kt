@@ -153,10 +153,14 @@ object TerminalDownType {
 }
 
 /**
- * A terminal message sent up from the client: [TerminalUpType.INPUT] or
- * [TerminalUpType.RESIZE]. [seq] is a client-assigned monotonic id (starting
- * at 1; 0 means unset) echoed back in the matching [TerminalDownType.ACK]
- * [TerminalDown].
+ * A terminal message sent up from the client: [TerminalUpType.INPUT],
+ * [TerminalUpType.RESIZE] or [TerminalUpType.ATTACH]. [seq] is a
+ * client-assigned monotonic id (starting at 1; 0 means unset) echoed back in
+ * the matching [TerminalDownType.ACK] [TerminalDown].
+ *
+ * An attach carries [image], the file's bytes in base64, which the bridge
+ * writes to disk and pastes the path of into the pane. [name] is only a hint
+ * for the bridge's log; it never becomes part of the path.
  */
 @Serializable
 data class TerminalUp(
@@ -165,12 +169,15 @@ data class TerminalUp(
     val columns: Int? = null,
     val rows: Int? = null,
     val seq: Long = 0L,
+    val image: String? = null,
+    val name: String? = null,
 )
 
 /** [TerminalUp.type]'s possible values -- what this client ever sends. */
 object TerminalUpType {
     const val INPUT = "input"
     const val RESIZE = "resize"
+    const val ATTACH = "attach"
 }
 
 /** A reply to a pending feed item (permission / question / exit-plan). */

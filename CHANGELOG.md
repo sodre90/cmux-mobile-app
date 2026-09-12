@@ -12,6 +12,18 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+### Added
+
+- The terminal socket accepts an `attach` frame carrying an image. The bridge
+  writes it to `~/.config/cmux-bridge/attachments/` (configurable as
+  `attachments_dir`; private to the user, kept seven days) under a name it
+  chooses from a timestamp and the image's own bytes -- JPEG, PNG, WebP, GIF
+  or HEIC, anything else is refused -- and pastes the path into the pane,
+  which Claude Code turns into an attached image. This is the bridge half of
+  attaching a photo from the phone; the app's attach button follows in the
+  next release. Along the way, a text paste now triggers an immediate replay
+  the way a keystroke already did. (cmux-app-ej0)
+
 ### Changed
 
 - The bridge now gives style ids a stable identity per terminal socket. cmux

@@ -72,6 +72,11 @@ type AgentConfig struct {
 	FCMAppID    string `toml:"fcm_app_id"`
 	FCMAPIKey   string `toml:"fcm_api_key"`
 	FCMSenderID string `toml:"fcm_sender_id"`
+	// AttachmentsDir is where images sent from the phone are written before
+	// their path is pasted into the pane (server.AttachmentStore). Kept
+	// free of spaces so the pasted path needs no quoting. Files older than
+	// seven days are removed.
+	AttachmentsDir string `toml:"attachments_dir"`
 	// LogFile is the path the agent writes its own rotated log to (see
 	// internal/logging.UseRotatingFile). Set it empty to log to stderr
 	// instead and leave the file to whatever supervises the process --
@@ -87,6 +92,7 @@ func agentDefaults() AgentConfig {
 		YoloStore:       "~/.config/cmux-bridge/yolo.db",
 		DirectAuthStore: "~/.config/cmux-bridge/direct-auth.db",
 		StatusFile:      "~/.config/cmux-bridge/status.json",
+		AttachmentsDir:  "~/.config/cmux-bridge/attachments",
 		LogFile:         "~/Library/Logs/cmux-bridge.log",
 	}
 }
@@ -117,6 +123,7 @@ func LoadAgent(path string) (AgentConfig, error) {
 	cfg.DirectAuthStore = expandHome(cfg.DirectAuthStore)
 	cfg.FCMCredentials = expandHome(cfg.FCMCredentials)
 	cfg.StatusFile = expandHome(cfg.StatusFile)
+	cfg.AttachmentsDir = expandHome(cfg.AttachmentsDir)
 	cfg.LogFile = expandHome(cfg.LogFile)
 	return cfg, nil
 }

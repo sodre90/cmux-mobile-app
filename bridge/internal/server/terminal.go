@@ -540,22 +540,29 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 				return
 			}
 		}
+		// The PTY is about to change (keystroke, paste, page scroll): ask the
+		// poll loop for an immediate replay so the user sees the effect now
+		// rather than on the next tick. Non-blocking: a flood of inputs
+		// leaves at most one pending nudge, which is the point.
+		nudgePoll := func() {
+			select {
+			case nudge <- struct{}{}:
+			default:
+			}
+		}
 		var rpcErr error
 		switch up.Type {
 		case "input":
 			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.input",
 				map[string]any{"surface_id": id, "text": up.Text})
-			// The PTY just changed (keystroke or page scroll): ask the poll
-			// loop for an immediate replay so the user sees the effect now
-			// rather than on the next tick. Non-blocking: a flood of inputs
-			// leaves at most one pending nudge, which is the point.
-			select {
-			case nudge <- struct{}{}:
-			default:
-			}
+			nudgePoll()
 		case "paste":
 			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.paste",
 				map[string]any{"surface_id": id, "text": up.Text})
+			nudgePoll()
+		case "attach":
+			rpcErr = s.attachImage(ctx, id, up)
+			nudgePoll()
 		case "resize":
 			_, rpcErr = s.cmux.Rpc(ctx, "mobile.terminal.viewport",
 				map[string]any{"surface_id": id, "columns": up.Columns, "rows": up.Rows})
