@@ -40,6 +40,7 @@ import com.sodre90.cmuxremote.ui.sessions.SessionsScreen
 import com.sodre90.cmuxremote.ui.sessions.SessionsViewModel
 import com.sodre90.cmuxremote.ui.sessions.TerminalPickerDialog
 import com.sodre90.cmuxremote.ui.sessions.notificationTarget
+import com.sodre90.cmuxremote.ui.terminal.ImageAttacher
 import com.sodre90.cmuxremote.ui.terminal.TerminalScreen
 import com.sodre90.cmuxremote.ui.terminal.TerminalViewModel
 
@@ -332,6 +333,9 @@ fun CmuxNavHost(
                                 context.getSystemService(NotificationManager::class.java)
                                     ?.cancel(attentionNotificationId(workspaceId, surfaceId = null))
                             },
+                            // The application's resolver, not the Activity's: the ViewModel
+                            // outlives the Activity across rotation.
+                            images = ImageAttacher(context.applicationContext.contentResolver),
                         )
                     }
                 },

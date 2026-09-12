@@ -89,8 +89,8 @@ func TestARefusedAttachmentPastesNothingAndAcksFailure(t *testing.T) {
 		Seq:   10,
 		Image: base64.StdEncoding.EncodeToString([]byte("not an image at all")),
 	})
-	if ack.Type != "ack" || ack.Seq != 10 || ack.Ok {
-		t.Fatalf("want a failed ack, got %+v", ack)
+	if ack.Type != "ack" || ack.Seq != 10 || ack.Ok || ack.Reason != "not_image" {
+		t.Fatalf("want a failed ack saying not_image, got %+v", ack)
 	}
 	log, _ := os.ReadFile(logPath)
 	if strings.Contains(string(log), "mobile.terminal.paste") {
@@ -105,8 +105,19 @@ func TestBadBase64IsARefusedAttachmentNotAClosedSocket(t *testing.T) {
 	ack, _ := attachOverPlaintextSocket(t, filepath.Join(t.TempDir(), "a"), wire.TerminalUp{
 		Type: "attach", Seq: 11, Image: "%%%not base64%%%",
 	})
-	if ack.Type != "ack" || ack.Seq != 11 || ack.Ok {
-		t.Fatalf("want a failed ack, got %+v", ack)
+	if ack.Type != "ack" || ack.Seq != 11 || ack.Ok || ack.Reason != "bad_encoding" {
+		t.Fatalf("want a failed ack saying bad_encoding, got %+v", ack)
+	}
+}
+
+// Over the cap but under the read limit: the frame arrives whole and is
+// refused for its size before any of it is decoded.
+func TestAnAttachOverTheCapIsRefusedAsTooLarge(t *testing.T) {
+	ack, _ := attachOverPlaintextSocket(t, filepath.Join(t.TempDir(), "a"), wire.TerminalUp{
+		Type: "attach", Seq: 14, Image: strings.Repeat("A", base64.StdEncoding.EncodedLen(attachmentMaxBytes)+4),
+	})
+	if ack.Type != "ack" || ack.Seq != 14 || ack.Ok || ack.Reason != "too_large" {
+		t.Fatalf("want a failed ack saying too_large, got %+v", ack)
 	}
 }
 
@@ -114,8 +125,8 @@ func TestWithoutAStoreAnAttachIsRefusedNotCrashed(t *testing.T) {
 	ack, logPath := attachOverPlaintextSocket(t, "", wire.TerminalUp{
 		Type: "attach", Seq: 12, Image: base64.StdEncoding.EncodeToString(imageSignatures["jpg"]),
 	})
-	if ack.Type != "ack" || ack.Seq != 12 || ack.Ok {
-		t.Fatalf("want a failed ack, got %+v", ack)
+	if ack.Type != "ack" || ack.Seq != 12 || ack.Ok || ack.Reason != "attachments_off" {
+		t.Fatalf("want a failed ack saying attachments_off, got %+v", ack)
 	}
 	log, _ := os.ReadFile(logPath)
 	if strings.Contains(string(log), "mobile.terminal.paste") {
@@ -133,8 +144,8 @@ func TestTheNameHintCannotSteerThePath(t *testing.T) {
 		Image: base64.StdEncoding.EncodeToString(imageSignatures["jpg"]),
 		Name:  "../../../../tmp/evil.sh",
 	})
-	if !ack.Ok {
-		t.Fatalf("want success, got %+v", ack)
+	if !ack.Ok || ack.Reason != "" {
+		t.Fatalf("want a plain success, got %+v", ack)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) != 1 {

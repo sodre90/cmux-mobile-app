@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -49,11 +48,31 @@ func NewAttachmentStore(dir string) *AttachmentStore {
 }
 
 var (
-	errAttachmentEmpty    = errors.New("attachment: empty")
-	errAttachmentTooLarge = errors.New("attachment: over size limit")
-	errAttachmentNotImage = errors.New("attachment: not a recognised image")
-	errAttachmentsOff     = errors.New("attachment: no store configured")
+	errAttachmentEmpty       = errors.New("attachment: empty")
+	errAttachmentTooLarge    = errors.New("attachment: over size limit")
+	errAttachmentNotImage    = errors.New("attachment: not a recognised image")
+	errAttachmentsOff        = errors.New("attachment: no store configured")
+	errAttachmentBadEncoding = errors.New("attachment: not base64")
 )
+
+// attachRefusalReason names, for the phone, why the bridge itself refused an
+// attachment. cmux failing the paste gets no reason, like any other RPC
+// failure, so the app's existing "delayed" handling covers it unchanged.
+func attachRefusalReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errAttachmentTooLarge):
+		return "too_large"
+	case errors.Is(err, errAttachmentNotImage), errors.Is(err, errAttachmentEmpty):
+		return "not_image"
+	case errors.Is(err, errAttachmentsOff):
+		return "attachments_off"
+	case errors.Is(err, errAttachmentBadEncoding):
+		return "bad_encoding"
+	}
+	return ""
+}
 
 // attachImage lands the image in an "attach" frame and pastes its path into
 // the pane, followed by a space so the user can carry on typing. The error
@@ -69,8 +88,8 @@ func (s *Server) attachImage(ctx context.Context, surfaceID string, up wire.Term
 	}
 	image, err := base64.StdEncoding.DecodeString(up.Image)
 	if err != nil {
-		slog.Warn("terminal: attachment refused", "surface_id", surfaceID, "err", "not base64")
-		return fmt.Errorf("attachment: decode: %w", err)
+		slog.Warn("terminal: attachment refused", "surface_id", surfaceID, "err", errAttachmentBadEncoding)
+		return errAttachmentBadEncoding
 	}
 	path, err := s.attachments.Save(image)
 	if err != nil {

@@ -1,5 +1,6 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +18,7 @@ import com.sodre90.cmuxremote.model.TerminalDownType
 import com.sodre90.cmuxremote.model.Workspace
 import com.sodre90.cmuxremote.model.mergedOnto
 import com.sodre90.cmuxremote.ui.UiState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -31,6 +33,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Base64
 
 private const val DELIVERY_CHECK_INTERVAL_MS = 500L
 
@@ -125,6 +129,7 @@ class TerminalViewModel(
     private val bridgeNotConfiguredMessage: String,
     private val surfaceGoneMessage: String,
     private val cancelAttentionNotification: (workspaceId: String) -> Unit = {},
+    private val images: ImageAttacher? = null,
 ) : ViewModel() {
 
     fun loadFontZoom(): Float = terminalDisplay.loadFontZoom()
@@ -186,6 +191,14 @@ class TerminalViewModel(
 
     val deliveryStatus: StateFlow<DeliveryStatus> = tracker.deliveryStatus
     val lostInputNotice: StateFlow<Boolean> = tracker.lostInputNotice
+    val attachOutcome: StateFlow<AttachOutcome?> = tracker.attachOutcome
+
+    // The image the user picked and has not yet confirmed. Decoding it is
+    // real work (a camera photo is tens of MB of pixels), so the dialog opens
+    // on Preparing and fills in once the preview is ready.
+    private val _attachmentDraft = MutableStateFlow<AttachmentDraft?>(null)
+    val attachmentDraft: StateFlow<AttachmentDraft?> = _attachmentDraft.asStateFlow()
+    private var stagedUri: Uri? = null
 
     // Every viewport measurement the screen makes; only the settled ones reach
     // the wire (see [settledSizes]). DROP_OLDEST because a superseded
@@ -275,7 +288,7 @@ class TerminalViewModel(
                     onGone = { _state.value = UiState.Error(surfaceGoneMessage) },
                     onFrame = onFrame@{ frame ->
                         if (frame.type == TerminalDownType.ACK) {
-                            tracker.onAck(frame.seq, frame.ok)
+                            tracker.onAck(frame.seq, frame.ok, frame.reason)
                             return@onFrame false
                         }
                         val rg = frame.grid ?: return@onFrame false
@@ -302,7 +315,61 @@ class TerminalViewModel(
 
     fun dismissLostInputNotice() = tracker.dismissLostInputNotice()
 
+    fun dismissAttachOutcome() = tracker.dismissAttachOutcome()
+
     fun sendText(text: String) = tracker.sendText(text)
+
+    /** The user picked an image: decode a preview and hold it for confirmation. */
+    fun stageAttachment(uri: Uri) {
+        val attacher = images ?: return
+        stagedUri = uri
+        _attachmentDraft.value = AttachmentDraft.Preparing
+        viewModelScope.launch {
+            val preview = withContext(Dispatchers.IO) { runCatching { attacher.preview(uri) } }
+            // Only if this is still the image being staged: a second pick
+            // while the first was decoding wins.
+            if (stagedUri != uri) return@launch
+            _attachmentDraft.value = preview.fold(
+                onSuccess = { AttachmentDraft.Ready(it) },
+                onFailure = {
+                    if (BuildConfig.DEBUG) Log.w(TAG, "attachment preview failed", it)
+                    AttachmentDraft.Unreadable
+                },
+            )
+        }
+    }
+
+    fun discardAttachment() {
+        stagedUri = null
+        _attachmentDraft.value = null
+    }
+
+    /** Confirmed: send the staged image, the original bytes when asked for
+     *  and they fit, the downscaled copy otherwise. */
+    fun sendAttachment(original: Boolean) {
+        val attacher = images ?: return
+        val uri = stagedUri ?: return
+        val ready = _attachmentDraft.value as? AttachmentDraft.Ready ?: return
+        discardAttachment()
+        viewModelScope.launch {
+            val prepared = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (original && ready.preview.originalFits) {
+                        // The size the picker reported decided originalFits;
+                        // the bytes themselves have the last word.
+                        attacher.original(uri).takeIf { it.bytes.size <= ATTACH_ORIGINAL_CAP_BYTES }
+                            ?: ready.preview.downscaled
+                    } else {
+                        ready.preview.downscaled
+                    }
+                }
+            }.getOrElse {
+                if (BuildConfig.DEBUG) Log.w(TAG, "attachment read failed", it)
+                return@launch
+            }
+            tracker.attach(Base64.getEncoder().encodeToString(prepared.bytes), ready.preview.name)
+        }
+    }
 
     fun resize(columns: Int, rows: Int) {
         measuredSizes.tryEmit(GridSize(columns, rows))

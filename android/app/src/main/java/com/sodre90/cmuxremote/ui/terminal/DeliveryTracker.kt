@@ -7,17 +7,33 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 // How long a sent-but-unacknowledged message can stay pending before the UI
-// treats it as stuck rather than merely in flight.
+// treats it as stuck rather than merely in flight. Keystrokes are a few bytes,
+// so this is a round trip plus the bridge's subprocess spawn and little else.
 private const val ACK_STALE_MS = 1_500L
+
+// An attachment is not a few bytes. Its ack cannot arrive before the upload
+// does, so its own stale threshold grows with its size at a pessimistic
+// mobile uplink -- 50 KB/s -- rather than showing "delayed" for every photo
+// sent over a weak signal.
+private const val UPLOAD_BYTES_PER_MS = 50L
+
+internal fun staleAfterMs(payloadBytes: Int): Long = ACK_STALE_MS + payloadBytes / UPLOAD_BYTES_PER_MS
 
 // How long an explicit ack failure (ok == false) keeps deliveryStatus at
 // DELAYED before fading back to whatever pendingAcks/neverSentQueue implies.
 private const val FAILURE_DISPLAY_MS = 3_000L
 
 /** Whether recently-sent input is confirmed delivered, still in flight, or
- *  stuck (sent-but-unacked past [ACK_STALE_MS], provably unsent because the
- *  socket was down, or explicitly failed per the bridge's ack). */
+ *  stuck (sent-but-unacked past its stale threshold, provably unsent because
+ *  the socket was down, or explicitly failed per the bridge's ack). */
 enum class DeliveryStatus { CONFIRMED, SENDING, DELAYED }
+
+/** How an attach ended: acked fine, refused by the bridge for [reason] (one
+ *  of [com.sodre90.cmuxremote.model.AttachRefusal]), failed at cmux (null
+ *  reason), or never left the phone. One-shot; the UI clears it once shown. */
+data class AttachOutcome(val ok: Boolean, val reason: String? = null)
+
+private class Pending(val sentAt: Long, val staleAfterMs: Long)
 
 /**
  * The terminal's delivery-reliability (seq/ack) bookkeeping, owned by
@@ -42,11 +58,15 @@ class DeliveryTracker(
     // there's no risk of double-delivery.
     private val neverSentQueue = mutableListOf<TerminalUp>()
 
-    // Messages that did enqueue into the socket, keyed by seq -> sent-at ms,
-    // awaiting an "ack" frame. Deliberately never auto-resent: typed input
-    // isn't idempotent, so an ambiguous (sent-but-unconfirmed) message is
-    // reported to the user instead of risking a duplicate command.
-    private val pendingAcks = mutableMapOf<Long, Long>()
+    // Messages that did enqueue into the socket, keyed by seq, awaiting an
+    // "ack" frame. Deliberately never auto-resent: typed input isn't
+    // idempotent, so an ambiguous (sent-but-unconfirmed) message is reported
+    // to the user instead of risking a duplicate command.
+    private val pendingAcks = mutableMapOf<Long, Pending>()
+
+    // Seqs of attaches still awaiting their ack, so the outcome can be told
+    // apart from a keystroke's and surfaced with its reason.
+    private val pendingAttaches = mutableSetOf<Long>()
     private var lastFailureAt: Long = 0L
 
     private val pendingOutbound = StringBuilder()
@@ -70,6 +90,31 @@ class DeliveryTracker(
 
     fun dismissLostInputNotice() {
         _lostInputNotice.value = false
+    }
+
+    private val _attachOutcome = MutableStateFlow<AttachOutcome?>(null)
+    val attachOutcome: StateFlow<AttachOutcome?> = _attachOutcome.asStateFlow()
+
+    fun dismissAttachOutcome() {
+        _attachOutcome.value = null
+    }
+
+    /** Sends an image for the bridge to land on disk and paste the path of.
+     *  Not coalesced with typed input: it is one message, and the bridge
+     *  handles the socket's frames in order, so text typed after it still
+     *  arrives after the pasted path. Unlike input it is never queued for a
+     *  later socket: the user is told it failed right away, and a replay
+     *  after they had already retried would paste the path twice. */
+    fun attach(imageBase64: String, name: String) {
+        val stamped = TerminalUp(type = TerminalUpType.ATTACH, image = imageBase64, name = name, seq = nextSeq++)
+        val sent = send(stamped)
+        log("dispatch seq=${stamped.seq} type=${stamped.type} sent=$sent bytes=${imageBase64.length}")
+        if (sent) {
+            pendingAcks[stamped.seq] = Pending(now(), staleAfterMs(imageBase64.length))
+            pendingAttaches.add(stamped.seq)
+        } else {
+            _attachOutcome.value = AttachOutcome(ok = false)
+        }
     }
 
     /** Queues [text] for delivery. Coalesces rapid chunks (typed diffs,
@@ -99,7 +144,7 @@ class DeliveryTracker(
         val sent = send(stamped)
         log("dispatch seq=${stamped.seq} type=${stamped.type} sent=$sent text=${stamped.text?.let(::describeForLog)}")
         if (sent) {
-            pendingAcks[stamped.seq] = now()
+            pendingAcks[stamped.seq] = Pending(now(), ACK_STALE_MS)
         } else {
             neverSentQueue.add(stamped)
         }
@@ -121,7 +166,7 @@ class DeliveryTracker(
         neverSentQueue.clear()
         queued.forEach { up ->
             val sent = send(up)
-            if (sent) pendingAcks[up.seq] = now() else neverSentQueue.add(up)
+            if (sent) pendingAcks[up.seq] = Pending(now(), ACK_STALE_MS) else neverSentQueue.add(up)
         }
     }
 
@@ -133,15 +178,20 @@ class DeliveryTracker(
             pendingAcks.clear()
             _lostInputNotice.value = true
         }
+        if (pendingAttaches.isNotEmpty()) {
+            pendingAttaches.clear()
+            _attachOutcome.value = AttachOutcome(ok = false)
+        }
         // The in-flight gate's ack (if any) can never arrive now that the
         // socket is gone -- clear it so a new connection isn't stuck
         // refusing to flush pendingOutbound forever.
         inFlightInputSeq = null
     }
 
-    fun onAck(seq: Long, ok: Boolean) {
-        log("ack seq=$seq ok=$ok")
+    fun onAck(seq: Long, ok: Boolean, reason: String? = null) {
+        log("ack seq=$seq ok=$ok reason=$reason")
         pendingAcks.remove(seq)
+        if (pendingAttaches.remove(seq)) _attachOutcome.value = AttachOutcome(ok, reason)
         if (!ok) lastFailureAt = now()
         if (seq == inFlightInputSeq) {
             inFlightInputSeq = null
@@ -151,12 +201,12 @@ class DeliveryTracker(
 
     fun recomputeDeliveryStatus() {
         val now = now()
-        val oldestPending = pendingAcks.values.minOrNull()
+        val anyStale = pendingAcks.values.any { now - it.sentAt > it.staleAfterMs }
         _deliveryStatus.value = when {
             now - lastFailureAt < FAILURE_DISPLAY_MS -> DeliveryStatus.DELAYED
             neverSentQueue.isNotEmpty() -> DeliveryStatus.DELAYED
-            oldestPending == null -> DeliveryStatus.CONFIRMED
-            now - oldestPending > ACK_STALE_MS -> DeliveryStatus.DELAYED
+            pendingAcks.isEmpty() -> DeliveryStatus.CONFIRMED
+            anyStale -> DeliveryStatus.DELAYED
             else -> DeliveryStatus.SENDING
         }
     }

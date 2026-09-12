@@ -14,14 +14,29 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ### Added
 
+- Attach a photo to a terminal pane from the phone. A Photo button next to
+  Paste offers the gallery (Android's photo picker, no storage permission)
+  or an image on the clipboard, shows what will be sent -- a thumbnail, the
+  size of the copy, the dimensions -- and sends on confirmation. The copy is
+  scaled so its longest side is 1568 px, turned upright from its EXIF
+  orientation, and re-encoded as JPEG, which drops the camera data; that is
+  the size Claude's API resizes to anyway, and turns a 3-8 MB photo into a
+  few hundred KB. A switch sends the original instead, camera data and all
+  (the dialog says so), when it is under 10 MB. The bridge lands it as a
+  file and pastes the path into the pane, which Claude Code turns into an
+  attached image; the delivery line under the key bar says whether that
+  worked, and why not when the bridge refused it. A photo in flight shows as
+  sending for as long as an upload its size plausibly takes on mobile data,
+  rather than as delayed after the 1.5 s a keystroke gets. (cmux-app-ej0)
 - The terminal socket accepts an `attach` frame carrying an image. The bridge
   writes it to `~/.config/cmux-bridge/attachments/` (configurable as
   `attachments_dir`; private to the user, kept seven days) under a name it
   chooses from a timestamp and the image's own bytes -- JPEG, PNG, WebP, GIF
   or HEIC, anything else is refused -- and pastes the path into the pane,
   which Claude Code turns into an attached image. This is the bridge half of
-  attaching a photo from the phone; the app's attach button follows in the
-  next release. Along the way, a text paste now triggers an immediate replay
+  attaching a photo from the phone. A refused attachment's ack now says why
+  (`reason`: too large, not an image, attachments off, bad encoding), which
+  the app shows. Along the way, a text paste now triggers an immediate replay
   the way a keystroke already did. (cmux-app-ej0)
 - The terminal socket now bounds how large a message it will read from the
   phone (the attachment cap plus encoding overhead, about 14 MB). Before,
@@ -29,6 +44,16 @@ every section after it itemizes changes individually. Purely internal refactors
   that was a gap from the start, only worth closing once a multi-megabyte
   frame became a legitimate thing to send. A message over the limit ends
   the socket like a decrypt failure does. (cmux-app-ej0)
+
+### Compatibility
+
+Wire-format change: a new `attach` terminal up-frame and a `reason` field on
+the ack. An old app against a new bridge is unaffected -- it never sends an
+attach and ignores the field. A new app against an old bridge sends an attach
+the bridge does not recognise and, as with any unknown frame type, drops
+without acking; the app shows the photo as delayed and never reports an
+outcome. Update the bridge first. The attachment directory is created on
+first use; no config, pairing or permission change.
 
 ### Changed
 

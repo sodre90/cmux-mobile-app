@@ -121,6 +121,11 @@ data class TerminalDown(
     val rows: Int = 0,
     val seq: Long = 0L,
     val ok: Boolean = false,
+    /** Why an ack is not [ok] when the bridge itself refused the message
+     *  rather than cmux failing it; one of [AttachRefusal]'s values for an
+     *  attach, absent otherwise. Mirrors `Reason` in
+     *  bridge/internal/wire/terminal.go. */
+    val reason: String? = null,
     /** Render-grid blocks the bridge left out of [grid] because they are
      *  identical to the ones it already sent; this frame's grid is completed
      *  from the previous one (see [mergedOnto]). Only ever set on output frames,
@@ -178,6 +183,15 @@ object TerminalUpType {
     const val INPUT = "input"
     const val RESIZE = "resize"
     const val ATTACH = "attach"
+}
+
+/** [TerminalDown.reason]'s values on a refused attach -- mirrors
+ *  `attachRefusalReason` in bridge/internal/server/attachments.go. */
+object AttachRefusal {
+    const val TOO_LARGE = "too_large"
+    const val NOT_IMAGE = "not_image"
+    const val ATTACHMENTS_OFF = "attachments_off"
+    const val BAD_ENCODING = "bad_encoding"
 }
 
 /** A reply to a pending feed item (permission / question / exit-plan). */

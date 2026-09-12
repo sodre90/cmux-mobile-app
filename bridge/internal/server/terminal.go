@@ -582,7 +582,7 @@ func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc
 		if up.Seq == 0 {
 			continue // no seq set (shouldn't happen from the app) -- nothing to ack.
 		}
-		if err := write(wire.TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil}); err != nil {
+		if err := write(wire.TerminalDown{Type: "ack", Seq: up.Seq, Ok: rpcErr == nil, Reason: attachRefusalReason(rpcErr)}); err != nil {
 			slog.Warn("terminal: ack write failed", "surface_id", id, "err", err)
 			return
 		}

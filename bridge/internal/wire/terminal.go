@@ -16,6 +16,12 @@ type TerminalDown struct {
 	// RPC's ack (Ok: false) must be distinguishable on the wire from an "ok"
 	// field that was never set.
 	Ok bool `json:"ok"`
+	// Reason says why an "ack" is not Ok when the bridge itself refused the
+	// message rather than cmux failing it -- today only attachments have
+	// such refusals (see server.attachRefusalReason). Empty on every Ok ack
+	// and on a plain RPC failure, so an app that does not know a reason
+	// shows what it always showed.
+	Reason string `json:"reason,omitempty"`
 	// Unchanged names the render-grid blocks left out of Grid because they are
 	// identical to the ones this socket already sent; the client carries its
 	// own copy forward. Only ever set on "output" frames, and only for a client

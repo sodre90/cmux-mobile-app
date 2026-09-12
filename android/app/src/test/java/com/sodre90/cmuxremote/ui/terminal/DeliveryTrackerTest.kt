@@ -1,8 +1,11 @@
 package com.sodre90.cmuxremote.ui.terminal
 
+import com.sodre90.cmuxremote.model.AttachRefusal
 import com.sodre90.cmuxremote.model.TerminalUp
+import com.sodre90.cmuxremote.model.TerminalUpType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -197,5 +200,90 @@ class DeliveryTrackerTest {
 
         assertEquals(2, sent.size) // "b" still flushes; the failure only affects status display
         assertEquals("b", sent[1].text)
+    }
+
+    // --- attachments ---
+
+    private val aPhoto = "A".repeat(400_000) // ~300 KB of JPEG once decoded
+
+    @Test
+    fun anAttachGoesOutAsOneFrameWithItsImageAndName() {
+        val tracker = newTracker()
+        tracker.attach(aPhoto, "IMG_2041.jpg")
+        assertEquals(1, sent.size)
+        assertEquals(TerminalUpType.ATTACH, sent[0].type)
+        assertEquals(aPhoto, sent[0].image)
+        assertEquals("IMG_2041.jpg", sent[0].name)
+        assertNull(tracker.attachOutcome.value)
+    }
+
+    @Test
+    fun aLargeUploadIsStillSendingWhereAKeystrokeWouldBeDelayed() {
+        val tracker = newTracker()
+        tracker.attach(aPhoto, "a.jpg")
+        clock += 3_000 // well past the keystroke threshold of 1.5 s
+        tracker.recomputeDeliveryStatus()
+        assertEquals(DeliveryStatus.SENDING, tracker.deliveryStatus.value)
+
+        clock += staleAfterMs(aPhoto.length)
+        tracker.recomputeDeliveryStatus()
+        assertEquals(DeliveryStatus.DELAYED, tracker.deliveryStatus.value)
+    }
+
+    @Test
+    fun aKeystrokeNextToAnUploadKeepsItsOwnShortThreshold() {
+        val tracker = newTracker()
+        tracker.attach(aPhoto, "a.jpg")
+        tracker.sendText("x")
+        clock += 3_000
+        tracker.recomputeDeliveryStatus()
+        assertEquals(DeliveryStatus.DELAYED, tracker.deliveryStatus.value)
+    }
+
+    @Test
+    fun theAckCarriesTheBridgesReasonToTheOutcome() {
+        val tracker = newTracker()
+        tracker.attach(aPhoto, "a.jpg")
+        tracker.onAck(sent[0].seq, ok = false, reason = AttachRefusal.TOO_LARGE)
+        assertEquals(AttachOutcome(ok = false, reason = AttachRefusal.TOO_LARGE), tracker.attachOutcome.value)
+        tracker.dismissAttachOutcome()
+        assertNull(tracker.attachOutcome.value)
+    }
+
+    @Test
+    fun aSuccessfulAttachReportsSuccessAndAKeystrokeAckDoesNot() {
+        val tracker = newTracker()
+        tracker.sendText("x")
+        tracker.attach(aPhoto, "a.jpg")
+        tracker.onAck(sent[0].seq, ok = true)
+        assertNull(tracker.attachOutcome.value)
+        tracker.onAck(sent[1].seq, ok = true)
+        assertEquals(AttachOutcome(ok = true), tracker.attachOutcome.value)
+    }
+
+    /** An attach the socket could not take is reported failed at once and is
+     *  NOT queued for the next socket: the user will retry, and a replay on
+     *  top of that retry would paste the path twice. */
+    @Test
+    fun anAttachWhileDisconnectedFailsNowAndIsNeverReplayed() {
+        val tracker = newTracker()
+        socketUp = false
+        tracker.attach(aPhoto, "a.jpg")
+        assertEquals(AttachOutcome(ok = false), tracker.attachOutcome.value)
+        assertTrue(sent.isEmpty())
+
+        socketUp = true
+        tracker.onConnected()
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun anAttachWhoseSocketDropsMidFlightIsReportedFailed() {
+        val tracker = newTracker()
+        tracker.attach(aPhoto, "a.jpg")
+        tracker.onDisconnected()
+        assertEquals(AttachOutcome(ok = false), tracker.attachOutcome.value)
+        tracker.onConnected()
+        assertEquals(1, sent.size)
     }
 }

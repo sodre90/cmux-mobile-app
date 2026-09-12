@@ -1,7 +1,11 @@
 package com.sodre90.cmuxremote.ui.terminal
 
 import android.content.res.Configuration
+import android.net.Uri
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -170,6 +174,11 @@ fun TerminalScreen(
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val deliveryStatus by vm.deliveryStatus.collectAsState()
     val lostInputNotice by vm.lostInputNotice.collectAsState()
+    val attachOutcome by vm.attachOutcome.collectAsState()
+    val attachmentDraft by vm.attachmentDraft.collectAsState()
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let(vm::stageAttachment)
+    }
     // Not rendered anywhere -- kept only so diffToKeystrokes has an old value
     // to diff each keystroke against. The invisible capture field below is the
     // only place typed input touches the UI; the terminal's own echo is the
@@ -195,6 +204,12 @@ fun TerminalScreen(
         if (lostInputNotice) {
             delay(4_000)
             vm.dismissLostInputNotice()
+        }
+    }
+    LaunchedEffect(attachOutcome) {
+        if (attachOutcome != null) {
+            delay(4_000)
+            vm.dismissAttachOutcome()
         }
     }
 
@@ -330,6 +345,10 @@ fun TerminalScreen(
                             if (needsPasteConfirmation(text)) pendingPaste = text else sendPaste(text)
                         }
                     },
+                    onAttachFromGallery = {
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    onAttachFromClipboard = vm::stageAttachment,
                 )
                 KeyBar(
                     applicationCursorKeys = appCursorKeys,
@@ -337,7 +356,11 @@ fun TerminalScreen(
                     onToggleCtrl = { ctrlArmed = !ctrlArmed },
                     onKey = sendKey,
                 )
-                DeliveryStatusLabel(status = deliveryStatus, lostInputNotice = lostInputNotice)
+                DeliveryStatusLabel(
+                    status = deliveryStatus,
+                    lostInputNotice = lostInputNotice,
+                    attachOutcome = attachOutcome,
+                )
             }
         },
     ) { inner ->
@@ -524,6 +547,13 @@ fun TerminalScreen(
                 sendPaste(text)
             },
             onDismiss = { pendingPaste = null },
+        )
+    }
+    attachmentDraft?.let { draft ->
+        AttachmentDialog(
+            draft = draft,
+            onSend = vm::sendAttachment,
+            onDismiss = vm::discardAttachment,
         )
     }
 }
@@ -725,8 +755,13 @@ private fun StaleScreenBanner(modifier: Modifier = Modifier) {
  * confirmed, so normal typing never shows a persistent status line.
  */
 @Composable
-private fun DeliveryStatusLabel(status: DeliveryStatus, lostInputNotice: Boolean) {
+private fun DeliveryStatusLabel(
+    status: DeliveryStatus,
+    lostInputNotice: Boolean,
+    attachOutcome: AttachOutcome? = null,
+) {
     val textRes = when {
+        attachOutcome != null -> attachOutcomeTextRes(attachOutcome)
         lostInputNotice -> R.string.terminal_delivery_reconnected
         status == DeliveryStatus.DELAYED -> R.string.terminal_delivery_delayed
         status == DeliveryStatus.SENDING -> R.string.status_sending
@@ -772,7 +807,13 @@ private fun DeliveryStatusLabelLostInputPreview() {
  * against [applicationCursorKeys] like any cursor key.
  */
 @Composable
-private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit, onPaste: () -> Unit) {
+private fun ArrowPad(
+    applicationCursorKeys: Boolean,
+    onKey: (String) -> Unit,
+    onPaste: () -> Unit,
+    onAttachFromGallery: () -> Unit,
+    onAttachFromClipboard: (Uri) -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -784,16 +825,24 @@ private fun ArrowPad(applicationCursorKeys: Boolean, onKey: (String) -> Unit, on
             ArrowButton(ArrowDown, applicationCursorKeys, onKey)
             ArrowButton(ArrowRight, applicationCursorKeys, onKey)
         }
-        OutlinedButton(onClick = onPaste) { Text(stringResource(R.string.terminal_paste)) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AttachButton(onFromGallery = onAttachFromGallery, onFromClipboard = onAttachFromClipboard)
+            OutlinedButton(onClick = onPaste, contentPadding = KEY_BAR_BUTTON_PADDING) {
+                Text(stringResource(R.string.terminal_paste), maxLines = 1)
+            }
+        }
     }
 }
+
+/** Narrower than Material's default so the D-pad, attach and Paste share one row at phone width. */
+internal val KEY_BAR_BUTTON_PADDING = PaddingValues(horizontal = 18.dp, vertical = 6.dp)
 
 @Composable
 private fun ArrowButton(key: CursorKey, applicationCursorKeys: Boolean, onKey: (String) -> Unit) {
     val description = stringResource(key.contentDescriptionRes)
     OutlinedButton(
         onClick = { onKey(key.sequence(applicationCursorKeys)) },
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+        contentPadding = KEY_BAR_BUTTON_PADDING,
         modifier = Modifier.semantics { contentDescription = description },
     ) { Text(key.label) }
 }

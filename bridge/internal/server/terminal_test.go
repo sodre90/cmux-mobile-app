@@ -205,8 +205,8 @@ func TestTerminalInputAckReflectsRpcFailure(t *testing.T) {
 	if err := c.ReadJSON(&ack); err != nil {
 		t.Fatalf("expected an ack frame, got: %v", err)
 	}
-	if ack.Type != "ack" || ack.Seq != 7 || ack.Ok {
-		t.Fatalf("expected a failed ack (ok=false), got: %+v", ack)
+	if ack.Type != "ack" || ack.Seq != 7 || ack.Ok || ack.Reason != "" {
+		t.Fatalf("expected a failed ack (ok=false) with no reason -- cmux failed it, the bridge did not refuse it -- got: %+v", ack)
 	}
 }
 
