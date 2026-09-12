@@ -54,6 +54,12 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // android.util.Log is a stub in unit tests and throws when called,
+            // so any test exercising a code path that logs used to fail on the
+            // logging rather than on what it was testing -- which is what kept
+            // TerminalSocket's frame-failure path untested. Defaults make those
+            // calls no-ops.
+            isReturnDefaultValues = true
         }
     }
 }

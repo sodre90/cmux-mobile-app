@@ -16,6 +16,19 @@ type TerminalDown struct {
 	// RPC's ack (Ok: false) must be distinguishable on the wire from an "ok"
 	// field that was never set.
 	Ok bool `json:"ok"`
+	// Unchanged names the render-grid blocks left out of Grid because they are
+	// identical to the ones this socket already sent; the client carries its
+	// own copy forward. Only ever set on "output" frames, and only for a client
+	// that negotiated it -- see the delta handshake in server/terminal.go.
+	//
+	// It lives here rather than inside Grid on purpose: which blocks the bridge
+	// chose to omit is the bridge's protocol, not cmux's data, and RenderGrid
+	// stays a faithful mirror of cmux.render-grid.v1.
+	//
+	// An explicit list rather than "absent means unchanged": absent is already
+	// how an EMPTY block arrives, so without this a cleared scrollback and an
+	// unchanged one would be the same frame.
+	Unchanged []string `json:"unchanged,omitempty"`
 }
 
 // CloseSurfaceGone is the WebSocket close code WS /terminal/{id} uses to say

@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -231,6 +232,78 @@ class TerminalSocketTest {
     fun asksTheBridgeForCompression() {
         val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
         assertTrue("want ?deflate=1 on the terminal URL, got $path", path.contains("deflate=1"))
+    }
+
+    @Test
+    fun asksTheBridgeForDeltaFrames() {
+        val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
+        assertTrue("want delta=1 on the terminal URL, got $path", path.contains("delta=1"))
+    }
+
+    /**
+     * Serves an unreadable frame followed by a good one. Returns what ended the
+     * flow (null if it was still running) and the frame that got through, if any.
+     */
+    private fun badThenGoodFrame(deltaConfirmed: Boolean): Pair<Throwable?, TerminalDown?> = runBlocking {
+        val serverSession = SharedSecretSession(secret)
+        val good = """{"type":"output","columns":3,"rows":1,""" +
+            """"grid":{"columns":3,"rows":1,"row_spans":[{"row":0,"column":0,"text":"ok"}]}}"""
+        val upgrade = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                // Sealed correctly, so it decrypts -- but it is not JSON, so it
+                // fails where a truncated or corrupted frame would.
+                for (plain in listOf("not json", good)) {
+                    val n = serverSession.nextSendCounter()
+                    val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, n), plain.toByteArray(Charsets.UTF_8))
+                    val frame = ByteArray(8 + ct.size)
+                    ByteBuffer.wrap(frame, 0, 8).putLong(n)
+                    ct.copyInto(frame, 8)
+                    webSocket.send(frame.toByteString())
+                }
+            }
+        })
+        if (deltaConfirmed) upgrade.setHeader(DELTA_HEADER, "1")
+        server.enqueue(upgrade)
+
+        val ts = TerminalSocket(
+            OkHttpClient(),
+            server.url("/").toString(),
+            "surface-1",
+            SharedSecretSession(secret),
+            cipher,
+        )
+        val ended = CompletableDeferred<Throwable?>()
+        val got = CompletableDeferred<TerminalDown>()
+        val job = launch(Dispatchers.IO) {
+            ended.complete(runCatching { ts.connect().collect { got.complete(it) } }.exceptionOrNull())
+        }
+        val endedWith = withTimeoutOrNull(3_000) { ended.await() }
+        val frame = withTimeoutOrNull(500) { got.await() }
+        job.cancelAndJoin()
+        endedWith to frame
+    }
+
+    /**
+     * The test the delta design rests on. A frame the app cannot read is no
+     * longer survivable by skipping it: later frames complete themselves from
+     * blocks this socket never saw, so the pane would carry a wrong scrollback
+     * silently for as long as the socket stayed open. Ending the flow hands it
+     * to the reconnect loop, which resyncs from a fresh full replay.
+     */
+    @Test
+    fun anUnreadableFrameEndsADeltaStreamInsteadOfBeingSkipped() {
+        val (endedWith, frame) = badThenGoodFrame(deltaConfirmed = true)
+        assertTrue("want DesyncException so the reconnector resyncs", endedWith is DesyncException)
+        assertNull("no frame may be delivered after the desync", frame)
+    }
+
+    /** Off a delta stream each frame still stands alone, so the old
+     *  skip-and-carry-on behaviour is the right one and must be preserved. */
+    @Test
+    fun anUnreadableFrameIsStillSkippedWhenDeltasWereNotNegotiated() {
+        val (endedWith, frame) = badThenGoodFrame(deltaConfirmed = false)
+        assertNull("a non-delta stream must stay open through one bad frame", endedWith)
+        assertEquals("output", frame?.type)
     }
 
     @Test

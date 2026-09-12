@@ -9,11 +9,13 @@ import com.sodre90.cmuxremote.data.SocketReconnector
 import com.sodre90.cmuxremote.data.TerminalDisplayGateway
 import com.sodre90.cmuxremote.data.TerminalSocket
 import com.sodre90.cmuxremote.model.DecodedGrid
+import com.sodre90.cmuxremote.model.RenderGrid
 import com.sodre90.cmuxremote.model.RenderGridDecoder
 import com.sodre90.cmuxremote.model.Style
 import com.sodre90.cmuxremote.model.TerminalDown
 import com.sodre90.cmuxremote.model.TerminalDownType
 import com.sodre90.cmuxremote.model.Workspace
+import com.sodre90.cmuxremote.model.mergedOnto
 import com.sodre90.cmuxremote.ui.UiState
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -153,6 +155,10 @@ class TerminalViewModel(
     @Volatile
     private var activeSocket: TerminalSocket? = null
 
+    // The grid a delta frame is completed from. Written only from the single
+    // frame-collecting coroutine below, which collectLatest keeps sequential.
+    private var lastGrid: RenderGrid? = null
+
     // Kept separate from [state] (which the live grid-frame loop replaces
     // wholesale on every frame) so a fast terminal stream never clobbers this
     // one-time, read-only lookup. This screen has no yolo-mode edit affordance
@@ -247,6 +253,12 @@ class TerminalViewModel(
                 if (!foreground) return@collectLatest
                 reconnector.run(
                     openSocket = { slot, onOpen ->
+                        // The bridge tracks what it has already sent per
+                        // socket, so the base a delta frame completes itself
+                        // from has to be per socket too. Dropping it here
+                        // rather than on disconnect keeps that true however the
+                        // previous socket ended, cancellation included.
+                        lastGrid = null
                         bridge.terminalSocket(slot, surfaceId)?.also { activeSocket = it }?.connect(onOpen)
                     },
                     onConnected = tracker::onConnected,
@@ -267,7 +279,15 @@ class TerminalViewModel(
                             return@onFrame false
                         }
                         val rg = frame.grid ?: return@onFrame false
-                        val content = TerminalContent(grid = RenderGridDecoder.decode(rg), styles = rg.styles)
+                        // Delta frames leave out blocks the socket already
+                        // carries; this fills them back in. A replay frame
+                        // names nothing as unchanged, so it replaces the base
+                        // wholesale -- which is what makes a reconnect a clean
+                        // resync, since the bridge opens every socket with one.
+                        val merged = rg.mergedOnto(lastGrid, frame.unchanged)
+                        lastGrid = merged
+                        val content =
+                            TerminalContent(grid = RenderGridDecoder.decode(merged), styles = merged.styles)
                         _state.value = UiState.Ready(content)
                         true
                     },

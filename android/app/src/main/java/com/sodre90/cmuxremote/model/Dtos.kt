@@ -121,7 +121,21 @@ data class TerminalDown(
     val rows: Int = 0,
     val seq: Long = 0L,
     val ok: Boolean = false,
+    /** Render-grid blocks the bridge left out of [grid] because they are
+     *  identical to the ones it already sent; this frame's grid is completed
+     *  from the previous one (see [mergedOnto]). Only ever set on output frames,
+     *  and only once the delta handshake succeeded. Mirrors `Unchanged` in
+     *  bridge/internal/wire/terminal.go. */
+    val unchanged: List<String> = emptyList(),
 )
+
+/** Block names that can appear in [TerminalDown.unchanged] -- mirrors
+ *  `stickyGridFields` in bridge/internal/server/terminal.go. The two theme
+ *  blocks are also omitted there, but this model never parsed them, so only
+ *  the scrollback needs carrying forward here. */
+object UnchangedBlock {
+    const val SCROLLBACK_SPANS = "scrollback_spans"
+}
 
 /**
  * [TerminalDown.type]'s possible values. Plain `String` (not an enum) on the

@@ -62,10 +62,17 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// Only meaningful with encryption on: compression rides inside the sealed
 	// payload, and the plaintext branch of [writeTerminalFrame] has no tag byte
 	// to carry it.
+	// Delta frames are negotiated the same way and for the same reason: an
+	// older app given a frame with scrollback_spans left out would decode the
+	// absent field as an EMPTY scrollback and lose its pan-up history.
 	deflate := s.sessions != nil && r.URL.Query().Get("deflate") == "1"
-	var upgradeHeader http.Header
+	delta := r.URL.Query().Get("delta") == "1"
+	upgradeHeader := http.Header{}
 	if deflate {
-		upgradeHeader = http.Header{deflateHeader: {"1"}}
+		upgradeHeader.Set(deflateHeader, "1")
+	}
+	if delta {
+		upgradeHeader.Set(deltaHeader, "1")
 	}
 	c, err := upgrader.Upgrade(w, r, upgradeHeader)
 	if err != nil {
@@ -106,6 +113,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("terminal: initial write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 		return
 	}
+	// The replay always goes out whole -- it is what a reconnecting app
+	// rebuilds from -- but it primes the encoder, so the first output frame can
+	// already leave the scrollback out.
+	deltas := newDeltaEncoder()
+	deltas.strip(fr.Grid)
 	// cmux's top-level seq (and render_grid.state_seq) is always 0, so we can't
 	// gate on it — instead we forward whenever the render-grid content changes,
 	// ignoring the bookkeeping counters that change on their own (see
@@ -161,6 +173,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		lastFingerprint = fingerprint
 		next.Type = "output"
+		// Fingerprinted on the whole grid above, stripped only now: what the
+		// app must be told about is any change to the grid, not just to the
+		// blocks that survive stripping.
+		if delta {
+			next.Grid, next.Unchanged = deltas.strip(next.Grid)
+		}
 		if err := write(next); err != nil {
 			slog.Warn("terminal: output write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 			return false
@@ -206,6 +224,61 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 // sitting at a shell prompt re-sent its whole ~187KB grid four times a second
 // to deliver two incrementing integers.
 var volatileGridFields = []string{"render_revision", "terminal_theme_revision"}
+
+// stickyGridFields are the render-grid blocks a client can carry over from the
+// frame before, so a frame that did not change them need not repeat them.
+//
+// Scoped deliberately narrowly. scrollback_spans is 143KB of the 187KB frame
+// and is pure history -- the rows above the viewport, which the app only shows
+// on a pan-up -- while the two theme blocks are ~6KB of static palette the app
+// does not even parse. Everything else stays in every frame: stale styles would
+// put wrong colours on rows the user is looking at now, and stale modes would
+// mean the key bar spells arrows or paste for a pane that has since changed its
+// mind, sending it bytes it never asked for. Those are worth their ~1KB
+// compressed.
+var stickyGridFields = []string{"scrollback_spans", "terminal_theme", "terminal_config_theme"}
+
+// deltaEncoder remembers the sticky blocks one socket has already sent, so the
+// next frame can leave the unchanged ones out. Per-socket, never shared: a
+// reconnect builds a fresh one and its first frame is a full replay again.
+type deltaEncoder struct{ sent map[string][]byte }
+
+func newDeltaEncoder() *deltaEncoder { return &deltaEncoder{sent: map[string][]byte{}} }
+
+// strip returns grid without the sticky blocks this socket last sent
+// unchanged, plus the names of the blocks it left out. Priming it with the
+// replay frame is what makes the first output frame able to omit anything.
+//
+// A grid that will not decode is returned whole with nothing omitted, the same
+// fail-safe direction as [gridFingerprint]: a redundant block costs bytes, a
+// wrongly omitted one costs correctness.
+func (d *deltaEncoder) strip(grid json.RawMessage) (json.RawMessage, []string) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(grid, &fields); err != nil {
+		return grid, nil
+	}
+	var omitted []string
+	for _, k := range stickyGridFields {
+		v, ok := fields[k]
+		if !ok {
+			continue
+		}
+		if prev, seen := d.sent[k]; seen && bytes.Equal(prev, v) {
+			delete(fields, k)
+			omitted = append(omitted, k)
+			continue
+		}
+		d.sent[k] = bytes.Clone(v)
+	}
+	if len(omitted) == 0 {
+		return grid, nil
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return grid, nil
+	}
+	return out, omitted
+}
 
 // gridFingerprint reduces a render grid to a value that compares equal when
 // the grid's content is unchanged, by dropping [volatileGridFields]. Only the
@@ -317,6 +390,10 @@ func closeIfSurfaceGone(c *websocket.Conn, err error) {
 // it accepted a client's ?deflate=1 request. Mirrored in the app as
 // TerminalSocket's DEFLATE_HEADER.
 const deflateHeader = "X-Cmux-Deflate"
+
+// deltaHeader is the matching confirmation for ?delta=1. Mirrored in the app as
+// TerminalSocket's DELTA_HEADER.
+const deltaHeader = "X-Cmux-Delta"
 
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.

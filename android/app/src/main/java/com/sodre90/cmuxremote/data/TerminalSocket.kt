@@ -48,6 +48,31 @@ internal const val CLOSE_SURFACE_GONE = 4404
  */
 internal const val DEFLATE_HEADER = "X-Cmux-Deflate"
 
+/**
+ * The bridge's confirmation that it will send delta frames, leaving out
+ * render-grid blocks the socket already carries. Mirrors `deltaHeader` in
+ * bridge/internal/server/terminal.go.
+ *
+ * Negotiated for the same reason as [DEFLATE_HEADER], and one more: a frame
+ * with `scrollback_spans` left out is indistinguishable, to an app that does
+ * not know about deltas, from a pane whose scrollback just emptied.
+ */
+internal const val DELTA_HEADER = "X-Cmux-Delta"
+
+/**
+ * A frame arrived but could not be turned into a [TerminalDown].
+ *
+ * Ends the flow instead of skipping the frame. While every frame was
+ * self-contained, dropping one was survivable -- the next full grid healed the
+ * screen a moment later. Delta frames are not self-contained: a lost frame that
+ * changed the scrollback is followed by frames that omit the scrollback as
+ * "unchanged", and the pane would then carry the wrong history for as long as
+ * the socket stayed open, with nothing to notice it. Closing hands the problem
+ * to the reconnect loop, which reopens and gets a fresh full replay -- and
+ * resets the bridge's own record of what it has sent along with it.
+ */
+class DesyncException(cause: Throwable) : Exception("terminal frame undecodable", cause)
+
 class TerminalSocket(
     private val http: OkHttpClient,
     baseUrl: String,
@@ -55,15 +80,18 @@ class TerminalSocket(
     private val session: PairedSession,
     private val cipher: Cipher,
 ) {
-    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1"
+    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1&delta=1"
 
     @Volatile
     private var socket: WebSocket? = null
 
     // Set from onOpen, which OkHttp guarantees runs before any onMessage, so
-    // no frame is ever read before this is known.
+    // no frame is ever read before either is known.
     @Volatile
     private var deflated = false
+
+    @Volatile
+    private var delta = false
 
     /** [onOpen] fires on the WebSocket upgrade, before any frame -- see
      *  [EventsSocket.connect] for why that can't come through the flow. */
@@ -74,6 +102,7 @@ class TerminalSocket(
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     deflated = response.header(DEFLATE_HEADER) == "1"
+                    delta = response.header(DELTA_HEADER) == "1"
                     onOpen()
                 }
 
@@ -86,9 +115,19 @@ class TerminalSocket(
                                 it.toString(Charsets.UTF_8)
                             )
                         }
-                        .onFailure { android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}") }
-                        .getOrNull()
-                        ?.let { trySend(it) }
+                        .onSuccess { trySend(it) }
+                        // On a delta stream a frame the app cannot read is not
+                        // survivable by skipping it: later frames complete
+                        // themselves from one this socket never saw. Reconnect
+                        // and resync from a full replay instead. Decrypt
+                        // failures come through here too -- they are a desync
+                        // by any other name, and the reconnect is the same
+                        // remedy. Off a delta stream the old behaviour stands,
+                        // because each frame still stands alone.
+                        .onFailure {
+                            android.util.Log.w("TerminalSocket", "dropped frame: ${it.message}")
+                            if (delta) close(DesyncException(it))
+                        }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

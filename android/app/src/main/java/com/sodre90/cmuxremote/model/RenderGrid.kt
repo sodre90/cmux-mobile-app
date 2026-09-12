@@ -33,6 +33,33 @@ data class RenderGrid(
     @SerialName("state_seq") val stateSeq: Long = 0L,
 )
 
+/**
+ * Completes a delta frame from the frame before it.
+ *
+ * The bridge leaves out render-grid blocks it has already sent unchanged --
+ * scrollback alone is 143KB of a 187KB frame -- and names them in
+ * [TerminalDown.unchanged]. Each named block is taken from [previous] instead.
+ *
+ * Absent is not the same as unchanged, which is why the names are carried
+ * explicitly: an empty scrollback arrives as an absent field too, so a grid
+ * whose scrollback genuinely cleared must still be able to say so.
+ *
+ * With no previous grid to draw on -- the first frame, or a frame after a
+ * reconnect -- this returns the grid as it arrived. That is safe because the
+ * bridge only omits blocks after a full replay it knows the client received,
+ * and a reconnect always starts with a fresh full replay.
+ */
+internal fun RenderGrid.mergedOnto(previous: RenderGrid?, unchanged: List<String>): RenderGrid {
+    if (previous == null || unchanged.isEmpty()) return this
+    return if (UnchangedBlock.SCROLLBACK_SPANS in unchanged) {
+        // Only the spans are carried over: the bridge sends scrollback_rows on
+        // every frame, so this frame's own count is the current one.
+        copy(scrollbackSpans = previous.scrollbackSpans)
+    } else {
+        this
+    }
+}
+
 @Serializable
 data class Cursor(
     val row: Int = 0,

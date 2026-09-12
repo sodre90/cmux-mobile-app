@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -297,4 +298,134 @@ func TestASmallFrameStaysUncompressedOnANegotiatedStream(t *testing.T) {
 		return
 	}
 	t.Fatal("no ack frame arrived")
+}
+
+// A pane whose scrollback never changes but whose visible rows do -- the
+// ordinary case for an agent printing output below a long history.
+const fakeStickyScrollbackScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c 'mobile.terminal.replay' "$CMUX_FAKE_LOG")
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"scrollback_rows":2,"scrollback_spans":[{"row":0,"text":"history"}],"terminal_theme":{"bg":"#000"},"row_spans":[{"row":0,"text":"line-$n"}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+func TestOutputFramesOmitAnUnchangedScrollback(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeStickyScrollbackScript)
+
+	c, resp := dialTerminal(t, srv.URL, "/terminal/SURF1?delta=1", "relay-secret", deviceID)
+	defer c.Close()
+	if got := resp.Header.Get(deltaHeader); got != "1" {
+		t.Fatalf("bridge did not confirm delta frames on the 101: %q", got)
+	}
+
+	// The replay must be whole: it is what a reconnecting app rebuilds from.
+	_, replay := readFrame(t, c, secret, 0, false)
+	if replay.Type != "replay" {
+		t.Fatalf("want replay first, got %q", replay.Type)
+	}
+	if !strings.Contains(string(replay.Grid), "scrollback_spans") {
+		t.Fatal("the replay frame must carry the scrollback in full")
+	}
+	if len(replay.Unchanged) != 0 {
+		t.Fatalf("a replay frame must omit nothing, got %v", replay.Unchanged)
+	}
+
+	_, out := readFrame(t, c, secret, 1, false)
+	if out.Type != "output" {
+		t.Fatalf("want an output frame, got %q", out.Type)
+	}
+	if strings.Contains(string(out.Grid), "scrollback_spans") {
+		t.Fatalf("unchanged scrollback was repeated: %s", out.Grid)
+	}
+	if strings.Contains(string(out.Grid), "terminal_theme") {
+		t.Fatalf("unchanged theme was repeated: %s", out.Grid)
+	}
+	// The visible rows did change, so they must still be there.
+	if !strings.Contains(string(out.Grid), "line-") {
+		t.Fatalf("output frame lost its row spans: %s", out.Grid)
+	}
+	want := map[string]bool{"scrollback_spans": true, "terminal_theme": true}
+	if len(out.Unchanged) != len(want) {
+		t.Fatalf("want %d omitted blocks named, got %v", len(want), out.Unchanged)
+	}
+	for _, k := range out.Unchanged {
+		if !want[k] {
+			t.Fatalf("unexpected block named unchanged: %q", k)
+		}
+	}
+}
+
+// The regression that makes the handshake necessary: an app that never asked
+// must keep getting whole grids, or its scrollback silently empties.
+func TestOutputFramesStayWholeWithoutTheDeltaHandshake(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeStickyScrollbackScript)
+
+	c, resp := dialTerminal(t, srv.URL, "/terminal/SURF1", "relay-secret", deviceID)
+	defer c.Close()
+	if got := resp.Header.Get(deltaHeader); got != "" {
+		t.Fatalf("bridge confirmed delta frames to a client that never asked: %q", got)
+	}
+	readFrame(t, c, secret, 0, false) // replay
+
+	_, out := readFrame(t, c, secret, 1, false)
+	if out.Type != "output" {
+		t.Fatalf("want an output frame, got %q", out.Type)
+	}
+	if !strings.Contains(string(out.Grid), "scrollback_spans") {
+		t.Fatalf("an un-negotiated client lost its scrollback: %s", out.Grid)
+	}
+	if len(out.Unchanged) != 0 {
+		t.Fatalf("an un-negotiated client must never be told about omissions, got %v", out.Unchanged)
+	}
+}
+
+// Styles and modes drive what the user is looking at right now, so they are
+// deliberately not sticky even though they repeat.
+func TestVisibleStateIsNeverOmitted(t *testing.T) {
+	for _, field := range []string{"styles", "modes", "row_spans", "cursor"} {
+		for _, sticky := range stickyGridFields {
+			if field == sticky {
+				t.Fatalf("%q must not be sticky: it decides what is on screen now", field)
+			}
+		}
+	}
+}
+
+func TestTheDeltaEncoderRepeatsABlockThatChanged(t *testing.T) {
+	d := newDeltaEncoder()
+	first := json.RawMessage(`{"scrollback_spans":[{"row":0,"text":"a"}],"row_spans":[]}`)
+	if _, omitted := d.strip(first); len(omitted) != 0 {
+		t.Fatalf("nothing can be omitted from the first frame, got %v", omitted)
+	}
+	// Same scrollback -> omitted.
+	if _, omitted := d.strip(first); len(omitted) != 1 || omitted[0] != "scrollback_spans" {
+		t.Fatalf("want scrollback omitted on a repeat, got %v", omitted)
+	}
+	// Changed scrollback -> sent again, and remembered at its new value.
+	grown := json.RawMessage(`{"scrollback_spans":[{"row":0,"text":"a"},{"row":1,"text":"b"}],"row_spans":[]}`)
+	got, omitted := d.strip(grown)
+	if len(omitted) != 0 {
+		t.Fatalf("a changed scrollback must be re-sent, got %v", omitted)
+	}
+	if !strings.Contains(string(got), `"b"`) {
+		t.Fatalf("the changed scrollback is missing from the frame: %s", got)
+	}
+	if _, omitted := d.strip(grown); len(omitted) != 1 {
+		t.Fatalf("the new value must now be the one remembered, got %v", omitted)
+	}
+}
+
+func TestTheDeltaEncoderPassesAnUndecodableGridThrough(t *testing.T) {
+	d := newDeltaEncoder()
+	bad := json.RawMessage(`not json`)
+	got, omitted := d.strip(bad)
+	if !bytes.Equal(got, bad) || omitted != nil {
+		t.Fatalf("an undecodable grid must pass through whole, got %s / %v", got, omitted)
+	}
 }
