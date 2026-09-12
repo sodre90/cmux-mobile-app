@@ -91,8 +91,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// cmux's top-level seq (and render_grid.state_seq) is always 0, so we can't
-	// gate on it — instead we forward whenever the render-grid bytes change.
-	lastGrid := fr.Grid
+	// gate on it — instead we forward whenever the render-grid content changes,
+	// ignoring the bookkeeping counters that change on their own (see
+	// [gridFingerprint]).
+	lastFingerprint := gridFingerprint(fr.Grid)
 
 	// Output poll loop is the sole writer after the initial replay. Besides
 	// the ticker, an input nudge (below) triggers an immediate replay: without
@@ -137,10 +139,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		if down := outage.recovered(); down > 0 {
 			slog.Info("terminal: replay working again", "surface_id", id, "down_for", down.Round(time.Second))
 		}
-		if bytes.Equal(next.Grid, lastGrid) {
+		fingerprint := gridFingerprint(next.Grid)
+		if bytes.Equal(fingerprint, lastFingerprint) {
 			return true
 		}
-		lastGrid = next.Grid
+		lastFingerprint = fingerprint
 		next.Type = "output"
 		if err := write(next); err != nil {
 			slog.Warn("terminal: output write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
@@ -174,6 +177,45 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// volatileGridFields are the render-grid keys cmux advances on its own clock,
+// whether or not anything on screen changed. Both are plain counters the app
+// never reads.
+//
+// They are what made the poll loop's unchanged-grid check dead code: measured
+// against a live idle pane (cmux-app-2nj), three consecutive replays 400ms
+// apart differed in these two fields and in nothing else -- every other key,
+// including all 143KB of scrollback_spans, was byte-identical. So a pane
+// sitting at a shell prompt re-sent its whole ~187KB grid four times a second
+// to deliver two incrementing integers.
+var volatileGridFields = []string{"render_revision", "terminal_theme_revision"}
+
+// gridFingerprint reduces a render grid to a value that compares equal when
+// the grid's content is unchanged, by dropping [volatileGridFields]. Only the
+// top level is decoded -- every value below it stays raw -- so this costs one
+// shallow pass rather than parsing the span arrays.
+//
+// A grid that will not decode is returned verbatim, which compares exactly as
+// it did before this existed. That is the same direction every failure here
+// takes: an unrecognised grid, or a future cmux counter not in the list above,
+// costs a redundant frame, never a suppressed one. Dropping a field the app
+// DOES render would be the unsafe direction, which is why this is a list of
+// known-volatile keys rather than a list of known-meaningful ones.
+func gridFingerprint(grid json.RawMessage) []byte {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(grid, &fields); err != nil {
+		return grid
+	}
+	for _, k := range volatileGridFields {
+		delete(fields, k)
+	}
+	// json.Marshal sorts map keys, so equal content always yields equal bytes.
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return grid
+	}
+	return out
 }
 
 // terminalReplayGrace bounds how long the poll loop will sit on a stale grid

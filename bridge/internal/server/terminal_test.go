@@ -1,10 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +44,23 @@ case "$2" in
     n=$(grep -c 'mobile.terminal.replay' "$CMUX_FAKE_LOG")
     cat <<JSON
 {"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"row_spans":[{"row":0,"text":"line-$n"}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+// fakeIdleTerminalScript answers replay with an unchanging screen whose
+// render_revision and terminal_theme_revision advance on every call. This is
+// what a real idle pane does (cmux-app-2nj): the content is byte-identical
+// poll to poll and only the two counters move.
+const fakeIdleTerminalScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c 'mobile.terminal.replay' "$CMUX_FAKE_LOG")
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"render_revision":$n,"terminal_theme_revision":$n,"row_spans":[{"row":0,"text":"idle"}]}}
 JSON
     ;;
   *) echo '{"ok":true}' ;;
@@ -255,6 +276,91 @@ func TestTerminalForwardsContentChange(t *testing.T) {
 	}
 	if !strings.Contains(string(out.Grid), "line-") {
 		t.Fatalf("output grid missing changed content: %s", out.Grid)
+	}
+}
+
+// An idle pane must cost nothing after its replay. Before the fingerprint
+// check this failed: the two counters moved every poll, so the unchanged-grid
+// comparison never matched and a full grid went out four times a second.
+func TestTerminalDoesNotForwardCounterOnlyChanges(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeIdleTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+
+	armReadDeadline(t, c)
+	var replay wire.TerminalDown
+	if err := c.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if replay.Type != "replay" {
+		t.Fatalf("first frame must be replay, got %q", replay.Type)
+	}
+
+	// Long enough for several 250ms polls to have run and been discarded.
+	if err := c.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var out wire.TerminalDown
+	err := c.ReadJSON(&out)
+	if err == nil {
+		t.Fatalf("forwarded a frame for a counter-only change: %s", out.Grid)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("want a read timeout (nothing forwarded), got: %v", err)
+	}
+
+	// The poll loop must still be running, not wedged: assert it actually
+	// called replay repeatedly while forwarding none of it.
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if n := strings.Count(string(data), "mobile.terminal.replay"); n < 2 {
+		t.Fatalf("poll loop stopped polling: only %d replay calls", n)
+	}
+}
+
+func TestGridFingerprintIgnoresVolatileCounters(t *testing.T) {
+	a := json.RawMessage(`{"rows":24,"render_revision":1,"terminal_theme_revision":7,"row_spans":[{"row":0,"text":"x"}]}`)
+	b := json.RawMessage(`{"rows":24,"render_revision":2,"terminal_theme_revision":8,"row_spans":[{"row":0,"text":"x"}]}`)
+	if !bytes.Equal(gridFingerprint(a), gridFingerprint(b)) {
+		t.Fatal("grids differing only in the volatile counters must fingerprint equal")
+	}
+}
+
+func TestGridFingerprintKeepsRealContentChanges(t *testing.T) {
+	a := json.RawMessage(`{"render_revision":1,"row_spans":[{"row":0,"text":"x"}]}`)
+	b := json.RawMessage(`{"render_revision":1,"row_spans":[{"row":0,"text":"y"}]}`)
+	if bytes.Equal(gridFingerprint(a), gridFingerprint(b)) {
+		t.Fatal("a changed row span must not fingerprint equal")
+	}
+}
+
+// Key order is not guaranteed across cmux replies, and a map marshals in
+// sorted order, so the same content encoded two ways must still compare equal.
+func TestGridFingerprintIsOrderIndependent(t *testing.T) {
+	a := json.RawMessage(`{"rows":24,"columns":80}`)
+	b := json.RawMessage(`{"columns":80,"rows":24}`)
+	if !bytes.Equal(gridFingerprint(a), gridFingerprint(b)) {
+		t.Fatal("the same content in a different key order must fingerprint equal")
+	}
+}
+
+// A grid that will not decode must compare exactly as it did before the
+// fingerprint existed -- redundant frames, never suppressed ones.
+func TestGridFingerprintFallsBackToRawBytes(t *testing.T) {
+	bad := json.RawMessage(`not json`)
+	if !bytes.Equal(gridFingerprint(bad), bad) {
+		t.Fatal("an undecodable grid must fall back to its raw bytes")
+	}
+	if bytes.Equal(gridFingerprint(bad), gridFingerprint(json.RawMessage(`also not json`))) {
+		t.Fatal("two different undecodable grids must not collapse together")
 	}
 }
 
