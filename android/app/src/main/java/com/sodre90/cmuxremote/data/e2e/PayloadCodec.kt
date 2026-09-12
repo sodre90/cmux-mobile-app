@@ -75,6 +75,9 @@ private fun inflate(body: ByteArray): ByteArray {
                 // block, so `finished()` may never become true; running out of
                 // input is the ordinary end of a frame, not an error.
                 if (inflater.needsInput() || inflater.needsDictionary()) break
+                // Neither finished nor waiting on us, yet producing nothing:
+                // looping again would spin the socket's reader thread forever.
+                throw PayloadCodecException("inflate made no progress")
             }
             if (out.size() + n > MAX_PAYLOAD_SIZE) throw PayloadCodecException("payload too large")
             out.write(chunk, 0, n)

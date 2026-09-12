@@ -43,6 +43,12 @@ every section after it itemizes changes individually. Purely internal refactors
   frame -- the same bargain delta frames already made, and visible as a
   reconnect rather than as a wrong pane.
 
+### Fixed
+
+- A corrupt compressed frame could spin the terminal socket's reader thread
+  instead of dropping the frame, if the decompressor stalled without either
+  finishing or asking for more input.
+
 ## [0.6.0] - 2026-09-12
 
 Terminal streaming used to cost a measured 146 KB/s on a busy pane and roughly
