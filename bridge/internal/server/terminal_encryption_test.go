@@ -664,3 +664,84 @@ func TestEvenAnAckStaysOnTheSharedWindow(t *testing.T) {
 	}
 	t.Fatal("no ack frame arrived")
 }
+
+// What cmux actually does on a scrolling pane, measured live (cmux-app-bly):
+// the same two styles come back with different ids on every replay, so every
+// span's bytes change while its text does not. The visible row changes each
+// call so a frame is sent; the scrollback and styles are content-identical.
+const fakeRenumberingScript = `#!/bin/sh
+printf '%s\n' "$*" >> "$CMUX_FAKE_LOG"
+case "$2" in
+  mobile.terminal.replay)
+    n=$(grep -c 'mobile.terminal.replay' "$CMUX_FAKE_LOG")
+    if [ $((n % 2)) -eq 0 ]; then a=1; b=2; else a=2; b=1; fi
+    cat <<JSON
+{"columns":80,"rows":24,"seq":0,"surface_id":"S","workspace_id":"W","render_grid":{"format":"cmux.render-grid.v1","columns":80,"rows":24,"render_epoch":"E","scrollback_rows":2,"cleared_rows":[],"scrolled_rows":0,"anchor":"viewport","active_screen":"primary","styles":[{"id":0,"foreground":"#fff","background":"#000"},{"id":$a,"foreground":"#aaa"},{"id":$b,"foreground":"#bbb"}],"scrollback_spans":[{"row":0,"column":0,"style_id":$a,"text":"history","cell_width":1}],"row_spans":[{"row":0,"column":0,"style_id":$b,"text":"line-$n","cell_width":1}]}}
+JSON
+    ;;
+  *) echo '{"ok":true}' ;;
+esac
+`
+
+// The acceptance test for cmux-app-bly's first commit. Before it, a renumbered
+// table made unchanged=[] on every frame -- the delta encoder saw different
+// bytes in blocks whose content had not moved.
+func TestARenumberedStyleTableNoLongerDefeatsTheDelta(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeRenumberingScript)
+
+	c, _ := dialTerminal(t, srv.URL, "/terminal/SURF1?delta=1", "relay-secret", deviceID)
+	defer c.Close()
+	_, replay := readFrame(t, c, secret, 0, false)
+	if replay.Type != "replay" {
+		t.Fatalf("want replay first, got %q", replay.Type)
+	}
+
+	_, out := readFrame(t, c, secret, 1, false)
+	if out.Type != "output" {
+		t.Fatalf("want an output frame, got %q", out.Type)
+	}
+	for _, block := range []string{"scrollback_spans", "styles"} {
+		if !slices.Contains(out.Unchanged, block) {
+			t.Fatalf("%s did not change in content and must be omitted; unchanged=%v grid=%s", block, out.Unchanged, out.Grid)
+		}
+	}
+	// The row that did change still points at a style the carried table has.
+	if !strings.Contains(string(out.Grid), `"style_id":1`) && !strings.Contains(string(out.Grid), `"style_id":2`) {
+		t.Fatalf("output row lost its style: %s", out.Grid)
+	}
+}
+
+// The app only ever sees ids the frame's own table (or the carried one)
+// defines, so canonicalisation cannot leave a span dangling.
+func TestEveryStyleIdASpanUsesIsInTheTableItArrivedWith(t *testing.T) {
+	srv, deviceID, secret := newEncryptedTerminalServer(t, fakeRenumberingScript)
+
+	c, _ := dialTerminal(t, srv.URL, "/terminal/SURF1", "relay-secret", deviceID)
+	defer c.Close()
+	for counter := range uint64(3) {
+		_, down := readFrame(t, c, secret, counter, false)
+		var g struct {
+			Styles []struct {
+				ID int `json:"id"`
+			} `json:"styles"`
+			Rows []struct {
+				StyleID int `json:"style_id"`
+			} `json:"row_spans"`
+			Back []struct {
+				StyleID int `json:"style_id"`
+			} `json:"scrollback_spans"`
+		}
+		if err := json.Unmarshal(down.Grid, &g); err != nil {
+			t.Fatal(err)
+		}
+		have := map[int]bool{}
+		for _, s := range g.Styles {
+			have[s.ID] = true
+		}
+		for _, s := range append(g.Rows, g.Back...) {
+			if !have[s.StyleID] {
+				t.Fatalf("frame %d: span uses style %d, table has %v", counter, s.StyleID, have)
+			}
+		}
+	}
+}

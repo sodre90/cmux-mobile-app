@@ -1,10 +1,23 @@
 # Every span changes every frame because cmux renumbers style ids — Design
 
 - **Date:** 2026-09-12
-- **Status:** Proposed — not yet approved
+- **Status:** Approved 2026-09-12 — ready for implementation (see Decisions)
 - **Author:** perdos
 - **Bead:** `cmux-app-bly`
 - **Follows:** `cmux-app-rw1` (shared-window compression), which this unblocks
+
+## Decisions
+
+Reviewed decision by decision on 2026-09-12; every recommendation was taken.
+
+| # | decision | outcome |
+|---|---|---|
+| 1 | The problem is `style_id` churn, not scrollback volume | accepted |
+| 2 | The bridge may parse cmux's span schema | accepted, with passthrough on anything unexpected and unknown span fields copied through |
+| 3 | The six bail-out states below | accepted as listed |
+| 4 | A negotiated `styles_appended` wire field (commit 2) | approved, name as proposed |
+| 5 | The scrollback shift delta (commit 3) | deferred until commits 1–2 are measured |
+| 6 | Per-frame CPU budget for canonicalisation | **under 5 ms**; anything above comes back with the number before landing |
 
 ## Context
 
@@ -62,11 +75,20 @@ row 2->1  span0: diff={'row': (2, 1), 'style_id': (6, 4)}   text=' '
 row 6->5  span0: diff={'row': (6, 5), 'style_id': (12, 10)} text='  7 -'
 ```
 
-`row` shifting is expected. **`style_id` shifting is the problem.** cmux builds
-its style table from the styles currently in use; when rows scroll off, unused
-entries are dropped and the remaining ids compact downward. The style *content*
-is unchanged — 47 of 48 entries are identical — but every id moves, so every one
-of the ~1400 scrollback spans and ~600 row spans changes bytes.
+`row` shifting is expected. **`style_id` shifting is the problem.** cmux numbers
+styles in the order it first meets them scanning the grid, and rebuilds that
+table on every replay. Scrolling one row changes what comes first, so the ids
+are reassigned even though the styles are not: on the observed scroll, 47 of 48
+entries had identical content, only 23 kept their id, and the rest moved by −2
+(with two jumping 1→15 and 2→16 — a reorder, not a compaction). Every one of the
+~1400 scrollback spans and ~600 row spans carries an id, so all of them change
+bytes.
+
+The one exception is id 0: cmux keeps its default style there on every frame
+observed, and the app depends on that (blank cells are filled with style 0 and
+the grid's default background is read from it). The bridge must therefore pin
+its own id 0 to cmux's id 0, and treat a frame whose id 0 is a different style
+as a table reset rather than remapping it.
 
 That single renumbering invalidates 158 KB of otherwise-identical data. No
 byte-level delta and no compressor can see through it.

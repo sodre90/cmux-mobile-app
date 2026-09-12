@@ -140,6 +140,12 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fr.Type = "replay"
+	// Style ids get their stable identity before anything downstream compares
+	// bytes: the fingerprint that decides whether to send at all, and the delta
+	// encoder that decides what to leave out, both only work on a grid whose
+	// unchanged parts are unchanged bytes. See styleTable.
+	styles := newStyleTable()
+	fr.Grid = styles.canonicalise(fr.Grid)
 	if err := write(fr); err != nil {
 		slog.Warn("terminal: initial write failed", "surface_id", id, "dur_ms", time.Since(start).Milliseconds(), "err", err)
 		return
@@ -198,6 +204,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		if down := outage.recovered(); down > 0 {
 			slog.Info("terminal: replay working again", "surface_id", id, "down_for", down.Round(time.Second))
 		}
+		next.Grid = styles.canonicalise(next.Grid)
 		fingerprint := gridFingerprint(next.Grid)
 		if bytes.Equal(fingerprint, lastFingerprint) {
 			return true

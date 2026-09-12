@@ -12,6 +12,25 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+### Changed
+
+- The bridge now gives style ids a stable identity per terminal socket. cmux
+  renumbers its style table on every replay in the order it first meets each
+  style, so scrolling one row moved almost every id even though the styles
+  themselves were unchanged -- and since every span carries an id, that
+  renumbering made the ~1400 scrollback spans and ~600 visible spans look
+  changed on every frame, defeating both the sticky-block delta and the shared
+  compression window. The bridge now numbers styles by content and rewrites
+  the ids in `row_spans` and `scrollback_spans` to match, so a scrollback that
+  did not scroll is byte-identical again and gets omitted. Id 0 stays the
+  default style, which the app depends on. Replayed over 20 captured live
+  frames, the scrollback block was omitted on 18 of 19 transitions (the
+  remaining one was a real scroll) at 3.5-4.3 ms per 308 KB frame; the
+  bandwidth this saves on the wire has not yet been measured live. Any grid
+  shape the bridge does not recognise -- a changed epoch, a resize, cleared
+  rows, a panned viewport, the alternate screen, a span or style missing a
+  field -- goes out exactly as cmux produced it. (cmux-app-bly)
+
 ## [0.7.0] - 2026-09-12
 
 Terminal frames now compress against a window shared across the whole socket,
