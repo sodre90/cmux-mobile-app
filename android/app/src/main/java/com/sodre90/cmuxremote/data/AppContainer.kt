@@ -144,7 +144,16 @@ class AppContainer(
     override fun terminalSocket(slot: ConnectionSlot, surfaceId: String): TerminalSocket? =
         settings.bridgeConfig(
             slot
-        )?.let { TerminalSocket(httpClient(slot, it), it.baseUrl, surfaceId, sessions.getValue(slot), cipher) }
+        )?.let {
+            TerminalSocket(
+                httpClient(slot, it),
+                it.baseUrl,
+                surfaceId,
+                sessions.getValue(slot),
+                cipher,
+                terminalDisplayStore.loadTerminalPollMs(),
+            )
+        }
 
     /** Unauthenticated -- POST /devices/pair takes no bearer token (see
      *  bridge/internal/relay/relay.go's handleDevicePair). */
@@ -184,6 +193,11 @@ class AppContainer(
 
     override fun saveWheelScrolling(enabled: Boolean) =
         terminalDisplayStore.saveWheelScrolling(enabled)
+
+    override fun loadTerminalPollMs(): Int = terminalDisplayStore.loadTerminalPollMs()
+
+    override fun saveTerminalPollMs(ms: Int) =
+        terminalDisplayStore.saveTerminalPollMs(ms)
 
     // Shared with fallbackBridge below and handed out via relayHealth() so
     // every reconnecting socket subscription and the REST fallback path

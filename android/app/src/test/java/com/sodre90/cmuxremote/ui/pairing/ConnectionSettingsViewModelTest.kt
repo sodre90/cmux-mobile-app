@@ -5,6 +5,7 @@ import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.CredentialStatus
+import com.sodre90.cmuxremote.data.DEFAULT_TERMINAL_POLL_MS
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.RegistrationOutcome
@@ -50,6 +51,9 @@ private class FakeTerminalDisplayGateway : TerminalDisplayGateway {
     var wheelScrolling = true
     override fun loadWheelScrolling(): Boolean = wheelScrolling
     override fun saveWheelScrolling(enabled: Boolean) { wheelScrolling = enabled }
+    var pollMs = DEFAULT_TERMINAL_POLL_MS
+    override fun loadTerminalPollMs(): Int = pollMs
+    override fun saveTerminalPollMs(ms: Int) { pollMs = ms }
     override fun saveFontZoom(zoom: Float) = Unit
 }
 

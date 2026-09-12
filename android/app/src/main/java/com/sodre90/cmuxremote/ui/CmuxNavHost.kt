@@ -186,6 +186,7 @@ fun CmuxNavHost(
             val directCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.DIRECT).collectAsState()
             var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
             var wheelScrolling by rememberSaveable { mutableStateOf(testPushVm.loadWheelScrolling()) }
+            var terminalPollMs by rememberSaveable { mutableIntStateOf(testPushVm.loadTerminalPollMs()) }
             val bridgeVersion by testPushVm.bridgeVersion.collectAsState()
             // Keyed on forgetGeneration so forgetting or re-pairing a slot
             // re-asks rather than leaving the previous agent's version on
@@ -199,6 +200,7 @@ fun CmuxNavHost(
                 testPushState = testPushState,
                 fontZoom = fontZoom,
                 wheelScrolling = wheelScrolling,
+                terminalPollMs = terminalPollMs,
                 appVersion = BuildConfig.VERSION_NAME,
                 bridgeVersion = bridgeVersion,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
@@ -214,6 +216,12 @@ fun CmuxNavHost(
                 onWheelScrollingChange = {
                     wheelScrolling = it
                     testPushVm.saveWheelScrolling(it)
+                },
+                // Takes effect on the next socket open, not on a pane already
+                // on screen -- the interval is sent when the socket is dialled.
+                onTerminalPollMsChange = {
+                    terminalPollMs = it
+                    testPushVm.saveTerminalPollMs(it)
                 },
                 onDone = { navController.leaveSettings() },
             )

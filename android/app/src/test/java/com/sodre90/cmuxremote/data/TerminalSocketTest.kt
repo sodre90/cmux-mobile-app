@@ -175,7 +175,11 @@ class TerminalSocketTest {
      * that does or does not support compression. Returns the frame the app
      * decoded plus the request line the server saw.
      */
-    private fun frameThroughBridge(deflate: Boolean, confirmHeader: Boolean): Pair<TerminalDown, String> =
+    private fun frameThroughBridge(
+        deflate: Boolean,
+        confirmHeader: Boolean,
+        pollMs: Int = DEFAULT_TERMINAL_POLL_MS,
+    ): Pair<TerminalDown, String> =
         runBlocking {
             val serverSession = SharedSecretSession(secret)
             val json = """{"type":"replay","columns":3,"rows":1,"seq":1,""" +
@@ -205,6 +209,7 @@ class TerminalSocketTest {
                 "surface-1",
                 SharedSecretSession(secret),
                 cipher,
+                pollMs,
             )
             withTimeout(5_000) {
                 val first = CompletableDeferred<TerminalDown>()
@@ -227,6 +232,22 @@ class TerminalSocketTest {
             end()
             out.copyOfRange(0, n)
         }
+
+    /** The bridge clamps the value it is given; this side's job is only to send
+     *  the one the user chose, on every socket it opens. */
+    @Test
+    fun tellsTheBridgeHowOftenToCheckForOutput() {
+        val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false, pollMs = 2000)
+        assertTrue("want ?poll_ms=2000 on the terminal URL, got $path", path.contains("poll_ms=2000"))
+    }
+
+    /** An unconfigured app must still name an interval rather than leaving the
+     *  bridge to guess, so that the default is one number and not two. */
+    @Test
+    fun sendsTheDefaultIntervalWhenNothingWasChosen() {
+        val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
+        assertTrue("want the default interval on the URL, got $path", path.contains("poll_ms=250"))
+    }
 
     @Test
     fun asksTheBridgeForCompression() {

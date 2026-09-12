@@ -26,11 +26,19 @@ class TerminalDisplayStore(context: Context) {
         prefs.edit().putBoolean(KEY_WHEEL_SCROLLING, enabled).apply()
     }
 
+    fun loadTerminalPollMs(): Int =
+        nearestPollChoice(prefs.getInt(KEY_TERMINAL_POLL_MS, DEFAULT_TERMINAL_POLL_MS))
+
+    fun saveTerminalPollMs(ms: Int) {
+        prefs.edit().putInt(KEY_TERMINAL_POLL_MS, ms).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "cmux_terminal_display_prefs"
         const val KEY_FONT_ZOOM = "font_zoom"
         const val DEFAULT_FONT_ZOOM = 1f
         const val KEY_WHEEL_SCROLLING = "wheel_scrolling"
         const val DEFAULT_WHEEL_SCROLLING = false
+        const val KEY_TERMINAL_POLL_MS = "terminal_poll_ms"
     }
 }

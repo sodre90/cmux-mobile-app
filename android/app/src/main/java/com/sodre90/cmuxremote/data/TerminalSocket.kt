@@ -79,8 +79,13 @@ class TerminalSocket(
     surfaceId: String,
     private val session: PairedSession,
     private val cipher: Cipher,
+    pollMs: Int = DEFAULT_TERMINAL_POLL_MS,
 ) {
-    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1&delta=1"
+    // poll_ms needs no confirming response header the way deflate and delta do:
+    // frames decode identically whatever the interval, so there is nothing for
+    // this side to arm. A bridge too old to know the parameter ignores it and
+    // keeps its own rate.
+    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1&delta=1&poll_ms=$pollMs"
 
     @Volatile
     private var socket: WebSocket? = null

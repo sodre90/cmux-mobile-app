@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -67,6 +68,10 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	// absent field as an EMPTY scrollback and lose its pan-up history.
 	deflate := s.sessions != nil && r.URL.Query().Get("deflate") == "1"
 	delta := r.URL.Query().Get("delta") == "1"
+	// Unlike deflate and delta this needs no confirming header: the client
+	// decodes frames the same way whatever the interval, so there is nothing
+	// for it to arm or leave disarmed. An old bridge simply ignores it.
+	pollInterval := terminalPollInterval(r.URL.Query().Get("poll_ms"), s.terminalPoll)
 	upgradeHeader := http.Header{}
 	if deflate {
 		upgradeHeader.Set(deflateHeader, "1")
@@ -185,7 +190,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
-	t := time.NewTicker(s.terminalPoll)
+	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -407,6 +412,31 @@ const deflateHeader = "X-Cmux-Deflate"
 // deltaHeader is the matching confirmation for ?delta=1. Mirrored in the app as
 // TerminalSocket's DELTA_HEADER.
 const deltaHeader = "X-Cmux-Delta"
+
+// The bounds a client's ?poll_ms= request is held to. The floor is the old
+// fixed rate: a client may spend more of its data allowance than the default
+// but not less of the Mac's, since every tick is a cmux replay. The ceiling is
+// where a pane stops feeling live at all.
+const (
+	minTerminalPoll = 250 * time.Millisecond
+	maxTerminalPoll = 10 * time.Second
+)
+
+// terminalPollInterval reads a client's requested poll interval, clamped to
+// [minTerminalPoll, maxTerminalPoll]. Anything absent or unreadable falls back
+// to the server default rather than failing the connection: an interval is a
+// preference, not a correctness requirement, and an old client sends none.
+//
+// Slowing the tick does not slow typing. Input nudges an immediate replay (see
+// the nudge channel in terminalReadLoop), so this governs only how quickly
+// output the user did not type appears.
+func terminalPollInterval(raw string, fallback time.Duration) time.Duration {
+	ms, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return min(max(time.Duration(ms)*time.Millisecond, minTerminalPoll), maxTerminalPoll)
+}
 
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.

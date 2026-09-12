@@ -33,4 +33,14 @@ interface TerminalDisplayGateway {
      */
     fun loadWheelScrolling(): Boolean
     fun saveWheelScrolling(enabled: Boolean)
+
+    /**
+     * How often the bridge re-reads an open pane for output, in milliseconds --
+     * see [DEFAULT_TERMINAL_POLL_MS] for what the dial actually trades.
+     *
+     * Read when a terminal socket is opened, so a change takes effect on the
+     * next connect rather than on a pane already on screen.
+     */
+    fun loadTerminalPollMs(): Int
+    fun saveTerminalPollMs(ms: Int)
 }

@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.sodre90.cmuxremote.R
 import com.sodre90.cmuxremote.data.ConnectionSlot
 import com.sodre90.cmuxremote.data.CredentialStatus
+import com.sodre90.cmuxremote.data.TERMINAL_POLL_CHOICES
 import com.sodre90.cmuxremote.ui.terminal.MAX_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.MIN_ZOOM
 import com.sodre90.cmuxremote.ui.terminal.ZOOM_STEP
@@ -64,6 +66,7 @@ fun ConnectionSettingsScreen(
     testPushState: TestPushUiState,
     fontZoom: Float,
     wheelScrolling: Boolean,
+    terminalPollMs: Int,
     appVersion: String,
     bridgeVersion: BridgeVersionUiState,
     onPair: (ConnectionSlot) -> Unit,
@@ -71,6 +74,7 @@ fun ConnectionSettingsScreen(
     onSendTestPush: () -> Unit,
     onFontZoomChange: (Float) -> Unit,
     onWheelScrollingChange: (Boolean) -> Unit,
+    onTerminalPollMsChange: (Int) -> Unit,
     onDone: () -> Unit,
 ) {
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
@@ -126,6 +130,7 @@ fun ConnectionSettingsScreen(
             )
             FontSizeRow(zoom = fontZoom, onZoomChange = onFontZoomChange)
             WheelScrollingRow(enabled = wheelScrolling, onEnabledChange = onWheelScrollingChange)
+            TerminalPollRow(pollMs = terminalPollMs, onPollMsChange = onTerminalPollMsChange)
             if (paired) {
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
             }
@@ -328,6 +333,50 @@ private fun WheelScrollingRow(enabled: Boolean, onEnabledChange: (Boolean) -> Un
         }
     }
 }
+
+/**
+ * Picks how often the bridge re-reads an open pane for output.
+ *
+ * The one setting on this screen that spends data rather than shaping the
+ * picture, so the help text is a rate and not a taste: watching a busy pane
+ * costs a frame per tick, and halving the rate halves the cost. Typing is
+ * unaffected at any setting -- input is answered immediately rather than on the
+ * next tick -- so the only thing slower buys back is how promptly an agent's
+ * own output appears.
+ */
+@Composable
+private fun TerminalPollRow(pollMs: Int, onPollMsChange: (Int) -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.terminal_poll_title))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TERMINAL_POLL_CHOICES.forEach { choice ->
+                    FilterChip(
+                        selected = choice == pollMs,
+                        onClick = { onPollMsChange(choice) },
+                        label = { Text(pollChoiceLabel(choice)) },
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.terminal_poll_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Sub-second intervals read better as milliseconds, whole seconds as seconds. */
+@Composable
+private fun pollChoiceLabel(ms: Int): String =
+    if (ms < MILLIS_PER_SECOND) {
+        stringResource(R.string.terminal_poll_millis, ms)
+    } else {
+        stringResource(R.string.terminal_poll_seconds, ms / MILLIS_PER_SECOND)
+    }
+
+private const val MILLIS_PER_SECOND = 1000
 
 /** The two versions that can differ. The app updates from a release APK and the
  *  agent from a binary on the Mac, so "what am I running" has two answers, and

@@ -3,6 +3,7 @@ package com.sodre90.cmuxremote.ui
 import com.sodre90.cmuxremote.data.BridgeGateway
 import com.sodre90.cmuxremote.data.ConnectionMonitor
 import com.sodre90.cmuxremote.data.ConnectionSlot
+import com.sodre90.cmuxremote.data.DEFAULT_TERMINAL_POLL_MS
 import com.sodre90.cmuxremote.data.EventsSocket
 import com.sodre90.cmuxremote.data.FallbackBridgeClient
 import com.sodre90.cmuxremote.data.PairingGateway
@@ -83,6 +84,8 @@ class ViewModelConstructionTest {
         override fun loadFontZoom(): Float = zoom
         override fun loadWheelScrolling(): Boolean = true
         override fun saveWheelScrolling(enabled: Boolean) = Unit
+        override fun loadTerminalPollMs(): Int = DEFAULT_TERMINAL_POLL_MS
+        override fun saveTerminalPollMs(ms: Int) = Unit
         override fun saveFontZoom(zoom: Float) {
             this.zoom = zoom
         }

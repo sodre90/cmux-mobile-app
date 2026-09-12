@@ -635,3 +635,65 @@ func TestAFreshOutageAfterRecoveryGetsTheFullGraceAgain(t *testing.T) {
 		t.Fatal("a new outage must start its grace from scratch")
 	}
 }
+
+// The interval is a client preference, so the only thing the bridge owes it is
+// bounds: never faster than the old fixed rate (every tick is a cmux replay on
+// the user's Mac), never so slow the pane stops feeling live.
+func TestTheClientPollIntervalIsHeldToItsBounds(t *testing.T) {
+	fallback := 250 * time.Millisecond
+	for _, c := range []struct {
+		name string
+		raw  string
+		want time.Duration
+	}{
+		{"absent falls back", "", fallback},
+		{"unreadable falls back", "soon", fallback},
+		{"a plain value is honoured", "1000", time.Second},
+		{"below the floor is raised", "10", minTerminalPoll},
+		{"zero is raised, not treated as off", "0", minTerminalPoll},
+		{"negative is raised", "-5000", minTerminalPoll},
+		{"above the ceiling is capped", "600000", maxTerminalPoll},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := terminalPollInterval(c.raw, fallback); got != c.want {
+				t.Fatalf("terminalPollInterval(%q) = %v, want %v", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
+// The clamp is unit-tested above; this is the wiring. A pane whose content
+// changes every poll delivers an output frame promptly at the default rate, and
+// must not at a ten-second one -- which is only observable if the handler
+// actually gave the ticker the client's interval.
+func TestASlowClientIntervalHoldsBackTheNextOutputFrame(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeChangingTerminalScript)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	readReplayThenWaitForOutput := func(t *testing.T, query string) error {
+		t.Helper()
+		c := wsConnect(t, srv.URL, "/terminal/SURF1"+query, tok)
+		defer c.Close()
+		armReadDeadline(t, c)
+		var replay wire.TerminalDown
+		if err := c.ReadJSON(&replay); err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+		// Well inside the slow interval and well outside the default one.
+		if err := c.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var out wire.TerminalDown
+		return c.ReadJSON(&out)
+	}
+
+	if err := readReplayThenWaitForOutput(t, ""); err != nil {
+		t.Fatalf("at the default interval an output frame must arrive: %v", err)
+	}
+	if err := readReplayThenWaitForOutput(t, "?poll_ms=10000"); err == nil {
+		t.Fatal("at a 10s interval no output frame may arrive within 2s")
+	}
+}
