@@ -38,6 +38,7 @@ class AppContainer(
     val cipher = Cipher(LazySodiumAndroid(SodiumAndroid()))
     val workspaceOrderStore = WorkspaceOrderStore(appContext)
     val terminalDisplayStore = TerminalDisplayStore(appContext)
+    val networkCost = NetworkCost(appContext)
 
     private val sessions: Map<ConnectionSlot, CryptoSession> =
         ConnectionSlot.entries.associateWith { CryptoSession(appContext, it) }
@@ -151,7 +152,9 @@ class AppContainer(
                 surfaceId,
                 sessions.getValue(slot),
                 cipher,
-                terminalDisplayStore.loadTerminalPollMs(),
+                // Resolved per socket, not once at startup: the reconnect that
+                // follows a Wi-Fi/mobile switch picks up the other interval.
+                terminalDisplayStore.loadTerminalPollMs(networkCost.isMetered()),
             )
         }
 
@@ -194,10 +197,11 @@ class AppContainer(
     override fun saveWheelScrolling(enabled: Boolean) =
         terminalDisplayStore.saveWheelScrolling(enabled)
 
-    override fun loadTerminalPollMs(): Int = terminalDisplayStore.loadTerminalPollMs()
+    override fun loadTerminalPollMs(metered: Boolean): Int =
+        terminalDisplayStore.loadTerminalPollMs(metered)
 
-    override fun saveTerminalPollMs(ms: Int) =
-        terminalDisplayStore.saveTerminalPollMs(ms)
+    override fun saveTerminalPollMs(metered: Boolean, ms: Int) =
+        terminalDisplayStore.saveTerminalPollMs(metered, ms)
 
     // Shared with fallbackBridge below and handed out via relayHealth() so
     // every reconnecting socket subscription and the REST fallback path

@@ -241,12 +241,20 @@ class TerminalSocketTest {
         assertTrue("want ?poll_ms=2000 on the terminal URL, got $path", path.contains("poll_ms=2000"))
     }
 
-    /** An unconfigured app must still name an interval rather than leaving the
-     *  bridge to guess, so that the default is one number and not two. */
+    /**
+     * An unconfigured app must still name an interval rather than leaving the
+     * bridge to guess, so that the default is one number and not two. Asserted
+     * against the constant rather than a literal: the default is deliberately
+     * the metered one, and pinning a number here would just have to be edited
+     * whenever that judgement changes.
+     */
     @Test
     fun sendsTheDefaultIntervalWhenNothingWasChosen() {
         val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
-        assertTrue("want the default interval on the URL, got $path", path.contains("poll_ms=250"))
+        assertTrue(
+            "want poll_ms=$DEFAULT_TERMINAL_POLL_MS on the terminal URL, got $path",
+            path.contains("poll_ms=$DEFAULT_TERMINAL_POLL_MS"),
+        )
     }
 
     @Test

@@ -108,7 +108,9 @@
     <string name="terminal_poll_title">Check for new output every</string>
     <string name="terminal_poll_millis">%1$d ms</string>
     <string name="terminal_poll_seconds">%1$d s</string>
-    <string name="terminal_poll_help">How often the Mac is checked for output you did not type. Checking less often uses proportionally less mobile data on a busy pane, and costs you nothing while a pane is idle. Typing and pasting are answered immediately at every setting.</string>
+    <string name="terminal_poll_wifi_label">On Wi-Fi</string>
+    <string name="terminal_poll_mobile_label">On mobile data</string>
+    <string name="terminal_poll_help">How often the Mac is checked for output you did not type. Checking less often uses proportionally less data on a busy pane, and costs nothing either way while a pane is idle. Typing and pasting are answered immediately at every setting. A Wi-Fi hotspot you have marked as metered counts as mobile data.</string>
     <string name="terminal_font_size_reset">Reset to fit</string>
     <string name="terminal_font_size_help">100% fits the terminal\'s full width on screen; higher zooms in. Pinching inside a terminal changes the same setting.</string>
     <string name="connections_intro_title">Connect this phone to your Mac</string>

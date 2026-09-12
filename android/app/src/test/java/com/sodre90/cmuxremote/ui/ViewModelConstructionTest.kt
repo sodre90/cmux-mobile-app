@@ -84,8 +84,8 @@ class ViewModelConstructionTest {
         override fun loadFontZoom(): Float = zoom
         override fun loadWheelScrolling(): Boolean = true
         override fun saveWheelScrolling(enabled: Boolean) = Unit
-        override fun loadTerminalPollMs(): Int = DEFAULT_TERMINAL_POLL_MS
-        override fun saveTerminalPollMs(ms: Int) = Unit
+        override fun loadTerminalPollMs(metered: Boolean): Int = DEFAULT_TERMINAL_POLL_MS
+        override fun saveTerminalPollMs(metered: Boolean, ms: Int) = Unit
         override fun saveFontZoom(zoom: Float) {
             this.zoom = zoom
         }

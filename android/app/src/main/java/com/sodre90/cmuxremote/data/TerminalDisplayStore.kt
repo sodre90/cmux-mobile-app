@@ -26,12 +26,20 @@ class TerminalDisplayStore(context: Context) {
         prefs.edit().putBoolean(KEY_WHEEL_SCROLLING, enabled).apply()
     }
 
-    fun loadTerminalPollMs(): Int =
-        nearestPollChoice(prefs.getInt(KEY_TERMINAL_POLL_MS, DEFAULT_TERMINAL_POLL_MS))
+    fun loadTerminalPollMs(metered: Boolean): Int =
+        nearestPollChoice(
+            prefs.getInt(
+                pollKey(metered),
+                inheritedPollDefault(metered, prefs.getInt(KEY_POLL_MS_BOTH_LINKS, 0)),
+            ),
+        )
 
-    fun saveTerminalPollMs(ms: Int) {
-        prefs.edit().putInt(KEY_TERMINAL_POLL_MS, ms).apply()
+    fun saveTerminalPollMs(metered: Boolean, ms: Int) {
+        prefs.edit().putInt(pollKey(metered), ms).apply()
     }
+
+    private fun pollKey(metered: Boolean) =
+        if (metered) KEY_POLL_MS_METERED else KEY_POLL_MS_UNMETERED
 
     private companion object {
         const val PREFS_NAME = "cmux_terminal_display_prefs"
@@ -39,6 +47,8 @@ class TerminalDisplayStore(context: Context) {
         const val DEFAULT_FONT_ZOOM = 1f
         const val KEY_WHEEL_SCROLLING = "wheel_scrolling"
         const val DEFAULT_WHEEL_SCROLLING = false
-        const val KEY_TERMINAL_POLL_MS = "terminal_poll_ms"
+        const val KEY_POLL_MS_UNMETERED = "terminal_poll_ms_unmetered"
+        const val KEY_POLL_MS_METERED = "terminal_poll_ms_metered"
+        const val KEY_POLL_MS_BOTH_LINKS = "terminal_poll_ms"
     }
 }

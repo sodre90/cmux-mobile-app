@@ -186,7 +186,8 @@ fun CmuxNavHost(
             val directCredentialStatus by testPushVm.credentialStatus(ConnectionSlot.DIRECT).collectAsState()
             var fontZoom by rememberSaveable { mutableFloatStateOf(testPushVm.loadFontZoom()) }
             var wheelScrolling by rememberSaveable { mutableStateOf(testPushVm.loadWheelScrolling()) }
-            var terminalPollMs by rememberSaveable { mutableIntStateOf(testPushVm.loadTerminalPollMs()) }
+            var wifiPollMs by rememberSaveable { mutableIntStateOf(testPushVm.loadTerminalPollMs(metered = false)) }
+            var mobilePollMs by rememberSaveable { mutableIntStateOf(testPushVm.loadTerminalPollMs(metered = true)) }
             val bridgeVersion by testPushVm.bridgeVersion.collectAsState()
             // Keyed on forgetGeneration so forgetting or re-pairing a slot
             // re-asks rather than leaving the previous agent's version on
@@ -200,7 +201,8 @@ fun CmuxNavHost(
                 testPushState = testPushState,
                 fontZoom = fontZoom,
                 wheelScrolling = wheelScrolling,
-                terminalPollMs = terminalPollMs,
+                wifiPollMs = wifiPollMs,
+                mobilePollMs = mobilePollMs,
                 appVersion = BuildConfig.VERSION_NAME,
                 bridgeVersion = bridgeVersion,
                 onPair = { slot -> navController.navigate(Routes.pair(slot)) },
@@ -219,9 +221,13 @@ fun CmuxNavHost(
                 },
                 // Takes effect on the next socket open, not on a pane already
                 // on screen -- the interval is sent when the socket is dialled.
-                onTerminalPollMsChange = {
-                    terminalPollMs = it
-                    testPushVm.saveTerminalPollMs(it)
+                onWifiPollMsChange = {
+                    wifiPollMs = it
+                    testPushVm.saveTerminalPollMs(metered = false, ms = it)
+                },
+                onMobilePollMsChange = {
+                    mobilePollMs = it
+                    testPushVm.saveTerminalPollMs(metered = true, ms = it)
                 },
                 onDone = { navController.leaveSettings() },
             )

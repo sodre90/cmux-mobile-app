@@ -66,7 +66,8 @@ fun ConnectionSettingsScreen(
     testPushState: TestPushUiState,
     fontZoom: Float,
     wheelScrolling: Boolean,
-    terminalPollMs: Int,
+    wifiPollMs: Int,
+    mobilePollMs: Int,
     appVersion: String,
     bridgeVersion: BridgeVersionUiState,
     onPair: (ConnectionSlot) -> Unit,
@@ -74,7 +75,8 @@ fun ConnectionSettingsScreen(
     onSendTestPush: () -> Unit,
     onFontZoomChange: (Float) -> Unit,
     onWheelScrollingChange: (Boolean) -> Unit,
-    onTerminalPollMsChange: (Int) -> Unit,
+    onWifiPollMsChange: (Int) -> Unit,
+    onMobilePollMsChange: (Int) -> Unit,
     onDone: () -> Unit,
 ) {
     var forgetTarget by remember { mutableStateOf<ConnectionSlot?>(null) }
@@ -130,7 +132,12 @@ fun ConnectionSettingsScreen(
             )
             FontSizeRow(zoom = fontZoom, onZoomChange = onFontZoomChange)
             WheelScrollingRow(enabled = wheelScrolling, onEnabledChange = onWheelScrollingChange)
-            TerminalPollRow(pollMs = terminalPollMs, onPollMsChange = onTerminalPollMsChange)
+            TerminalPollRow(
+                wifiPollMs = wifiPollMs,
+                mobilePollMs = mobilePollMs,
+                onWifiPollMsChange = onWifiPollMsChange,
+                onMobilePollMsChange = onMobilePollMsChange,
+            )
             if (paired) {
                 TestPushRow(state = testPushState, onSendTestPush = onSendTestPush)
             }
@@ -345,23 +352,43 @@ private fun WheelScrollingRow(enabled: Boolean, onEnabledChange: (Boolean) -> Un
  * own output appears.
  */
 @Composable
-private fun TerminalPollRow(pollMs: Int, onPollMsChange: (Int) -> Unit) {
+private fun TerminalPollRow(
+    wifiPollMs: Int,
+    mobilePollMs: Int,
+    onWifiPollMsChange: (Int) -> Unit,
+    onMobilePollMsChange: (Int) -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.terminal_poll_title))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TERMINAL_POLL_CHOICES.forEach { choice ->
-                    FilterChip(
-                        selected = choice == pollMs,
-                        onClick = { onPollMsChange(choice) },
-                        label = { Text(pollChoiceLabel(choice)) },
-                    )
-                }
-            }
+            PollChoiceRow(
+                label = stringResource(R.string.terminal_poll_wifi_label),
+                selected = wifiPollMs,
+                onSelect = onWifiPollMsChange,
+            )
+            PollChoiceRow(
+                label = stringResource(R.string.terminal_poll_mobile_label),
+                selected = mobilePollMs,
+                onSelect = onMobilePollMsChange,
+            )
             Text(
                 stringResource(R.string.terminal_poll_help),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PollChoiceRow(label: String, selected: Int, onSelect: (Int) -> Unit) {
+    Text(label, style = MaterialTheme.typography.labelLarge)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TERMINAL_POLL_CHOICES.forEach { choice ->
+            FilterChip(
+                selected = choice == selected,
+                onClick = { onSelect(choice) },
+                label = { Text(pollChoiceLabel(choice)) },
             )
         }
     }

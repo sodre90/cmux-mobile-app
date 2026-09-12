@@ -32,14 +32,47 @@ class TerminalPollIntervalTest {
         assertEquals(2000, nearestPollChoice(Int.MAX_VALUE))
     }
 
-    /** The default has to be offered, or the settings screen opens with nothing
-     *  selected on a fresh install. */
+    /** Both defaults have to be offered, or the settings screen opens with
+     *  nothing selected on a fresh install. */
     @Test
-    fun theDefaultIsOneOfTheOfferedChoices() {
+    fun bothDefaultsAreOfferedChoices() {
+        assertTrue("$DEFAULT_POLL_MS_UNMETERED is not offered", DEFAULT_POLL_MS_UNMETERED in TERMINAL_POLL_CHOICES)
+        assertTrue("$DEFAULT_POLL_MS_METERED is not offered", DEFAULT_POLL_MS_METERED in TERMINAL_POLL_CHOICES)
+    }
+
+    /**
+     * The point of splitting the setting: the saving has to arrive without the
+     * user finding the screen, and it can only do that if the metered default
+     * is the slower one.
+     */
+    @Test
+    fun theMeteredDefaultIsSlowerThanTheUnmeteredOne() {
         assertTrue(
-            "DEFAULT_TERMINAL_POLL_MS must appear in TERMINAL_POLL_CHOICES",
-            DEFAULT_TERMINAL_POLL_MS in TERMINAL_POLL_CHOICES,
+            "a metered link must default to polling less often than an unmetered one",
+            defaultPollFor(metered = true) > defaultPollFor(metered = false),
         )
+    }
+
+    /** An unknown link is billed until proven otherwise -- guessing "free"
+     *  spends the user's data without being asked. */
+    @Test
+    fun theUnknownLinkDefaultIsTheMeteredOne() {
+        assertEquals(defaultPollFor(metered = true), DEFAULT_TERMINAL_POLL_MS)
+    }
+
+    /** A value chosen when there was a single setting was chosen to save data,
+     *  so it carries to the metered side and nowhere else. */
+    @Test
+    fun aValueFromTheSingleSettingVersionSeedsOnlyTheMeteredSide() {
+        assertEquals(2000, inheritedPollDefault(metered = true, legacy = 2000))
+        assertEquals(DEFAULT_POLL_MS_UNMETERED, inheritedPollDefault(metered = false, legacy = 2000))
+    }
+
+    /** Nothing stored by the old version means nothing to inherit. */
+    @Test
+    fun anAbsentLegacyValueLeavesBothDefaultsAlone() {
+        assertEquals(DEFAULT_POLL_MS_METERED, inheritedPollDefault(metered = true, legacy = 0))
+        assertEquals(DEFAULT_POLL_MS_UNMETERED, inheritedPollDefault(metered = false, legacy = 0))
     }
 
     /**
