@@ -12,6 +12,56 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-12
+
+Terminal streaming used to cost a measured 146 KB/s on a busy pane and roughly
+the same on an idle one. It is now ~18 KB/s busy and nothing at all idle, with
+a settings dial to go lower still.
+
+### Added
+
+- Two refresh intervals for terminal panes, one for Wi-Fi and one for mobile
+  data, under Connections. The phone tells the bridge how often to re-read an
+  open pane (`?poll_ms=`, clamped by the bridge to 250ms-10s); the default is
+  250ms on Wi-Fi and 1s on mobile, so the saving applies on mobile without
+  anyone changing a setting. Which interval is used is decided per socket by
+  whether the current link is metered -- a hotspot marked metered, or tethering
+  off another phone, counts as mobile -- so the reconnect that follows a
+  Wi-Fi/mobile switch picks up the other value on its own. Typing is unaffected
+  at every setting: input is answered immediately rather than on the next tick,
+  so this trades only how quickly output you did not type appears.
+
+### Changed
+
+- An idle pane costs nothing. The poll loop compared whole grids to decide
+  whether anything had changed, but cmux advances `render_revision` and
+  `terminal_theme_revision` on its own clock, so the comparison never matched
+  and a pane sitting at a shell prompt re-sent its entire ~187KB grid four
+  times a second to deliver two incrementing integers. Those two counters are
+  now excluded from the comparison.
+- Terminal frames are compressed inside the e2e envelope, negotiated with
+  `?deflate=1` and confirmed by the bridge on the 101. Compression has to
+  happen before encryption -- ciphertext does not compress -- so this could not
+  come from the transport.
+- Frames leave out render-grid blocks the socket has already sent unchanged and
+  name them in `unchanged`, rather than repeating them every tick. Scrollback
+  alone is 143KB of a 187KB frame; `styles` and `modes` are a further 28% of
+  what remains once it is gone. A block is omitted only while its bytes are
+  identical to the last ones sent, so a changed block is always re-sent.
+
+### Compatibility
+
+Wire-format change, and both halves stay interchangeable in both directions.
+Compression and delta frames are each negotiated twice -- the app asks, the
+bridge confirms on the 101 -- so an old app against a new bridge keeps whole
+uncompressed frames, and a new app against an old bridge gets no confirmation
+and sends none of its own assumptions. Verified live in the old-app/new-bridge
+direction. `?poll_ms=` needs no confirmation, since frames decode identically
+at any interval; an older bridge ignores it and keeps its own rate.
+
+The app gains `ACCESS_NETWORK_STATE`, a normal permission: granted at install,
+never prompted for, and used only to ask whether the current link is metered.
+
 ## [0.5.1] - 2026-09-11
 
 ### Fixed
