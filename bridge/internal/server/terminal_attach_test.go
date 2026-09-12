@@ -235,3 +235,52 @@ func TestAHalfMegabyteAttachSurvivesTheEncryptedPath(t *testing.T) {
 	}
 	waitForRPCLog(t, logPath, "mobile.terminal.paste", filepath.Join(dir, entries[0].Name())+" ")
 }
+
+// The read limit is what bounds memory: a message over it is never buffered
+// whole, the socket ends, and nothing reaches cmux. A legitimate attach at
+// the cap still fits, or the limit would be a cap in disguise.
+func TestAMessageOverTheReadLimitEndsTheSocketWithNothingPasted(t *testing.T) {
+	logPath := t.TempDir() + "/cmux.log"
+	t.Setenv("CMUX_FAKE_LOG", logPath)
+	s, tok := newTestServer(t, fakeTerminalScript)
+	s.SetAttachmentStore(NewAttachmentStore(filepath.Join(t.TempDir(), "attachments")))
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	c := wsConnect(t, srv.URL, "/terminal/SURF1", tok)
+	defer c.Close()
+	armReadDeadline(t, c)
+	var replay wire.TerminalDown
+	if err := c.ReadJSON(&replay); err != nil {
+		t.Fatal(err)
+	}
+
+	oversize := wire.TerminalUp{Type: "attach", Seq: 1, Image: strings.Repeat("A", terminalUpReadLimit)}
+	if err := c.WriteJSON(oversize); err != nil {
+		t.Fatal(err)
+	}
+	armReadDeadline(t, c)
+	var down wire.TerminalDown
+	err := c.ReadJSON(&down)
+	if err == nil {
+		t.Fatalf("the socket must end, got a frame instead: %+v", down)
+	}
+	if _, isClose := err.(*websocket.CloseError); !isClose && !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "reset") {
+		t.Fatalf("want the socket closed, got %v", err)
+	}
+	log, _ := os.ReadFile(logPath)
+	if strings.Contains(string(log), "mobile.terminal.paste") {
+		t.Fatalf("nothing may be pasted, log:\n%s", log)
+	}
+}
+
+func TestAnAttachAtTheCapFitsUnderTheReadLimit(t *testing.T) {
+	image := append(bytes.Clone(imageSignatures["jpg"]), make([]byte, attachmentMaxBytes-len(imageSignatures["jpg"]))...)
+	frame, err := json.Marshal(wire.TerminalUp{Type: "attach", Seq: 1, Image: base64.StdEncoding.EncodeToString(image), Name: "IMG_2041.jpg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frame) > terminalUpReadLimit {
+		t.Fatalf("a maximal attach is %d bytes, over the %d read limit", len(frame), terminalUpReadLimit)
+	}
+}

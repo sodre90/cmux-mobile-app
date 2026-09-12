@@ -101,6 +101,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = c.Close() }()
+	c.SetReadLimit(terminalUpReadLimit)
 	start := time.Now()
 	// The negotiated capabilities decide what an open pane costs, so they are
 	// worth having in the log: a socket that is quietly falling back to whole
@@ -513,6 +514,15 @@ func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.
 	}
 	return c.WriteMessage(websocket.BinaryMessage, frame)
 }
+
+// terminalUpReadLimit bounds one message from the phone. Without it the
+// socket buffered whatever the peer chose to send before anything looked at
+// it -- harmless while the largest legitimate frame was a paste of a few
+// KB, not once an attachment of attachmentMaxBytes is legitimate. That
+// attachment arrives as base64 (4/3) inside a JSON envelope inside an e2e
+// frame; 64 KB covers the latter two many times over. A message past the
+// limit ends the socket the way a decrypt failure does.
+const terminalUpReadLimit = attachmentMaxBytes/3*4 + 64<<10
 
 func (s *Server) terminalReadLoop(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, id, deviceID string, write func(wire.TerminalDown) error, nudge chan<- struct{}) {
 	defer cancel()

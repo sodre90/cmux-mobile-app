@@ -23,6 +23,12 @@ every section after it itemizes changes individually. Purely internal refactors
   attaching a photo from the phone; the app's attach button follows in the
   next release. Along the way, a text paste now triggers an immediate replay
   the way a keystroke already did. (cmux-app-ej0)
+- The terminal socket now bounds how large a message it will read from the
+  phone (the attachment cap plus encoding overhead, about 14 MB). Before,
+  it buffered whatever a paired device chose to send before looking at it;
+  that was a gap from the start, only worth closing once a multi-megabyte
+  frame became a legitimate thing to send. A message over the limit ends
+  the socket like a decrypt failure does. (cmux-app-ej0)
 
 ### Changed
 
