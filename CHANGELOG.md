@@ -12,6 +12,12 @@ every section after it itemizes changes individually. Purely internal refactors
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-12
+
+Terminal frames now compress against a window shared across the whole socket,
+which is worth 5-6x on small frames and nothing on large ones -- the large-frame
+cost turned out to be a different problem entirely, now specced.
+
 ### Changed
 
 - Terminal frames are now compressed against every frame sent before them on
@@ -29,8 +35,11 @@ every section after it itemizes changes individually. Purely internal refactors
   on a busy pane sending 200KB frames: 6.1x, the same as before.
 
   So this helps settled and small panes and does nothing for large ones. The
-  large-frame case is dominated by scrollback being re-sent in full whenever it
-  changes, which is a delta problem rather than a compression one.
+  large-frame case turns out not to be a compression problem at all: cmux
+  renumbers its style ids whenever a pane scrolls, which changes the bytes of
+  every span in both the scrollback and the visible rows even though the text
+  is identical. That is specced separately under
+  `docs/superpowers/specs/2026-09-12-style-id-churn-design.md`.
 
   Negotiated separately from the existing per-frame compression (`?stream=1`,
   confirmed with `X-Cmux-Deflate-Stream`), so every combination of app and
@@ -48,6 +57,20 @@ every section after it itemizes changes individually. Purely internal refactors
 - A corrupt compressed frame could spin the terminal socket's reader thread
   instead of dropping the frame, if the decompressor stalled without either
   finishing or asking for more input.
+
+### Compatibility
+
+Wire-format change, and both halves stay interchangeable in both directions.
+The shared window is negotiated twice like the capabilities before it -- the app
+asks with `?stream=1`, the bridge confirms with `X-Cmux-Deflate-Stream` on the
+101 -- and is deliberately separate from `?deflate=1` rather than folded into
+it, because it is a stronger promise: a chunk of a stream can only be read in
+order, by a decoder that saw every chunk before it. An old app against a new
+bridge therefore keeps getting standalone frames, and a new app against an old
+bridge gets no confirmation and streams nothing. Verified live on both a phone
+and an emulator against the new bridge.
+
+No config, pairing or permission change.
 
 ## [0.6.0] - 2026-09-12
 
