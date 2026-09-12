@@ -51,13 +51,22 @@ data class RenderGrid(
  */
 internal fun RenderGrid.mergedOnto(previous: RenderGrid?, unchanged: List<String>): RenderGrid {
     if (previous == null || unchanged.isEmpty()) return this
-    return if (UnchangedBlock.SCROLLBACK_SPANS in unchanged) {
+    var merged = this
+    if (UnchangedBlock.SCROLLBACK_SPANS in unchanged) {
         // Only the spans are carried over: the bridge sends scrollback_rows on
         // every frame, so this frame's own count is the current one.
-        copy(scrollbackSpans = previous.scrollbackSpans)
-    } else {
-        this
+        merged = merged.copy(scrollbackSpans = previous.scrollbackSpans)
     }
+    if (UnchangedBlock.STYLES in unchanged) {
+        merged = merged.copy(styles = previous.styles)
+    }
+    // Carried for the same reason as the rest, but it is the one block with a
+    // consequence beyond drawing: modes decides whether the arrow keys send
+    // application-cursor sequences (see [applicationCursorKeysEnabled]).
+    if (UnchangedBlock.MODES in unchanged) {
+        merged = merged.copy(modes = previous.modes)
+    }
+    return merged
 }
 
 @Serializable

@@ -228,15 +228,28 @@ var volatileGridFields = []string{"render_revision", "terminal_theme_revision"}
 // stickyGridFields are the render-grid blocks a client can carry over from the
 // frame before, so a frame that did not change them need not repeat them.
 //
-// Scoped deliberately narrowly. scrollback_spans is 143KB of the 187KB frame
-// and is pure history -- the rows above the viewport, which the app only shows
-// on a pan-up -- while the two theme blocks are ~6KB of static palette the app
-// does not even parse. Everything else stays in every frame: stale styles would
-// put wrong colours on rows the user is looking at now, and stale modes would
-// mean the key bar spells arrows or paste for a pane that has since changed its
-// mind, sending it bytes it never asked for. Those are worth their ~1KB
-// compressed.
-var stickyGridFields = []string{"scrollback_spans", "terminal_theme", "terminal_config_theme"}
+// "Sticky" is about repetition, not staleness: [deltaEncoder.strip] omits a
+// block only when its bytes equal the ones this socket last sent, so a block
+// that changes is always sent again. A client that carries the named blocks
+// forward therefore holds exactly what the bridge holds.
+//
+// That is why styles and modes belong here. An earlier version of this list
+// left them out for fear of dressing rows in stale colours or spelling the key
+// bar's arrows against a mode the pane had since dropped -- but neither can
+// happen when a changed block is never omitted. Measured on a live pane
+// (cmux-app-8wk), both are byte-identical between consecutive replays and
+// together cost 233B of an 844B compressed frame.
+//
+// What stays out is anything a client cannot safely carry: the visible
+// row_spans, which change on nearly every frame anyway, and the counters in
+// [volatileGridFields].
+var stickyGridFields = []string{
+	"scrollback_spans",
+	"terminal_theme",
+	"terminal_config_theme",
+	"styles",
+	"modes",
+}
 
 // deltaEncoder remembers the sticky blocks one socket has already sent, so the
 // next frame can leave the unchanged ones out. Per-socket, never shared: a

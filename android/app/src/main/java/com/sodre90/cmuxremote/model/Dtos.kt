@@ -135,6 +135,8 @@ data class TerminalDown(
  *  the scrollback needs carrying forward here. */
 object UnchangedBlock {
     const val SCROLLBACK_SPANS = "scrollback_spans"
+    const val STYLES = "styles"
+    const val MODES = "modes"
 }
 
 /**

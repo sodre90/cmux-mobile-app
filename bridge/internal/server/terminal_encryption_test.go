@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -385,14 +386,47 @@ func TestOutputFramesStayWholeWithoutTheDeltaHandshake(t *testing.T) {
 	}
 }
 
-// Styles and modes drive what the user is looking at right now, so they are
-// deliberately not sticky even though they repeat.
-func TestVisibleStateIsNeverOmitted(t *testing.T) {
-	for _, field := range []string{"styles", "modes", "row_spans", "cursor"} {
-		for _, sticky := range stickyGridFields {
-			if field == sticky {
-				t.Fatalf("%q must not be sticky: it decides what is on screen now", field)
-			}
+// This test used to assert that styles and modes could never be sticky,
+// because they "decide what is on screen now". That reason was wrong: strip
+// omits a block only while its bytes are unchanged, so a client carrying them
+// forward holds what the bridge holds, and cmux-app-8wk made both sticky for
+// 28% of a compressed frame. What is left is the part that was right.
+//
+// row_spans and cursor stay out because stickiness cannot pay there -- they
+// differ on nearly every frame, so the comparison would run each time and
+// almost never save anything.
+func TestTheBlocksThatChangeEveryFrameAreNeverSticky(t *testing.T) {
+	for _, field := range []string{"row_spans", "cursor"} {
+		if slices.Contains(stickyGridFields, field) {
+			t.Errorf("%q changes on nearly every frame; making it sticky costs more than it saves", field)
+		}
+	}
+}
+
+// Wire-format lockstep: every name the bridge can put in `unchanged` needs a
+// branch in the app's RenderGrid.mergedOnto, or the app decodes the absent
+// block as empty and silently loses it -- a blank scrollback, an unstyled
+// screen, or arrow keys that stop matching the pane's mode.
+//
+// Go cannot see the Kotlin, so this pins the list instead. Adding a block here
+// without adding UnchangedBlock.X and a mergedOnto branch in the same commit
+// fails this test, which is the reminder.
+func TestTheStickyListMatchesWhatTheAppCanCarry(t *testing.T) {
+	appCanCarry := []string{
+		"scrollback_spans",      // UnchangedBlock.SCROLLBACK_SPANS
+		"terminal_theme",        // not modelled by the app at all, so safe to drop
+		"terminal_config_theme", // likewise
+		"styles",                // UnchangedBlock.STYLES
+		"modes",                 // UnchangedBlock.MODES
+	}
+	for _, sticky := range stickyGridFields {
+		if !slices.Contains(appCanCarry, sticky) {
+			t.Errorf("%q is omitted by the bridge but the app has no way to carry it forward", sticky)
+		}
+	}
+	for _, known := range appCanCarry {
+		if !slices.Contains(stickyGridFields, known) {
+			t.Errorf("%q is listed here but no longer sticky -- update this list with the change", known)
 		}
 	}
 }
@@ -418,6 +452,50 @@ func TestTheDeltaEncoderRepeatsABlockThatChanged(t *testing.T) {
 	}
 	if _, omitted := d.strip(grown); len(omitted) != 1 {
 		t.Fatalf("the new value must now be the one remembered, got %v", omitted)
+	}
+}
+
+// styles and modes were deliberately excluded from stickyGridFields until
+// cmux-app-8wk on the theory that a carried-over copy could go stale. It cannot
+// -- strip omits a block only while its bytes are unchanged -- and together
+// they are 28% of a compressed frame.
+func TestStylesAndModesAreCarriedLikeAnyOtherStickyBlock(t *testing.T) {
+	d := newDeltaEncoder()
+	grid := json.RawMessage(`{"styles":[{"id":1}],"modes":[{"code":1,"on":true}],"row_spans":[]}`)
+	if _, omitted := d.strip(grid); len(omitted) != 0 {
+		t.Fatalf("nothing can be omitted from the first frame, got %v", omitted)
+	}
+	got, omitted := d.strip(grid)
+	if len(omitted) != 2 {
+		t.Fatalf("want both styles and modes omitted on a repeat, got %v", omitted)
+	}
+	for _, want := range []string{"styles", "modes"} {
+		if !slices.Contains(omitted, want) {
+			t.Errorf("%s was not omitted: %v", want, omitted)
+		}
+		if strings.Contains(string(got), `"`+want+`"`) {
+			t.Errorf("%s was named unchanged but still sent: %s", want, got)
+		}
+	}
+}
+
+// The property that makes carrying them safe: the moment either changes, it is
+// in the frame again. A pane that leaves application-cursor mode must not have
+// the app spelling arrows against the old modes.
+func TestAChangedModeIsSentAgainRatherThanCarried(t *testing.T) {
+	d := newDeltaEncoder()
+	on := json.RawMessage(`{"modes":[{"code":1,"on":true}],"row_spans":[]}`)
+	d.strip(on)
+	if _, omitted := d.strip(on); len(omitted) != 1 {
+		t.Fatalf("an unchanged mode set should be omitted, got %v", omitted)
+	}
+	off := json.RawMessage(`{"modes":[{"code":1,"on":false}],"row_spans":[]}`)
+	got, omitted := d.strip(off)
+	if len(omitted) != 0 {
+		t.Fatalf("a changed mode set must be re-sent, got %v", omitted)
+	}
+	if !strings.Contains(string(got), `"on":false`) {
+		t.Fatalf("the new mode value is missing from the frame: %s", got)
 	}
 }
 
