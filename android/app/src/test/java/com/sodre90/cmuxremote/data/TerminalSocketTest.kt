@@ -5,6 +5,8 @@ import com.goterl.lazysodium.SodiumJava
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.DIR_AGENT_TO_DEVICE
 import com.sodre90.cmuxremote.data.e2e.DIR_DEVICE_TO_AGENT
+import com.sodre90.cmuxremote.data.e2e.PAYLOAD_DEFLATE
+import com.sodre90.cmuxremote.data.e2e.PAYLOAD_IDENTITY
 import com.sodre90.cmuxremote.data.e2e.PairedSession
 import com.sodre90.cmuxremote.data.e2e.ReplayRejectedException
 import com.sodre90.cmuxremote.data.e2e.ReplayWindow
@@ -37,6 +39,7 @@ import org.junit.Test
 import java.nio.ByteBuffer
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.zip.Deflater
 
 /** Simple PairedSession double sharing one secret with independent counters,
  *  used to simulate "the other side" (a mock agent) in these WS tests. */
@@ -163,5 +166,98 @@ class TerminalSocketTest {
         for (code in listOf(1000, 1001, 1011)) {
             assertNull("close $code must not look like a gone surface", collectUntilClosedBy(code))
         }
+    }
+
+    /**
+     * Serves one grid frame, sealed, optionally deflated behind a codec tag,
+     * and answers the upgrade with [confirmHeader] -- standing in for a bridge
+     * that does or does not support compression. Returns the frame the app
+     * decoded plus the request line the server saw.
+     */
+    private fun frameThroughBridge(deflate: Boolean, confirmHeader: Boolean): Pair<TerminalDown, String> =
+        runBlocking {
+            val serverSession = SharedSecretSession(secret)
+            val json = """{"type":"replay","columns":3,"rows":1,"seq":1,""" +
+                """"grid":{"columns":3,"rows":1,"row_spans":[{"row":0,"column":0,"text":"hi"}]}}"""
+            val upgrade = MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    val body = json.toByteArray(Charsets.UTF_8)
+                    val payload = when {
+                        deflate -> byteArrayOf(PAYLOAD_DEFLATE) + rawDeflate(body)
+                        confirmHeader -> byteArrayOf(PAYLOAD_IDENTITY) + body
+                        else -> body
+                    }
+                    val n = serverSession.nextSendCounter()
+                    val ct = cipher.seal(secret, nonce(DIR_AGENT_TO_DEVICE, n), payload)
+                    val frame = ByteArray(8 + ct.size)
+                    ByteBuffer.wrap(frame, 0, 8).putLong(n)
+                    ct.copyInto(frame, 8)
+                    webSocket.send(frame.toByteString())
+                }
+            })
+            if (confirmHeader) upgrade.setHeader(DEFLATE_HEADER, "1")
+            server.enqueue(upgrade)
+
+            val ts = TerminalSocket(
+                OkHttpClient(),
+                server.url("/").toString(),
+                "surface-1",
+                SharedSecretSession(secret),
+                cipher,
+            )
+            withTimeout(5_000) {
+                val first = CompletableDeferred<TerminalDown>()
+                val job = launch(Dispatchers.IO) {
+                    ts.connect().collect { if (!first.isCompleted) first.complete(it) }
+                }
+                val frame = first.await()
+                val request = withContext(Dispatchers.IO) { server.takeRequest().path!! }
+                job.cancelAndJoin()
+                frame to request
+            }
+        }
+
+    private fun rawDeflate(body: ByteArray): ByteArray =
+        Deflater(Deflater.DEFAULT_COMPRESSION, true).run {
+            setInput(body)
+            finish()
+            val out = ByteArray(body.size + 64)
+            val n = deflate(out)
+            end()
+            out.copyOfRange(0, n)
+        }
+
+    @Test
+    fun asksTheBridgeForCompression() {
+        val (_, path) = frameThroughBridge(deflate = false, confirmHeader = false)
+        assertTrue("want ?deflate=1 on the terminal URL, got $path", path.contains("deflate=1"))
+    }
+
+    @Test
+    fun inflatesFramesOnceTheBridgeConfirms() {
+        val (frame, _) = frameThroughBridge(deflate = true, confirmHeader = true)
+        assertEquals("replay", frame.type)
+        assertEquals("hi ", RenderGridDecoder.decode(frame.grid!!).lines[0].text)
+    }
+
+    /**
+     * An older bridge ignores ?deflate=1 and sends untagged JSON. Without the
+     * confirming header the app must not strip a tag byte -- doing so would
+     * eat the leading `{` and drop every frame, leaving a blank terminal.
+     */
+    @Test
+    fun readsUntaggedFramesFromABridgeThatNeverConfirmed() {
+        val (frame, _) = frameThroughBridge(deflate = false, confirmHeader = false)
+        assertEquals("replay", frame.type)
+        assertEquals("hi ", RenderGridDecoder.decode(frame.grid!!).lines[0].text)
+    }
+
+    /** A confirming bridge may still send a frame uncompressed when deflate
+     *  would not shrink it, so the identity tag has to work on this path too. */
+    @Test
+    fun readsAnIdentityTaggedFrameOnANegotiatedSocket() {
+        val (frame, _) = frameThroughBridge(deflate = false, confirmHeader = true)
+        assertEquals("replay", frame.type)
+        assertEquals("hi ", RenderGridDecoder.decode(frame.grid!!).lines[0].text)
     }
 }

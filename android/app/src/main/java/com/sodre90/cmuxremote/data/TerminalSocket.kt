@@ -2,6 +2,7 @@ package com.sodre90.cmuxremote.data
 
 import com.sodre90.cmuxremote.data.e2e.Cipher
 import com.sodre90.cmuxremote.data.e2e.PairedSession
+import com.sodre90.cmuxremote.data.e2e.decodePayload
 import com.sodre90.cmuxremote.data.e2e.decryptFrame
 import com.sodre90.cmuxremote.data.e2e.encryptFrame
 import com.sodre90.cmuxremote.model.BridgeJson
@@ -34,6 +35,19 @@ import okio.ByteString.Companion.toByteString
  */
 internal const val CLOSE_SURFACE_GONE = 4404
 
+/**
+ * The response header the bridge sets on the 101 to confirm it accepted the
+ * `?deflate=1` request. Mirrors `deflateHeader` in
+ * bridge/internal/server/terminal.go.
+ *
+ * Asking is not enough to start stripping codec tags: an older bridge ignores
+ * the query and keeps sending untagged JSON, whose leading `{` would be read as
+ * a tag and drop every frame. Compression is armed only once the bridge has
+ * said it is compressing, which makes all four app/bridge version pairings
+ * work.
+ */
+internal const val DEFLATE_HEADER = "X-Cmux-Deflate"
+
 class TerminalSocket(
     private val http: OkHttpClient,
     baseUrl: String,
@@ -41,10 +55,15 @@ class TerminalSocket(
     private val session: PairedSession,
     private val cipher: Cipher,
 ) {
-    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId"
+    private val url = "${baseUrl.trimEnd('/')}/terminal/$surfaceId?deflate=1"
 
     @Volatile
     private var socket: WebSocket? = null
+
+    // Set from onOpen, which OkHttp guarantees runs before any onMessage, so
+    // no frame is ever read before this is known.
+    @Volatile
+    private var deflated = false
 
     /** [onOpen] fires on the WebSocket upgrade, before any frame -- see
      *  [EventsSocket.connect] for why that can't come through the flow. */
@@ -54,11 +73,13 @@ class TerminalSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    deflated = response.header(DEFLATE_HEADER) == "1"
                     onOpen()
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     runCatching { decryptFrame(session, cipher, bytes.toByteArray()) }
+                        .mapCatching { if (deflated) decodePayload(it) else it }
                         .mapCatching {
                             BridgeJson.decodeFromString(
                                 TerminalDown.serializer(),

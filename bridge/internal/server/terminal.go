@@ -51,7 +51,23 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := upgrader.Upgrade(w, r, nil)
+	// Compression is negotiated both ways. The app asks with ?deflate=1 and
+	// arms its side only on seeing the confirming response header, so all four
+	// app/bridge version pairings work: an old bridge never sends the header
+	// and a new app stays uncompressed, while a new bridge never compresses for
+	// an old app that did not ask. Without the confirmation half, a new app
+	// against an old bridge would read the JSON's leading '{' as a codec tag and
+	// drop every frame.
+	//
+	// Only meaningful with encryption on: compression rides inside the sealed
+	// payload, and the plaintext branch of [writeTerminalFrame] has no tag byte
+	// to carry it.
+	deflate := s.sessions != nil && r.URL.Query().Get("deflate") == "1"
+	var upgradeHeader http.Header
+	if deflate {
+		upgradeHeader = http.Header{deflateHeader: {"1"}}
+	}
+	c, err := upgrader.Upgrade(w, r, upgradeHeader)
 	if err != nil {
 		return
 	}
@@ -73,7 +89,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		return s.writeTerminalFrame(c, deviceID, fr)
+		return s.writeTerminalFrame(c, deviceID, fr, deflate)
 	}
 
 	// Initial full replay.
@@ -297,15 +313,25 @@ func closeIfSurfaceGone(c *websocket.Conn, err error) {
 	)
 }
 
+// deflateHeader is the response header the bridge sets on the 101 to confirm
+// it accepted a client's ?deflate=1 request. Mirrored in the app as
+// TerminalSocket's DEFLATE_HEADER.
+const deflateHeader = "X-Cmux-Deflate"
+
 // writeTerminalFrame sends fr as a plain JSON text frame when encryption is
 // disabled (s.sessions == nil), or as a binary e2e-encrypted frame otherwise.
-func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.TerminalDown) error {
+// When deflate is set, the sealed payload carries a wire codec tag and is
+// compressed where that helps -- see wire.EncodePayload.
+func (s *Server) writeTerminalFrame(c *websocket.Conn, deviceID string, fr wire.TerminalDown, deflate bool) error {
 	if s.sessions == nil {
 		return c.WriteJSON(fr)
 	}
 	raw, err := json.Marshal(fr)
 	if err != nil {
 		return err
+	}
+	if deflate {
+		raw = wire.EncodePayload(raw)
 	}
 	frame, err := s.sessions.EncryptFrame(deviceID, raw)
 	if err != nil {
